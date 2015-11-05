@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -1253,7 +1253,7 @@ void remove_helper(IRInstruction* inst) {
 //////////////////////////////////////////////////////////////////////
 
 /*
- * Walk through each block, and remove nearby IncRef/DecRefNZ pairs that
+ * Walk through each block, and remove nearby IncRef/DecRef[NZ] pairs that
  * operate on the same must-alias-set, if there are obviously no instructions
  * in between them that could read the reference count of that object.
  */
@@ -1269,7 +1269,7 @@ void remove_trivial_incdecs(Env& env) {
         continue;
       }
 
-      if (inst.is(DecRefNZ)) {
+      if (inst.is(DecRef, DecRefNZ)) {
         if (incs.empty()) continue;
         auto const setID = env.asetMap[inst.src(0)];
         auto const to_rm = [&] () -> IRInstruction* {
@@ -1280,7 +1280,7 @@ void remove_trivial_incdecs(Env& env) {
               return candidate;
             }
           }
-          // This DecRefNZ may rely on one of the IncRefs, since we aren't
+          // This DecRef may rely on one of the IncRefs, since we aren't
           // handling may-alias stuff here.
           incs.clear();
           return nullptr;
@@ -2431,10 +2431,10 @@ std::string show(const Node* node) {
       switch (node->type) {
       case NT::Empty:   return "empty";
       case NT::Halt:    return "halt";
-      case NT::Sig:     return "\u03c3";
+      case NT::Sig:     return u8"\u03c3";
       case NT::Dec:     return sformat("dec({})", to_dec(node)->inst->id());
       case NT::Phi:
-        return sformat("\u03c6({},{})", to_phi(node)->pred_list_sz,
+        return sformat(u8"\u03c6({},{})", to_phi(node)->pred_list_sz,
           to_phi(node)->back_edge_preds);
       case NT::Inc:
         return sformat("inc({})", to_inc(node)->inst->id());

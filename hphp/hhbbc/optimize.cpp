@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -195,6 +195,7 @@ bool hasObviousStackOutput(Op op) {
   case Op::Gt:
   case Op::Lte:
   case Op::Gte:
+  case Op::Cmp:
   case Op::Shl:
   case Op::Shr:
   case Op::CastBool:
@@ -307,6 +308,7 @@ bool propagate_constants(const Bytecode& op, const State& state, Gen gen) {
       break;
     case Flavor::F:  not_reached();    break;
     case Flavor::U:  not_reached();    break;
+    case Flavor::CR: not_reached();    break;
     case Flavor::CVU:
       // Note that we only support C's for CVU so far (this only comes up with
       // FCallBuiltin)---we'll fail the verifier if something changes to send

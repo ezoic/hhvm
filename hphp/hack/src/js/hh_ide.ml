@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Core
 open Coverage_level
 open Utils
 open Hh_json
@@ -27,18 +28,36 @@ let parse_errors = Hashtbl.create 23
 (* helpers *)
 (*****************************************************************************)
 
+let rec to_js_object json =
+  match json with
+  | JSON_Array l ->
+      let l = List.map l to_js_object in
+      let l = Array.of_list l in
+      Js.Unsafe.inject (Js.array l)
+  | JSON_Object l ->
+      let l = List.map l begin fun (k, v) ->
+        k, to_js_object v
+      end in
+      let l = Array.of_list l in
+      Js.Unsafe.obj l
+  | JSON_Bool b -> Js.Unsafe.inject (Js.bool b)
+  | JSON_String s -> Js.Unsafe.inject (Js.string s)
+  | JSON_Null -> Js.Unsafe.inject Js.null
+  | JSON_Number i -> Js.Unsafe.inject (Js.number_of_float (float_of_string i))
+
+
 let error el =
   let res =
     if el = [] then
-      JAssoc [ "passed",         JBool true;
-               "errors",         JList [];
-               "internal_error", JBool false;
+      JSON_Object [ "passed",         JSON_Bool true;
+               "errors",         JSON_Array [];
+               "internal_error", JSON_Bool false;
              ]
     else
-      let errors_json = List.map (compose Errors.to_json Errors.to_absolute) el
-      in JAssoc [ "passed",         JBool false;
-                  "errors",         JList errors_json;
-                  "internal_error", JBool false;
+      let errors_json = List.map el (compose Errors.to_json Errors.to_absolute)
+      in JSON_Object [ "passed",         JSON_Bool false;
+                  "errors",         JSON_Array errors_json;
+                  "internal_error", JSON_Bool false;
                 ]
   in
   to_js_object res
@@ -62,14 +81,14 @@ let type_class nenv x fn =
     ()
 
 let make_funs_classes ast =
-  List.fold_left begin fun (funs, classes, typedefs, consts) def ->
+  List.fold_left ast ~f:begin fun (funs, classes, typedefs, consts) def ->
     match def with
     | Ast.Fun f -> f.Ast.f_name :: funs, classes, typedefs, consts
     | Ast.Class c -> funs, c.Ast.c_name :: classes, typedefs, consts
     | Ast.Typedef td -> funs, classes, td.Ast.t_id :: typedefs, consts
     | Ast.Constant cst -> funs, classes, typedefs, cst.Ast.cst_name :: consts
     | _ -> funs, classes, typedefs, consts
-  end ([], [], [], []) ast
+  end ~init:([], [], [], [])
 
 let rec get_sub_classes classes =
   let sub_classes = SMap.fold (fun x _ acc -> SSet.add x acc) classes SSet.empty in
@@ -92,14 +111,14 @@ let declare_file fn content =
     try Hashtbl.find globals fn
     with Not_found -> true, [], []
   in
-  List.iter begin fun (_, fname) ->
-      Naming_heap.FunHeap.remove fname;
-      Typing_env.Funs.remove fname;
-  end old_funs;
-  List.iter begin fun (_, cname) ->
+  List.iter old_funs begin fun (_, fname) ->
+    Naming_heap.FunHeap.remove fname;
+    Typing_env.Funs.remove fname;
+  end;
+  List.iter old_classes begin fun (_, cname) ->
     Naming_heap.ClassHeap.remove cname;
     Typing_env.Classes.remove cname;
-  end old_classes;
+  end;
   try
     Autocomplete.auto_complete := false;
     let {Parser_hack.file_mode; comments; ast} =
@@ -113,9 +132,9 @@ let declare_file fn content =
       Hashtbl.replace globals fn (is_php, funs, classes);
       let nenv = Naming.empty TypecheckerOptions.permissive in
       let nenv = Naming.make_env nenv ~funs ~classes ~typedefs ~consts in
-      let all_classes = List.fold_right begin fun (_, cname) acc ->
+      let all_classes = List.fold_right classes ~f:begin fun (_, cname) acc ->
         SMap.add cname (Relative_path.Set.singleton fn) acc
-      end classes SMap.empty in
+      end ~init:SMap.empty in
       Typing_decl.make_env nenv all_classes fn;
       let sub_classes = get_sub_classes all_classes in
       SSet.iter begin fun cname ->
@@ -171,12 +190,12 @@ let hh_check fn =
         let funs, classes, typedefs, consts = make_funs_classes ast in
         let nenv = Naming.empty TypecheckerOptions.permissive in
         let nenv = Naming.make_env nenv ~funs ~classes ~typedefs ~consts in
-        let all_classes = List.fold_right begin fun (_, cname) acc ->
+        let all_classes = List.fold_right classes ~f:begin fun (_, cname) acc ->
           SMap.add cname (Relative_path.Set.singleton fn) acc
-        end classes SMap.empty in
+        end ~init:SMap.empty in
         Typing_decl.make_env nenv all_classes fn;
-        List.iter (fun (_, fname) -> type_fun nenv fname fn) funs;
-        List.iter (fun (_, cname) -> type_class nenv cname fn) classes;
+        List.iter funs (fun (_, fname) -> type_fun nenv fname fn);
+        List.iter classes (fun (_, cname) -> type_class nenv cname fn);
         error []
         end
         begin fun l ->
@@ -203,7 +222,7 @@ let hh_auto_complete fn =
   try
     let ast = Parser_heap.ParserHeap.find_unsafe fn in
     Errors.ignore_ begin fun () ->
-      List.iter begin fun def ->
+      List.iter ast begin fun def ->
         match def with
         | Ast.Fun f ->
             let nenv, tenv = permissive_empty_envs fn in
@@ -217,7 +236,7 @@ let hh_auto_complete fn =
             let res = Typing.class_def tenv nenv (snd c.Nast.c_name) c in
             res
         | _ -> ()
-      end ast;
+      end;
     end;
     let completion_type_str =
       match !Autocomplete.argument_global_type with
@@ -229,16 +248,16 @@ let hh_auto_complete fn =
       | None -> "none" in
     let result = AutocompleteService.get_results [] [] in
     let result =
-      List.map AutocompleteService.autocomplete_result_to_json result
+      List.map result AutocompleteService.autocomplete_result_to_json
     in
     AutocompleteService.detach_hooks();
-    to_js_object (JAssoc [ "completions",     JList result;
-                          "completion_type", JString completion_type_str;
-                          "internal_error",  JBool false;
+    to_js_object (JSON_Object [ "completions",    JSON_Array result;
+                          "completion_type", JSON_String completion_type_str;
+                          "internal_error",  JSON_Bool false;
                         ])
   with _ ->
     AutocompleteService.detach_hooks();
-    to_js_object (JAssoc [ "internal_error", JBool true;
+    to_js_object (JSON_Object [ "internal_error", JSON_Bool true;
                         ])
 
 let hh_get_method_at_position fn line char =
@@ -249,7 +268,7 @@ let hh_get_method_at_position fn line char =
   try
     let ast = Parser_heap.ParserHeap.find_unsafe fn in
     Errors.ignore_ begin fun () ->
-      List.iter begin fun def ->
+      List.iter ast begin fun def ->
         match def with
         | Ast.Fun f ->
             let nenv, tenv = permissive_empty_envs fn in
@@ -261,7 +280,7 @@ let hh_get_method_at_position fn line char =
             let res = Typing.class_def tenv nenv (snd c.Nast.c_name) c in
             res
         | _ -> ()
-      end ast;
+      end;
     end;
     IdentifySymbolService.detach_hooks ();
     let result =
@@ -273,17 +292,17 @@ let hh_get_method_at_position fn line char =
             | IdentifySymbolService.Method -> "method"
             | IdentifySymbolService.Function -> "function"
             | IdentifySymbolService.LocalVar -> "local" in
-          JAssoc [ "name",           JString res.IdentifySymbolService.name;
-                   "result_type",    JString result_type;
+          JSON_Object [ "name",           JSON_String res.IdentifySymbolService.name;
+                   "result_type",    JSON_String result_type;
                    "pos",            Pos.json (Pos.to_absolute res.IdentifySymbolService.pos);
-                   "internal_error", JBool false;
+                   "internal_error", JSON_Bool false;
                  ]
-      | _ -> JAssoc [ "internal_error", JBool false;
+      | _ -> JSON_Object [ "internal_error", JSON_Bool false;
                     ] in
     to_js_object result
   with _ ->
     IdentifySymbolService.detach_hooks ();
-    to_js_object (JAssoc [ "internal_error", JBool true;
+    to_js_object (JSON_Object [ "internal_error", JSON_Bool true;
                         ])
 
 let hh_get_deps =
@@ -301,20 +320,20 @@ let hh_get_deps =
           (match dep with
           | Typing_deps.Dep.Class s
             when Typing_env.Classes.get s = None ->
-              (JAssoc [ "name", JString s;
-                        "type", JString "class";
+              (JSON_Object [ "name", JSON_String s;
+                        "type", JSON_String "class";
                       ]) :: !result
           | Typing_deps.Dep.Fun s
             when Typing_env.Funs.get s = None ->
-              (JAssoc [ "name", JString s;
-                        "type", JString "fun";
+              (JSON_Object [ "name", JSON_String s;
+                        "type", JSON_String "fun";
                       ]) :: !result
           | _ -> !result
           )
       end
     end deps;
-    to_js_object (JAssoc [ "deps",           JList !result;
-                          "internal_error", JBool false;
+    to_js_object (JSON_Object [ "deps",          JSON_Array !result;
+                          "internal_error", JSON_Bool false;
                         ])
 
 let infer_at_pos file line char =
@@ -328,44 +347,29 @@ let infer_at_pos file line char =
     None, None
 
 let hh_find_lvar_refs file line char =
-  let file = Relative_path.create Relative_path.Root file in
   try
     let get_result = FindLocalsService.attach_hooks line char in
-    let ast = Parser_heap.ParserHeap.find_unsafe file in
-    let tcopt = TypecheckerOptions.permissive in
     Errors.ignore_ begin fun () ->
-      (* We only need to name to find references to locals *)
-      List.iter begin fun def ->
-        match def with
-        | Ast.Fun f ->
-            let nenv = Naming.empty tcopt in
-            let _ = Naming.fun_ nenv f in
-            ()
-        | Ast.Class c ->
-            let nenv = Naming.empty tcopt in
-            let _ = Naming.class_ nenv c in
-            ()
-        | _ -> ()
-      end ast;
+      ignore (hh_check file);
     end;
     FindLocalsService.detach_hooks ();
     let res_list =
-      List.map (compose Pos.json Pos.to_absolute) (get_result ()) in
-    to_js_object (JAssoc [ "positions",      JList res_list;
-                          "internal_error", JBool false;
+      List.map (get_result ()) (compose Pos.json Pos.to_absolute) in
+    to_js_object (JSON_Object [ "positions",      JSON_Array res_list;
+                           "internal_error", JSON_Bool false;
                         ])
   with _ ->
     FindLocalsService.detach_hooks ();
-    to_js_object (JAssoc [ "internal_error", JBool true;
+    to_js_object (JSON_Object [ "internal_error", JSON_Bool true;
                         ])
 
 let hh_infer_type file line char =
   let _, ty = infer_at_pos file line char in
   let output = match ty with
-  | Some ty -> JAssoc [ "type",           JString ty;
-                        "internal_error", JBool false;
+  | Some ty -> JSON_Object [ "type",           JSON_String ty;
+                        "internal_error", JSON_Bool false;
                       ]
-  | None -> JAssoc [ "internal_error", JBool false;
+  | None -> JSON_Object [ "internal_error", JSON_Bool false;
                    ]
   in
   to_js_object output
@@ -373,10 +377,10 @@ let hh_infer_type file line char =
 let hh_infer_pos file line char =
   let pos, _ = infer_at_pos file line char in
   let output = match pos with
-  | Some pos -> JAssoc [ "pos",            Pos.json (Pos.to_absolute pos);
-                         "internal_error", JBool false;
+  | Some pos -> JSON_Object [ "pos",            Pos.json (Pos.to_absolute pos);
+                         "internal_error", JSON_Bool false;
                        ]
-  | None -> JAssoc [ "internal_error", JBool false;
+  | None -> JSON_Object [ "internal_error", JSON_Bool false;
                    ]
   in
   to_js_object output
@@ -386,17 +390,17 @@ let hh_file_summary fn =
   try
     let ast = Parser_heap.ParserHeap.find_unsafe fn in
     let outline = FileOutline.outline_ast ast in
-    let res_list = List.map begin fun (pos, name, type_) ->
-      JAssoc [ "name", JString name;
-               "type", JString type_;
+    let res_list = List.map outline begin fun (pos, name, type_) ->
+      JSON_Object [ "name", JSON_String name;
+               "type", JSON_String type_;
                "pos",  Pos.json pos;
              ]
-      end outline in
-    to_js_object (JAssoc [ "summary",          JList res_list;
-                          "internal_error",   JBool false;
+      end in
+    to_js_object (JSON_Object [ "summary",         JSON_Array res_list;
+                          "internal_error",   JSON_Bool false;
                         ])
   with _ ->
-    to_js_object (JAssoc [ "internal_error", JBool true;
+    to_js_object (JSON_Object [ "internal_error", JSON_Bool true;
                         ])
 
 let hh_hack_coloring fn =
@@ -409,17 +413,18 @@ let hh_hack_coloring fn =
   let result = Hashtbl.fold (fun p ty xs ->
     (Pos.info_raw p, level_of_type (p, ty)) :: xs) type_acc [] in
   let result = ColorFile.go (Hashtbl.find files fn) result in
-  let result = List.map (fun input ->
-                        match input with
-                        | (Some lvl, str) -> (string_of_level lvl, str)
-                        | (None, str) -> ("default", str)
-                        ) result in
-  let result = List.map (fun (checked, text) ->
-                        JAssoc [ "checked", JString checked;
-                                 "text",    JString text;
-                               ]) result in
-  to_js_object (JAssoc [ "coloring",       JList result;
-                        "internal_error", JBool false;
+  let result = List.map result begin fun input ->
+    match input with
+    | (Some lvl, str) -> (string_of_level lvl, str)
+    | (None, str) -> ("default", str)
+  end in
+  let result = List.map result begin fun (checked, text) ->
+    JSON_Object [ "checked", JSON_String checked;
+             "text",    JSON_String text;
+           ]
+  end in
+  to_js_object (JSON_Object [ "coloring",      JSON_Array result;
+                         "internal_error", JSON_Bool false;
                       ])
 
 let hh_get_method_calls fn =
@@ -427,15 +432,15 @@ let hh_get_method_calls fn =
   Typing_defs.accumulate_method_calls_result := [];
   ignore (hh_check fn);
   let results = !Typing_defs.accumulate_method_calls_result in
-  let results = List.map begin fun (p, name) ->
-    JAssoc [ "method_name", JString name;
+  let results = List.map results begin fun (p, name) ->
+    JSON_Object [ "method_name", JSON_String name;
              "pos",         Pos.json (Pos.to_absolute p);
            ]
-    end results in
+  end in
   Typing_defs.accumulate_method_calls := false;
   Typing_defs.accumulate_method_calls_result := [];
-  to_js_object (JAssoc [ "method_calls",   JList results;
-                        "internal_error", JBool false;
+  to_js_object (JSON_Object [ "method_calls",  JSON_Array results;
+                        "internal_error", JSON_Bool false;
                       ])
 
 let hh_arg_info fn line char =
@@ -445,16 +450,16 @@ let hh_arg_info fn line char =
   let fn = Relative_path.create Relative_path.Root fn in
   let _, funs, classes = Hashtbl.find globals fn in
   Errors.ignore_ begin fun () ->
-    List.iter begin fun (_, f_name) ->
+    List.iter funs begin fun (_, f_name) ->
       let nenv, tenv = permissive_empty_envs fn in
       let f = Naming_heap.FunHeap.find_unsafe f_name in
       Typing.fun_def tenv nenv f_name f
-    end funs;
-    List.iter begin fun (_, c_name) ->
+    end;
+    List.iter classes begin fun (_, c_name) ->
       let nenv, tenv = permissive_empty_envs fn in
       let c = Naming_heap.ClassHeap.find_unsafe c_name in
       Typing.class_def tenv nenv c_name c
-    end classes;
+    end;
   end;
   let result = ArgumentInfoService.get_result() in
   let result = match result with
@@ -463,9 +468,9 @@ let hh_arg_info fn line char =
   in
   ArgumentInfoService.detach_hooks();
   let json_res =
-    ("internal_error", JBool false) :: ArgumentInfoService.to_json result
+    ("internal_error", JSON_Bool false) :: ArgumentInfoService.to_json result
   in
-  to_js_object (JAssoc json_res)
+  to_js_object (JSON_Object json_res)
 
 let hh_format contents start end_ =
   let modes = [Some FileInfo.Mstrict; Some FileInfo.Mpartial] in
@@ -477,9 +482,9 @@ let hh_format contents start end_ =
     | Format_hack.Internal_error -> "", "", true
     | Format_hack.Success s -> "", s, false
   in
-  to_js_object (JAssoc [ "error_message", JString error;
-                        "result", JString result;
-                        "internal_error",   JBool internal_error;
+  to_js_object (JSON_Object [ "error_message", JSON_String error;
+                        "result", JSON_String result;
+                        "internal_error",   JSON_Bool internal_error;
                       ])
 
 (* Helpers to turn JavaScript strings into OCaml strings *)

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,7 +25,7 @@
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/base/crash-reporter.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/thread-init-fini.h"
+#include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/url.h"
 #include "hphp/runtime/debugger/debugger.h"
 #include "hphp/util/compatibility.h"
@@ -34,10 +34,10 @@ namespace HPHP {
 
 using folly::EventBase;
 using folly::SocketAddress;
-using apache::thrift::async::TAsyncTimeout;
+using folly::AsyncTimeout;
 using apache::thrift::transport::TTransportException;
 using folly::AsyncServerSocket;
-using folly::Acceptor;
+using wangle::Acceptor;
 using proxygen::SPDYCodec;
 using std::shared_ptr;
 using std::string;
@@ -109,11 +109,11 @@ ProxygenTransportTraits::~ProxygenTransportTraits() {
 
 void HPHPWorkerThread::setup() {
   WorkerThread::setup();
-  init_thread_locals();
+  hphp_thread_init();
 }
 
 void HPHPWorkerThread::cleanup() {
-  finish_thread_locals();
+  hphp_thread_exit();
   WorkerThread::cleanup();
 }
 
@@ -189,6 +189,13 @@ void ProxygenServer::removeTakeoverListener(TakeoverListener* listener) {
 void ProxygenServer::start() {
   m_httpServerSocket.reset(new AsyncServerSocket(m_worker.getEventBase()));
   bool needListen = true;
+  auto failedToListen = [](const std::exception& ex,
+                           const folly::SocketAddress& addr) {
+    Logger::Error("%s", ex.what());
+    throw FailedToListenException(addr.getAddressStr(),
+                                  addr.getPort());
+  };
+
   try {
     if (m_accept_sock >= 0) {
       Logger::Info("inheritfd: using inherited fd %d for server",
@@ -212,9 +219,7 @@ void ProxygenServer::start() {
       }
     }
     if (!takoverSucceeded) {
-      Logger::Error("%s", ex.what());
-      throw FailedToListenException(m_httpConfig.bindAddress.getAddressStr(),
-                                    m_httpConfig.bindAddress.getPort());
+      failedToListen(ex, m_httpConfig.bindAddress);
     }
   }
   if (m_takeover_agent) {
@@ -235,9 +240,7 @@ void ProxygenServer::start() {
         m_httpsServerSocket->bind(m_httpsConfig.bindAddress);
       }
     } catch (const TTransportException& ex) {
-      Logger::Error("%s", ex.what());
-      throw FailedToListenException(m_httpsConfig.bindAddress.getAddressStr(),
-                                    m_httpsConfig.bindAddress.getPort());
+      failedToListen(ex, m_httpsConfig.bindAddress);
     }
 
     m_httpsAcceptor.reset(new HPHPSessionAcceptor(m_httpsConfig, this));
@@ -245,28 +248,31 @@ void ProxygenServer::start() {
       m_httpsAcceptor->init(m_httpsServerSocket.get(), m_worker.getEventBase());
     } catch (const std::exception& ex) {
       // Could be some cert thing
-      Logger::Error("%s", ex.what());
-      throw FailedToListenException(m_httpsConfig.bindAddress.getAddressStr(),
-                                    m_httpsConfig.bindAddress.getPort());
+      failedToListen(ex, m_httpsConfig.bindAddress);
     }
   }
-  m_worker.getEventBase()->runInEventBaseThread([this, needListen] {
-      if (!m_httpServerSocket) {
-        // someone called stop before we got here
-        return;
-      }
-      if (needListen) {
-        m_httpServerSocket->listen(m_httpConfig.acceptBacklog);
-      }
-      m_httpServerSocket->startAccepting();
-      if (m_httpsServerSocket) {
-        m_httpsServerSocket->listen(m_httpsConfig.acceptBacklog);
-        m_httpsServerSocket->startAccepting();
-      }
-      startConsuming(m_worker.getEventBase(), &m_responseQueue);
-    });
+  if (needListen) {
+    try {
+      m_httpServerSocket->listen(m_httpConfig.acceptBacklog);
+    } catch (const std::system_error& ex) {
+      failedToListen(ex, m_httpConfig.bindAddress);
+    }
+  }
+  if (m_httpsServerSocket) {
+    try {
+      m_httpsServerSocket->listen(m_httpsConfig.acceptBacklog);
+    } catch (const std::system_error& ex) {
+      failedToListen(ex, m_httpsConfig.bindAddress);
+    }
+  }
+  m_httpServerSocket->startAccepting();
+  if (m_httpsServerSocket) {
+    m_httpsServerSocket->startAccepting();
+  }
+  startConsuming(m_worker.getEventBase(), &m_responseQueue);
+
   setStatus(RunStatus::RUNNING);
-  TAsyncTimeout::attachEventBase(m_worker.getEventBase());
+  AsyncTimeout::attachEventBase(m_worker.getEventBase());
   m_worker.start();
   m_dispatcher.start();
 }
@@ -662,6 +668,9 @@ void ProxygenServer::onRequestError(Transport* transport) {
   }
 
   try {
+    timespec start;
+    Timer::GetMonotonicTime(start);
+    transport->onRequestStart(start);
     m_handler->logToAccessLog(transport);
   } catch (...) {}
 }

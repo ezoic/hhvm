@@ -1,4 +1,9 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8.7 FATAL_ERROR)
+
 find_package(OCaml)
+find_package(LZ4)
+find_package(LibElf)
+find_package(Memfd)
 
 if (OCAMLC_FOUND)
   # This is totally the wrong way to do this, but I am tired of fighting with
@@ -14,6 +19,15 @@ if (OCAMLC_FOUND)
     list(APPEND extra_cc_flags -DHAVE_ELF_GETSHDRSTRNDX)
   endif()
 
+  if(HAVE_MEMFD_CREATE)
+    list(APPEND extra_cc_flags -DHAVE_MEMFD_CREATE)
+  endif()
+
+  if(HAVE_DECL___NR_MEMFD_CREATE)
+    list(APPEND extra_cc_flags -DHAVE_DECL___NR_MEMFD_CREATE)
+  endif()
+
+  list(APPEND extra_cc_flags -DOSS_SMALL_HH_TABLE_POWS)
   list(APPEND extra_cc_flags -pthread)
 
   foreach(lib ${LIBELF_LIBRARIES})
@@ -27,7 +41,7 @@ if (OCAMLC_FOUND)
     list(APPEND extra_lib_paths ${pth})
   else()
     list(APPEND extra_include_paths "${TP_DIR}/lz4")
-    list(APPEND extra_lib_paths "${TP_DIR}/lz4")
+    list(APPEND extra_lib_paths "${TP_BUILD_DIR}/lz4")
   endif()
   list(APPEND extra_native_libraries "lz4")
 
@@ -72,5 +86,17 @@ if (OCAMLC_FOUND)
 
   install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/bin/hh_server
     DESTINATION bin
+    COMPONENT dev)
+
+  install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/bin/hh_format
+    DESTINATION bin
+    COMPONENT dev)
+
+  install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/bin/h2tp
+    DESTINATION bin
+    COMPONENT dev)
+
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/h2tp/resources/
+    DESTINATION share/hhvm/hack/hacklib
     COMPONENT dev)
 endif()

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -57,7 +57,7 @@ c_AsyncGeneratorWaitHandle::Create(AsyncGenerator* gen,
   assert(child->instanceof(c_WaitableWaitHandle::classof()));
   assert(!child->isFinished());
 
-  auto waitHandle = makeSmartPtr<c_AsyncGeneratorWaitHandle>();
+  auto waitHandle = req::make<c_AsyncGeneratorWaitHandle>();
   waitHandle->initialize(gen, child);
   return waitHandle.detach();
 }
@@ -140,7 +140,7 @@ void c_AsyncGeneratorWaitHandle::ret(Cell& result) {
 void c_AsyncGeneratorWaitHandle::fail(ObjectData* exception) {
   AsioSession* session = AsioSession::Get();
   if (UNLIKELY(session->hasOnResumableFail())) {
-    session->onResumableFail(this, exception);
+    session->onResumableFail(this, Object{exception});
   }
 
   auto parentChain = getParentChain();

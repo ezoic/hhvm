@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,26 +23,4 @@ using namespace HPHP;
 
 LoopStatement::LoopStatement(STATEMENT_CONSTRUCTOR_BASE_PARAMETERS) :
     Statement(STATEMENT_CONSTRUCTOR_BASE_PARAMETER_VALUES) {
-}
-
-void LoopStatement::addStringBuf(const std::string &name) {
-  m_string_bufs.insert(name);
-}
-
-void LoopStatement::removeStringBuf(const std::string &name) {
-  m_string_bufs.erase(name);
-}
-
-void LoopStatement::clearStringBufs() {
-  m_string_bufs.clear();
-}
-
-bool LoopStatement::checkStringBuf(const std::string &name) {
-  if (m_string_bufs.find(name) != m_string_bufs.end()) {
-    return true;
-  }
-  if (LoopStatementPtr outer = m_outer.lock()) {
-    return outer->checkStringBuf(name);
-  }
-  return false;
 }

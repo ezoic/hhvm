@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -47,7 +47,13 @@ protected:
 private:
   Array m_variables;
   int m_frame;
-  bool m_global; // Set true by onServer if it used g_context->m_globalVarEnv
+
+  /* Serialization limit on a single variable value.  -1 means unlimited. */
+  int m_formatMaxLen{200};
+
+  /* Set true by onServer if it used g_context->m_globalVarEnv. */
+  bool m_global;
+
   String m_varName;
   String m_filter;
 };

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -40,7 +40,6 @@
 #include "hphp/runtime/base/socket.h"
 #include "hphp/runtime/base/ssl-socket.h"
 #include "hphp/runtime/server/server-stats.h"
-#include "hphp/runtime/base/zend-php-config.h"
 #include "hphp/runtime/base/mem-file.h"
 #include "hphp/util/logger.h"
 
@@ -104,13 +103,19 @@ static bool get_sockaddr(sockaddr *sa, socklen_t salen,
     return true;
   case AF_UNIX:
     {
+#ifdef _MSC_VER
+      address = String("Unsupported");
+#else
       // NB: an unnamed socket has no path, and sun_path should not be
       // inspected. In that case the length is just the size of the
       // struct without sun_path.
       struct sockaddr_un *s_un = (struct sockaddr_un *)sa;
       if (salen > offsetof(sockaddr_un, sun_path)) {
         address = String(s_un->sun_path, CopyString);
+      } else {
+        address = empty_string();
       }
+#endif
     }
     return true;
 
@@ -124,7 +129,7 @@ static bool get_sockaddr(sockaddr *sa, socklen_t salen,
 
 static bool php_set_inet6_addr(struct sockaddr_in6 *sin6,
                                const char *address,
-                               SmartPtr<Socket> sock) {
+                               req::ptr<Socket> sock) {
   struct in6_addr tmp;
   struct addrinfo hints;
   struct addrinfo *addrinfo = NULL;
@@ -160,7 +165,7 @@ static bool php_set_inet6_addr(struct sockaddr_in6 *sin6,
 
 static bool php_set_inet_addr(struct sockaddr_in *sin,
                               const char *address,
-                              SmartPtr<Socket> sock) {
+                              req::ptr<Socket> sock) {
   struct in_addr tmp;
 
   if (inet_aton(address, &tmp)) {
@@ -184,19 +189,23 @@ static bool php_set_inet_addr(struct sockaddr_in *sin,
   return true;
 }
 
-static bool set_sockaddr(sockaddr_storage &sa_storage, SmartPtr<Socket> sock,
+static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
                          const char *addr, int port,
                          struct sockaddr *&sa_ptr, size_t &sa_size) {
   struct sockaddr *sock_type = (struct sockaddr*) &sa_storage;
   switch (sock->getType()) {
   case AF_UNIX:
     {
+#ifdef _MSC_VER
+      return false;
+#else
       struct sockaddr_un *sa = (struct sockaddr_un *)sock_type;
       memset(sa, 0, sizeof(sa_storage));
       sa->sun_family = AF_UNIX;
       snprintf(sa->sun_path, 108, "%s", addr);
       sa_ptr = (struct sockaddr *)sa;
       sa_size = SUN_LEN(sa);
+#endif
     }
     break;
   case AF_INET:
@@ -268,7 +277,7 @@ static void sock_array_from_fd_set(Variant &sockets, pollfd *fds, int &nfds,
   sockets = ret;
 }
 
-static int php_read(SmartPtr<Socket> sock, void *buf, int maxlen, int flags) {
+static int php_read(req::ptr<Socket> sock, void *buf, int maxlen, int flags) {
   int m = fcntl(sock->fd(), F_GETFL);
   if (m < 0) {
     return m;
@@ -321,10 +330,10 @@ static int php_read(SmartPtr<Socket> sock, void *buf, int maxlen, int flags) {
   return n;
 }
 
-static SmartPtr<Socket> create_new_socket(
+static req::ptr<Socket> create_new_socket(
   const HostURL &hosturl,
-  Variant &errnum,
-  Variant &errstr
+  VRefParam errnum,
+  VRefParam errstr
 ) {
   int domain = hosturl.isIPv6() ? AF_INET6 : AF_INET;
   int type = SOCK_STREAM;
@@ -332,11 +341,13 @@ static SmartPtr<Socket> create_new_socket(
 
   if (scheme == "udp" || scheme == "udg") {
     type = SOCK_DGRAM;
-  } else if (scheme == "unix") {
+  }
+
+  if (scheme == "unix" || scheme == "udg") {
     domain = AF_UNIX;
   }
 
-  auto sock = makeSmartPtr<Socket>(
+  auto sock = req::make<Socket>(
     socket(domain, type, 0),
     domain,
     hosturl.getHost().c_str(),
@@ -345,8 +356,8 @@ static SmartPtr<Socket> create_new_socket(
 
   if (!sock->valid()) {
     SOCKET_ERROR(sock, "unable to create socket", errno);
-    errnum = sock->getError();
-    errstr = HHVM_FN(socket_strerror)(sock->getError());
+    errnum.assignIfRef(sock->getError());
+    errstr.assignIfRef(HHVM_FN(socket_strerror)(sock->getError()));
     sock.reset();
   }
   return sock;
@@ -405,19 +416,21 @@ static int connect_with_timeout(int fd, struct sockaddr *sa_ptr,
 }
 
 static Variant new_socket_connect(const HostURL &hosturl, double timeout,
-                                  const SmartPtr<StreamContext>& streamctx,
-                                  Variant &errnum, Variant &errstr) {
+                                  const req::ptr<StreamContext>& streamctx,
+                                  VRefParam errnum, VRefParam errstr) {
   int domain = AF_UNSPEC;
   int type = SOCK_STREAM;
   auto const& scheme = hosturl.getScheme();
-  SmartPtr<Socket> sock;
-  SmartPtr<SSLSocket> sslsock;
+  req::ptr<Socket> sock;
+  req::ptr<SSLSocket> sslsock;
   std::string sockerr;
   int error;
 
   if (scheme == "udp" || scheme == "udg") {
     type = SOCK_DGRAM;
-  } else if (scheme == "unix") {
+  }
+
+  if (scheme == "unix" || scheme == "udg") {
     domain = AF_UNIX;
   }
 
@@ -428,7 +441,7 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
     size_t sa_size;
 
     fd = socket(domain, type, 0);
-    sock = makeSmartPtr<Socket>(
+    sock = req::make<Socket>(
       fd, domain, hosturl.getHost().c_str(), hosturl.getPort());
 
     if (!set_sockaddr(sa_storage, sock, hosturl.getHost().c_str(),
@@ -439,8 +452,8 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
     if (connect_with_timeout(fd, sa_ptr, sa_size, timeout,
                              hosturl, sockerr, error) != 0) {
       SOCKET_ERROR(sock, sockerr.c_str(), error);
-      errnum = sock->getLastError();
-      errstr = HHVM_FN(socket_strerror)(sock->getLastError());
+      errnum.assignIfRef(sock->getLastError());
+      errstr.assignIfRef(HHVM_FN(socket_strerror)(sock->getLastError()));
       return false;
     }
   } else {
@@ -455,7 +468,7 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
     struct addrinfo *aiHead;
     int errcode = getaddrinfo(host.c_str(), port.c_str(), &hints, &aiHead);
     if (errcode != 0) {
-      errstr = String(gai_strerror(errcode), CopyString);
+      errstr.assignIfRef(String(gai_strerror(errcode), CopyString));
       return false;
     }
     SCOPE_EXIT { freeaddrinfo(aiHead); };
@@ -479,7 +492,7 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
     if (sslsock) {
       sock = sslsock;
     } else {
-      sock = makeSmartPtr<Socket>(fd,
+      sock = req::make<Socket>(fd,
                                   domain,
                                   hosturl.getHost().c_str(),
                                   hosturl.getPort());
@@ -489,8 +502,8 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
   if (!sock->valid()) {
     SOCKET_ERROR(sock,
         sockerr.empty() ? "unable to create socket" : sockerr.c_str(), error);
-    errnum = sock->getLastError();
-    errstr = HHVM_FN(socket_strerror)(sock->getLastError());
+    errnum.assignIfRef(sock->getLastError());
+    errstr.assignIfRef(HHVM_FN(socket_strerror)(sock->getLastError()));
     return false;
   }
 
@@ -511,12 +524,12 @@ Variant HHVM_FUNCTION(socket_create,
   check_socket_parameters(domain, type);
   int socketId = socket(domain, type, protocol);
   if (socketId == -1) {
-    SOCKET_ERROR(makeSmartPtr<Socket>(),
+    SOCKET_ERROR(req::make<Socket>(),
                  "Unable to create socket",
                  errno);
     return false;
   }
-  return Variant(makeSmartPtr<Socket>(socketId, domain));
+  return Variant(req::make<Socket>(socketId, domain));
 }
 
 Variant HHVM_FUNCTION(socket_create_listen,
@@ -533,7 +546,7 @@ Variant HHVM_FUNCTION(socket_create_listen,
   la.sin_family = result.hostbuf.h_addrtype;
   la.sin_port = htons((unsigned short)port);
 
-  auto sock = makeSmartPtr<Socket>(
+  auto sock = req::make<Socket>(
     socket(PF_INET, SOCK_STREAM, 0), PF_INET, "0.0.0.0", port);
 
   if (!sock->valid()) {
@@ -566,18 +579,18 @@ bool HHVM_FUNCTION(socket_create_pair,
 
   int fds_array[2];
   if (socketpair(domain, type, protocol, fds_array) != 0) {
-    SOCKET_ERROR(makeSmartPtr<Socket>(),
+    SOCKET_ERROR(req::make<Socket>(),
                  "unable to create socket pair",
                  errno);
     return false;
   }
 
-  fd = make_packed_array(
-    Variant(makeSmartPtr<Socket>(fds_array[0], domain, nullptr, 0, 0.0,
-                                 s_socktype_generic)),
-    Variant(makeSmartPtr<Socket>(fds_array[1], domain, nullptr, 0, 0.0,
-                                 s_socktype_generic))
-  );
+  fd.assignIfRef(make_packed_array(
+    Variant(req::make<Socket>(fds_array[0], domain, nullptr, 0, 0.0,
+                              s_socktype_generic)),
+    Variant(req::make<Socket>(fds_array[1], domain, nullptr, 0, 0.0,
+                              s_socktype_generic))
+  ));
   return true;
 }
 
@@ -655,7 +668,11 @@ bool HHVM_FUNCTION(socket_getpeername,
     SOCKET_ERROR(sock, "unable to retrieve peer name", errno);
     return false;
   }
-  return get_sockaddr(sa, salen, address, port);
+  Variant a, p;
+  auto ret = get_sockaddr(sa, salen, a, p);
+  address.assignIfRef(a);
+  port.assignIfRef(p);
+  return ret;
 }
 
 bool HHVM_FUNCTION(socket_getsockname,
@@ -671,7 +688,11 @@ bool HHVM_FUNCTION(socket_getsockname,
     SOCKET_ERROR(sock, "unable to retrieve peer name", errno);
     return false;
   }
-  return get_sockaddr(sa, salen, address, port);
+  Variant a, p;
+  auto ret = get_sockaddr(sa, salen, a, p);
+  address.assignIfRef(a);
+  port.assignIfRef(p);
+  return ret;
 }
 
 bool HHVM_FUNCTION(socket_set_block,
@@ -846,13 +867,25 @@ Variant HHVM_FUNCTION(socket_select,
                       int tv_usec /* = 0 */) {
   int count = 0;
   if (!read.isNull()) {
-    count += read.toArray().size();
+    if (!read.isArray()) {
+      raise_warning("socket_select() expects parameter 1 to be array()");
+      return init_null();
+    }
+    count += read->toCArrRef().size();
   }
   if (!write.isNull()) {
-    count += write.toArray().size();
+    if (!write.isArray()) {
+      raise_warning("socket_select() expects parameter 2 to be array()");
+      return init_null();
+    }
+    count += write->toCArrRef().size();
   }
   if (!except.isNull()) {
-    count += except.toArray().size();
+    if (!except.isArray()) {
+      raise_warning("socket_select() expects parameter 3 to be array()");
+      return init_null();
+    }
+    count += except->toCArrRef().size();
   }
   if (!count) {
     return false;
@@ -861,13 +894,13 @@ Variant HHVM_FUNCTION(socket_select,
   struct pollfd *fds = (struct pollfd *)calloc(count, sizeof(struct pollfd));
   count = 0;
   if (!read.isNull()) {
-    sock_array_to_fd_set(read.toArray(), fds, count, POLLIN);
+    sock_array_to_fd_set(read->toCArrRef(), fds, count, POLLIN);
   }
   if (!write.isNull()) {
-    sock_array_to_fd_set(write.toArray(), fds, count, POLLOUT);
+    sock_array_to_fd_set(write->toCArrRef(), fds, count, POLLOUT);
   }
   if (!except.isNull()) {
-    sock_array_to_fd_set(except.toArray(), fds, count, POLLPRI);
+    sock_array_to_fd_set(except->toCArrRef(), fds, count, POLLPRI);
   }
   if (!count) {
     raise_warning("no resource arrays were passed to select");
@@ -894,12 +927,12 @@ Variant HHVM_FUNCTION(socket_select,
     }
     if (hasData.size() > 0) {
       if (!write.isNull()) {
-        write = empty_array();
+        write.assignIfRef(empty_array());
       }
       if (!except.isNull()) {
-        except = empty_array();
+        except.assignIfRef(empty_array());
       }
-      read = hasData;
+      read.assignIfRef(hasData);
       free(fds);
       return hasData.size();
     }
@@ -916,13 +949,19 @@ Variant HHVM_FUNCTION(socket_select,
   count = 0;
   int nfds = 0;
   if (!read.isNull()) {
-    sock_array_from_fd_set(read, fds, nfds, count, POLLIN|POLLERR|POLLHUP);
+    if (auto ref = read.getVariantOrNull()) {
+      sock_array_from_fd_set(*ref, fds, nfds, count, POLLIN|POLLERR|POLLHUP);
+    }
   }
   if (!write.isNull()) {
-    sock_array_from_fd_set(write, fds, nfds, count, POLLOUT|POLLERR);
+    if (auto ref = write.getVariantOrNull()) {
+      sock_array_from_fd_set(*ref, fds, nfds, count, POLLOUT|POLLERR);
+    }
   }
   if (!except.isNull()) {
-    sock_array_from_fd_set(except, fds, nfds, count, POLLPRI|POLLERR);
+    if (auto ref = except.getVariantOrNull()) {
+      sock_array_from_fd_set(*ref, fds, nfds, count, POLLPRI|POLLERR);
+    }
   }
 
   free(fds);
@@ -946,8 +985,8 @@ Variant socket_server_impl(
   VRefParam errnum /* = null */,
   VRefParam errstr /* = null */
 ) {
-  errnum = 0;
-  errstr = empty_string();
+  errnum.assignIfRef(0);
+  errstr.assignIfRef(empty_string());
   auto sock = create_new_socket(hosturl, errnum, errstr);
   if (!sock) {
     return false;
@@ -980,7 +1019,7 @@ Variant HHVM_FUNCTION(socket_accept,
   auto sock = cast<Socket>(socket);
   struct sockaddr sa;
   socklen_t salen = sizeof(sa);
-  auto new_sock = makeSmartPtr<Socket>(
+  auto new_sock = req::make<Socket>(
     accept(sock->fd(), &sa, &salen), sock->getType());
   if (!new_sock->valid()) {
     SOCKET_ERROR(new_sock, "unable to accept incoming connection", errno);
@@ -1071,6 +1110,9 @@ Variant HHVM_FUNCTION(socket_sendto,
   switch (sock->getType()) {
   case AF_UNIX:
     {
+#ifdef _MSC_VER
+      retval = -1;
+#else
       struct sockaddr_un  s_un;
       memset(&s_un, 0, sizeof(s_un));
       s_un.sun_family = AF_UNIX;
@@ -1078,6 +1120,7 @@ Variant HHVM_FUNCTION(socket_sendto,
 
       retval = sendto(sock->fd(), buf.data(), len, flags,
                       (struct sockaddr *)&s_un, SUN_LEN(&s_un));
+#endif
     }
     break;
   case AF_INET:
@@ -1146,10 +1189,10 @@ Variant HHVM_FUNCTION(socket_recv,
   int retval;
   if ((retval = recv(sock->fd(), recv_buf, len, flags)) < 1) {
     free(recv_buf);
-    buf = uninit_null();
+    buf.assignIfRef(init_null());
   } else {
     recv_buf[retval] = '\0';
-    buf = String(recv_buf, retval, AttachString);
+    buf.assignIfRef(String(recv_buf, retval, AttachString));
   }
 
   if (retval == -1) {
@@ -1179,6 +1222,9 @@ Variant HHVM_FUNCTION(socket_recvfrom,
   switch (sock->getType()) {
   case AF_UNIX:
     {
+#ifdef _MSC_VER
+      return false;
+#else
       struct sockaddr_un s_un;
       slen = sizeof(s_un);
       memset(&s_un, 0, slen);
@@ -1192,8 +1238,9 @@ Variant HHVM_FUNCTION(socket_recvfrom,
       }
 
       recv_buf[retval] = 0;
-      buf = String(recv_buf, retval, AttachString);
-      name = String(s_un.sun_path, CopyString);
+      buf.assignIfRef(String(recv_buf, retval, AttachString));
+      name.assignIfRef(String(s_un.sun_path, CopyString));
+#endif
     }
     break;
   case AF_INET:
@@ -1216,17 +1263,17 @@ Variant HHVM_FUNCTION(socket_recvfrom,
         return false;
       }
       recv_buf[retval] = 0;
-      buf = String(recv_buf, retval, AttachString);
+      buf.assignIfRef(String(recv_buf, retval, AttachString));
 
       try {
         folly::SocketAddress addr;
         addr.setFromSockaddr(&sin);
 
-        name = String(addr.getAddressStr(), CopyString);
-        port = addr.getPort();
+        name.assignIfRef(String(addr.getAddressStr(), CopyString));
+        port.assignIfRef(addr.getPort());
       } catch (...) {
-        name = s_0_0_0_0;
-        port = 0;
+        name.assignIfRef(s_0_0_0_0);
+        port.assignIfRef(0);
       }
     }
     break;
@@ -1251,17 +1298,17 @@ Variant HHVM_FUNCTION(socket_recvfrom,
       }
 
       recv_buf[retval] = 0;
-      buf = String(recv_buf, retval, AttachString);
+      buf.assignIfRef(String(recv_buf, retval, AttachString));
 
       try {
         folly::SocketAddress addr;
         addr.setFromSockaddr(&sin6);
 
-        name = String(addr.getAddressStr(), CopyString);
-        port = addr.getPort();
+        name.assignIfRef(String(addr.getAddressStr(), CopyString));
+        port.assignIfRef(addr.getPort());
       } catch (...) {
-        name = s_2colons;
-        port = 0;
+        name.assignIfRef(s_2colons);
+        port.assignIfRef(0);
       }
     }
     break;
@@ -1344,15 +1391,24 @@ thread_local std::unordered_map<
 Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
                       VRefParam errstr, double timeout, bool persistent,
                       const Variant& context) {
-  errnum = 0;
-  errstr = empty_string();
+  errnum.assignIfRef(0);
+  errstr.assignIfRef(empty_string());
   std::string key;
   if (persistent) {
     key = hosturl.getHostURL() + ":" +
           folly::to<std::string>(hosturl.getPort());
+
+    // Check our persistent storage and determine if it's an SSLSocket
+    // or just a regular socket.
     auto sockItr = s_sockets.find(key);
     if (sockItr != s_sockets.end()) {
-      auto sock = makeSmartPtr<Socket>(sockItr->second);
+      req::ptr<Socket> sock;
+      if (auto sslSocketData =
+          std::dynamic_pointer_cast<SSLSocketData>(sockItr->second)) {
+        sock = req::make<SSLSocket>(sslSocketData);
+      } else {
+        sock = req::make<Socket>(sockItr->second);
+      }
 
       if (sock->getError() == 0 && sock->checkLiveness()) {
         return Variant(sock);
@@ -1371,7 +1427,7 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
   }
 
 
-  SmartPtr<StreamContext> streamctx;
+  req::ptr<StreamContext> streamctx;
   if (context.isResource()) {
     streamctx = cast<StreamContext>(context.toResource());
   }
@@ -1524,111 +1580,103 @@ Variant HHVM_FUNCTION(getaddrinfo,
   return ret;
 }
 
-#define SOCK_CONST(v) Native::registerConstant<KindOfInt64>( \
-                              makeStaticString(#v), v);
-
-const StaticString
-  s_SOL_TCP("SOL_TCP"),
-  s_SOL_UDP("SOL_UDP");
-
 class SocketsExtension final : public Extension {
  public:
   SocketsExtension() : Extension("sockets", NO_EXTENSION_VERSION_YET) {}
 
   void moduleInit() override {
-    SOCK_CONST(AF_UNIX);
-    SOCK_CONST(AF_INET);
-    SOCK_CONST(AF_INET6);
-    SOCK_CONST(SOCK_STREAM);
-    SOCK_CONST(SOCK_DGRAM);
-    SOCK_CONST(SOCK_RAW);
-    SOCK_CONST(SOCK_SEQPACKET);
-    SOCK_CONST(SOCK_RDM);
+    HHVM_RC_INT_SAME(AF_UNIX);
+    HHVM_RC_INT_SAME(AF_INET);
+    HHVM_RC_INT_SAME(AF_INET6);
+    HHVM_RC_INT_SAME(SOCK_STREAM);
+    HHVM_RC_INT_SAME(SOCK_DGRAM);
+    HHVM_RC_INT_SAME(SOCK_RAW);
+    HHVM_RC_INT_SAME(SOCK_SEQPACKET);
+    HHVM_RC_INT_SAME(SOCK_RDM);
 
-    SOCK_CONST(MSG_OOB);
-    SOCK_CONST(MSG_WAITALL);
-    SOCK_CONST(MSG_CTRUNC);
-    SOCK_CONST(MSG_TRUNC);
-    SOCK_CONST(MSG_PEEK);
-    SOCK_CONST(MSG_DONTROUTE);
+    HHVM_RC_INT_SAME(MSG_OOB);
+    HHVM_RC_INT_SAME(MSG_WAITALL);
+    HHVM_RC_INT_SAME(MSG_CTRUNC);
+    HHVM_RC_INT_SAME(MSG_TRUNC);
+    HHVM_RC_INT_SAME(MSG_PEEK);
+    HHVM_RC_INT_SAME(MSG_DONTROUTE);
 #ifdef MSG_EOR
-    SOCK_CONST(MSG_EOR);
+    HHVM_RC_INT_SAME(MSG_EOR);
 #endif
 #ifdef MSG_EOF
-    SOCK_CONST(MSG_EOF);
+    HHVM_RC_INT_SAME(MSG_EOF);
 #endif
 #ifdef MSG_CONFIRM
-    SOCK_CONST(MSG_CONFIRM);
+    HHVM_RC_INT_SAME(MSG_CONFIRM);
 #endif
 #ifdef MSG_ERRQUEUE
-    SOCK_CONST(MSG_ERRQUEUE);
+    HHVM_RC_INT_SAME(MSG_ERRQUEUE);
 #endif
 #ifdef MSG_NOSIGNAL
-    SOCK_CONST(MSG_NOSIGNAL);
+    HHVM_RC_INT_SAME(MSG_NOSIGNAL);
 #endif
 #ifdef MSG_DONTWAIT
-    SOCK_CONST(MSG_DONTWAIT);
+    HHVM_RC_INT_SAME(MSG_DONTWAIT);
 #endif
 #ifdef MSG_MORE
-    SOCK_CONST(MSG_MORE);
+    HHVM_RC_INT_SAME(MSG_MORE);
 #endif
 #ifdef MSG_WAITFORONE
-    SOCK_CONST(MSG_WAITFORONE);
+    HHVM_RC_INT_SAME(MSG_WAITFORONE);
 #endif
 #ifdef MSG_CMSG_CLOEXEC
-    SOCK_CONST(MSG_CMSG_CLOEXEC);
+    HHVM_RC_INT_SAME(MSG_CMSG_CLOEXEC);
 #endif
 
-    SOCK_CONST(SO_DEBUG);
-    SOCK_CONST(SO_REUSEADDR);
+    HHVM_RC_INT_SAME(SO_DEBUG);
+    HHVM_RC_INT_SAME(SO_REUSEADDR);
 #ifdef SO_REUSEPORT
-    SOCK_CONST(SO_REUSEPORT);
+    HHVM_RC_INT_SAME(SO_REUSEPORT);
 #endif
-    SOCK_CONST(SO_KEEPALIVE);
-    SOCK_CONST(SO_DONTROUTE);
-    SOCK_CONST(SO_LINGER);
-    SOCK_CONST(SO_BROADCAST);
-    SOCK_CONST(SO_OOBINLINE);
-    SOCK_CONST(SO_SNDBUF);
-    SOCK_CONST(SO_RCVBUF);
-    SOCK_CONST(SO_SNDLOWAT);
-    SOCK_CONST(SO_RCVLOWAT);
-    SOCK_CONST(SO_SNDTIMEO);
-    SOCK_CONST(SO_RCVTIMEO);
-    SOCK_CONST(SO_TYPE);
+    HHVM_RC_INT_SAME(SO_KEEPALIVE);
+    HHVM_RC_INT_SAME(SO_DONTROUTE);
+    HHVM_RC_INT_SAME(SO_LINGER);
+    HHVM_RC_INT_SAME(SO_BROADCAST);
+    HHVM_RC_INT_SAME(SO_OOBINLINE);
+    HHVM_RC_INT_SAME(SO_SNDBUF);
+    HHVM_RC_INT_SAME(SO_RCVBUF);
+    HHVM_RC_INT_SAME(SO_SNDLOWAT);
+    HHVM_RC_INT_SAME(SO_RCVLOWAT);
+    HHVM_RC_INT_SAME(SO_SNDTIMEO);
+    HHVM_RC_INT_SAME(SO_RCVTIMEO);
+    HHVM_RC_INT_SAME(SO_TYPE);
 #ifdef SO_FAMILY
-    SOCK_CONST(SO_FAMILY);
+    HHVM_RC_INT_SAME(SO_FAMILY);
 #endif
-    SOCK_CONST(SO_ERROR);
+    HHVM_RC_INT_SAME(SO_ERROR);
 #ifdef SO_BINDTODEVICE
-    SOCK_CONST(SO_BINDTODEVICE);
+    HHVM_RC_INT_SAME(SO_BINDTODEVICE);
 #endif
-    SOCK_CONST(SOL_SOCKET);
-    SOCK_CONST(SOMAXCONN);
+    HHVM_RC_INT_SAME(SOL_SOCKET);
+    HHVM_RC_INT_SAME(SOMAXCONN);
 #ifdef TCP_NODELAY
-    SOCK_CONST(TCP_NODELAY);
+    HHVM_RC_INT_SAME(TCP_NODELAY);
 #endif
-    SOCK_CONST(PHP_NORMAL_READ);
-    SOCK_CONST(PHP_BINARY_READ);
+    HHVM_RC_INT_SAME(PHP_NORMAL_READ);
+    HHVM_RC_INT_SAME(PHP_BINARY_READ);
 
     /* TODO: MCAST_* constants and logic to handle them */
 
-    SOCK_CONST(IP_MULTICAST_IF);
-    SOCK_CONST(IP_MULTICAST_TTL);
-    SOCK_CONST(IP_MULTICAST_LOOP);
-    SOCK_CONST(IPV6_MULTICAST_IF);
-    SOCK_CONST(IPV6_MULTICAST_HOPS);
-    SOCK_CONST(IPV6_MULTICAST_LOOP);
-    SOCK_CONST(IPPROTO_IP);
-    SOCK_CONST(IPPROTO_IPV6);
+    HHVM_RC_INT_SAME(IP_MULTICAST_IF);
+    HHVM_RC_INT_SAME(IP_MULTICAST_TTL);
+    HHVM_RC_INT_SAME(IP_MULTICAST_LOOP);
+    HHVM_RC_INT_SAME(IPV6_MULTICAST_IF);
+    HHVM_RC_INT_SAME(IPV6_MULTICAST_HOPS);
+    HHVM_RC_INT_SAME(IPV6_MULTICAST_LOOP);
+    HHVM_RC_INT_SAME(IPPROTO_IP);
+    HHVM_RC_INT_SAME(IPPROTO_IPV6);
 
-    Native::registerConstant<KindOfInt64>(s_SOL_TCP.get(), IPPROTO_TCP);
-    Native::registerConstant<KindOfInt64>(s_SOL_UDP.get(), IPPROTO_UDP);
+    HHVM_RC_INT(SOL_TCP, IPPROTO_TCP);
+    HHVM_RC_INT(SOL_UDP, IPPROTO_UDP);
 
-    SOCK_CONST(IPV6_UNICAST_HOPS);
+    HHVM_RC_INT_SAME(IPV6_UNICAST_HOPS);
 
-#define REGISTER_LONG_CONSTANT(name, val, flags) \
-  Native::registerConstant<KindOfInt64>(makeStaticString(name), val)
+#define REGISTER_LONG_CONSTANT(name, val, flags) HHVM_RC_INT(name, val);
 #include "hphp/runtime/ext/sockets/unix_socket_constants.h"
 #undef REGISTER_LONG_CONSTANT
 

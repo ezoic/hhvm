@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -12,12 +12,14 @@
 (*****************************************************************************)
 (* Module declaring the types in parallel *)
 (*****************************************************************************)
+
+open Core
 open Utils
 
 (* The set of files that failed *)
 type failed = Relative_path.Set.t
 
-(* The result excepted from the service *)
+(* The result expected from the service *)
 type result = Errors.t * failed
 
 (*****************************************************************************)
@@ -52,7 +54,7 @@ let decl_file all_classes nenv (errorl, failed) fn =
 
 let decl_files (errors, failed) fnl =
   let all_classes, nenv = TypeDeclarationStore.load() in
-  List.fold_left (decl_file all_classes nenv) (errors, failed) fnl
+  List.fold_left fnl ~f:(decl_file all_classes nenv) ~init:(errors, failed)
 
 (*****************************************************************************)
 (* Merges the results (used by the master) *)
@@ -66,7 +68,7 @@ let merge_decl (errors1, failed1) (errors2, failed2) =
 (* We need to know all the classes defined, because we want to declare
  * the types in their topological order.
  * We keep the files in which the classes are defined, sometimes there
- * can be more that one file when there are name collitions.
+ * can be more that one file when there are name collisions.
  *)
 (*****************************************************************************)
 
@@ -86,7 +88,7 @@ let get_classes fast =
 (* Let's go! That's where the action is *)
 (*****************************************************************************)
 
-let go (workers:Worker.t list option) nenv fast =
+let go (workers:Worker.t list option) ~bucket_size nenv fast =
   let all_classes = get_classes fast in
   TypeDeclarationStore.store (all_classes, nenv);
   let fast_l = Relative_path.Map.fold (fun x _ y -> x :: y) fast [] in
@@ -98,7 +100,7 @@ let go (workers:Worker.t list option) nenv fast =
       ~job:decl_files
       ~neutral
       ~merge:merge_decl
-      ~next:(Bucket.make fast_l)
+      ~next:(Bucket.make ~max_size:bucket_size fast_l)
   in
   TypeDeclarationStore.clear();
   result

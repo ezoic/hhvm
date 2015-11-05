@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -40,13 +40,17 @@ TRACE_SET_MOD(xenon);
 void *s_waitThread(void *arg) {
   TRACE(1, "s_waitThread Starting\n");
   sem_t* sem = static_cast<sem_t*>(arg);
-  while (sem_wait(sem) == 0) {
-    TRACE(1, "s_waitThread Fired\n");
-    if (Xenon::getInstance().m_stopping) {
-      TRACE(1, "s_waitThread is exiting\n");
-      return nullptr;
+  while (true) {
+    if (sem_wait(sem) == 0) {
+      TRACE(1, "s_waitThread Fired\n");
+      if (Xenon::getInstance().m_stopping) {
+        TRACE(1, "s_waitThread is exiting\n");
+        return nullptr;
+      }
+      Xenon::getInstance().surpriseAll();
+    } else if (errno != EINTR) {
+      break;
     }
-    Xenon::getInstance().surpriseAll();
   }
   TRACE(1, "s_waitThread Ending\n");
   return nullptr;
@@ -65,13 +69,16 @@ void *s_waitThread(void *arg) {
 namespace {
 struct XenonRequestLocalData final : RequestEventHandler  {
   XenonRequestLocalData();
-  virtual ~XenonRequestLocalData();
+  ~XenonRequestLocalData();
   void log(Xenon::SampleType t);
   Array createResponse();
 
   // implement RequestEventHandler
   void requestInit() override;
   void requestShutdown() override;
+  void vscan(IMarker& mark) const override {
+    mark(m_stackSnapshots);
+  }
 
   // an array of php stacks
   Array m_stackSnapshots;
@@ -148,7 +155,7 @@ Xenon& Xenon::getInstance() noexcept {
 }
 
 Xenon::Xenon() noexcept : m_stopping(false) {
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_MSC_VER)
   m_timerid = 0;
 #endif
 }
@@ -159,7 +166,7 @@ Xenon::Xenon() noexcept : m_stopping(false) {
 // We need to create a semaphore and a thread.
 // If all of those happen, then we need a timer attached to a signal handler.
 void Xenon::start(uint64_t msec) {
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_MSC_VER)
   TRACE(1, "XenonForceAlwaysOn %d\n", RuntimeOption::XenonForceAlwaysOn);
   if (!RuntimeOption::XenonForceAlwaysOn
       && m_timerid == 0
@@ -198,7 +205,7 @@ void Xenon::start(uint64_t msec) {
 
 // If Xenon owns a pthread, tell it to stop, also clean up anything from start.
 void Xenon::stop() {
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_MSC_VER)
   if (m_timerid) {
     m_stopping = true;
     sem_post(&m_timerTriggered);

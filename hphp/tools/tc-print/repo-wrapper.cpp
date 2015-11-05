@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,14 +23,14 @@
 #include "hphp/compiler/option.h"
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/program-functions.h"
-#include "hphp/runtime/base/thread-init-fini.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/ext_hhvm/ext_hhvm.h"
 #include "hphp/runtime/vm/runtime.h"
 
 namespace HPHP { namespace jit {
 
-RepoWrapper::RepoWrapper(const char* repoSchema, string configFile) {
+RepoWrapper::RepoWrapper(const char* repoSchema,
+                         const std::string& configFile) {
   kRepoSchemaId = repoSchema;
 
   printf("# Config file: %s\n", configFile.c_str());
@@ -38,7 +38,7 @@ RepoWrapper::RepoWrapper(const char* repoSchema, string configFile) {
 
   register_process_init();
   initialize_repo();
-  init_thread_locals();
+  hphp_thread_init();
   IniSetting::Map ini = IniSetting::Map::object;
   Hdf config;
   if (!configFile.empty()) {
@@ -63,7 +63,7 @@ RepoWrapper::RepoWrapper(const char* repoSchema, string configFile) {
   repo->loadGlobalData(true /* allowFailure */);
 
   std::string hhasLib;
-  std::string phpLib = get_systemlib(&hhasLib);
+  auto const phpLib = get_systemlib(&hhasLib);
   always_assert(!hhasLib.empty() && !phpLib.empty());
   auto phpUnit = compile_string(phpLib.c_str(), phpLib.size(),
                                 "systemlib.php");

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -17,8 +17,8 @@
 
 #include "hphp/runtime/ext/asio/ext_await-all-wait-handle.h"
 
-#include "hphp/runtime/ext/ext_closure.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/closure/ext_closure.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/ext/asio/asio-blockable.h"
 #include "hphp/runtime/ext/asio/asio-session.h"
 #include "hphp/runtime/ext/asio/ext_wait-handle.h"
@@ -32,12 +32,12 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-SmartPtr<c_AwaitAllWaitHandle> c_AwaitAllWaitHandle::Alloc(int32_t cnt) {
+req::ptr<c_AwaitAllWaitHandle> c_AwaitAllWaitHandle::Alloc(int32_t cnt) {
   auto size = c_AwaitAllWaitHandle::heapSize(cnt);
   auto mem = MM().objMalloc(size);
   auto handle = new (mem) c_AwaitAllWaitHandle(cnt);
   assert(handle->hasExactlyOneRef());
-  return SmartPtr<c_AwaitAllWaitHandle>::attach(handle);
+  return req::ptr<c_AwaitAllWaitHandle>::attach(handle);
 }
 
 void delete_AwaitAllWaitHandle(ObjectData* od, const Class*) {
@@ -52,25 +52,25 @@ void delete_AwaitAllWaitHandle(ObjectData* od, const Class*) {
 namespace {
   StaticString s_awaitAll("<await-all>");
 
-  NEVER_INLINE __attribute__((__noreturn__))
+  NEVER_INLINE ATTRIBUTE_NORETURN
   void failArray() {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Expected dependencies to be an array");
   }
 
-  NEVER_INLINE __attribute__((__noreturn__))
+  NEVER_INLINE ATTRIBUTE_NORETURN
   void failMap() {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Expected dependencies to be a Map");
   }
 
-  NEVER_INLINE __attribute__((__noreturn__))
+  NEVER_INLINE ATTRIBUTE_NORETURN
   void failVector() {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Expected dependencies to be a Vector");
   }
 
-  NEVER_INLINE __attribute__((__noreturn__))
+  NEVER_INLINE ATTRIBUTE_NORETURN
   void failWaitHandle() {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Expected dependencies to be a collection of WaitHandle instances");
@@ -104,15 +104,17 @@ void c_AwaitAllWaitHandle::ti_setoncreatecallback(const Variant& callback) {
 Object c_AwaitAllWaitHandle::ti_fromarray(const Array& dependencies) {
   auto ad = dependencies.get();
   assert(ad);
-  if (!ad->size()) return returnEmpty();
+  if (!ad->size()) return Object{returnEmpty()};
 
 retry:
   switch (ad->kind()) {
     case ArrayData::kPackedKind:
       return FromPackedArray(ad);
 
-    case ArrayData::kMixedKind:
     case ArrayData::kStructKind:
+      return FromStructArray(StructArray::asStructArray(ad));
+
+    case ArrayData::kMixedKind:
       return FromMixedArray(MixedArray::asMixed(ad));
 
     case ArrayData::kProxyKind:
@@ -162,7 +164,31 @@ Object c_AwaitAllWaitHandle::ti_fromvector(const Variant& dependencies) {
 }
 
 Object c_AwaitAllWaitHandle::FromPackedArray(const ArrayData* dependencies) {
-  auto const start = reinterpret_cast<const TypedValue*>(dependencies + 1);
+  auto const start = packedData(dependencies);
+  auto const stop  = start + dependencies->getSize();
+  auto ctx_idx = std::numeric_limits<context_idx_t>::max();
+  int32_t cnt = 0;
+
+  for (auto iter = start; iter < stop; ++iter) {
+    prepareChild(tvToCell(iter), ctx_idx, cnt);
+  }
+
+  if (!cnt) return Object{returnEmpty()};
+
+  auto result = Alloc(cnt);
+  auto next = &result->m_children[cnt];
+
+  for (auto iter = start; iter < stop; ++iter) {
+    addChild(tvToCell(iter), next);
+  }
+
+  assert(next == &result->m_children[0]);
+  result->initialize(ctx_idx);
+  return Object{std::move(result)};
+}
+
+Object c_AwaitAllWaitHandle::FromStructArray(const StructArray* dependencies) {
+  auto const start = dependencies->data();
   auto const stop = start + dependencies->getSize();
   auto ctx_idx = std::numeric_limits<context_idx_t>::max();
   int32_t cnt = 0;
@@ -171,7 +197,7 @@ Object c_AwaitAllWaitHandle::FromPackedArray(const ArrayData* dependencies) {
     prepareChild(tvToCell(iter), ctx_idx, cnt);
   }
 
-  if (!cnt) return returnEmpty();
+  if (!cnt) return Object{returnEmpty()};
 
   auto result = Alloc(cnt);
   auto next = &result->m_children[cnt];
@@ -196,7 +222,7 @@ Object c_AwaitAllWaitHandle::FromMixedArray(const MixedArray* dependencies) {
     prepareChild(tvToCell(&iter->data), ctx_idx, cnt);
   }
 
-  if (!cnt) return returnEmpty();
+  if (!cnt) return Object{returnEmpty()};
 
   auto result = Alloc(cnt);
   auto next = &result->m_children[cnt];
@@ -221,7 +247,7 @@ Object c_AwaitAllWaitHandle::FromMap(const BaseMap* dependencies) {
     prepareChild(tvAssertCell(&iter->data), ctx_idx, cnt);
   }
 
-  if (!cnt) return returnEmpty();
+  if (!cnt) return Object{returnEmpty()};
 
   auto result = Alloc(cnt);
   auto next = &result->m_children[cnt];
@@ -245,7 +271,7 @@ Object c_AwaitAllWaitHandle::FromVector(const BaseVector* dependencies) {
     prepareChild(tvAssertCell(iter), ctx_idx, cnt);
   }
 
-  if (!cnt) return returnEmpty();
+  if (!cnt) return Object{returnEmpty()};
 
   auto result = Alloc(cnt);
   auto next = &result->m_children[cnt];
@@ -265,7 +291,7 @@ void c_AwaitAllWaitHandle::initialize(context_idx_t ctx_idx) {
   assert(m_cur >= 0);
 
   if (UNLIKELY(AsioSession::Get()->hasOnAwaitAllCreate())) {
-    auto vector = makeSmartPtr<c_Vector>();
+    auto vector = req::make<c_Vector>();
     for (int32_t idx = m_cur; idx >= 0; --idx) {
       TypedValue child = make_tv<KindOfObject>(m_children[idx]);
       vector->add(&child);

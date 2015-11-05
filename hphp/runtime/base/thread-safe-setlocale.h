@@ -19,7 +19,7 @@
 
 #include <vector>
 #include <string>
-#include <xlocale.h>
+#include "hphp/util/locale-portability.h"
 #include "hphp/util/thread-local.h"
 
 namespace HPHP {
@@ -44,7 +44,9 @@ private:
   void generate_LC_ALL_String();
 
   std::vector<CategoryAndLocaleMap> m_category_locale_map;
+#ifndef _MSC_VER
   locale_t m_locale;
+#endif
 };
 
 extern DECLARE_THREAD_LOCAL(ThreadSafeLocaleHandler,

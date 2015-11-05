@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,6 @@
 #include "hphp/compiler/analysis/function_scope.h"
 #include "hphp/compiler/analysis/class_scope.h"
 #include "hphp/compiler/analysis/analysis_result.h"
-#include "hphp/compiler/analysis/ast_walker.h"
 #include "hphp/compiler/analysis/exceptions.h"
 #include "hphp/parser/parse-time-fatal-exception.h"
 
@@ -48,24 +47,30 @@ Construct::Construct(BlockScopePtr scope,
 {
 }
 
+bool Construct::skipRecurse() const {
+  switch (getKindOf()) {
+    case KindOfFunctionStatement:
+    case KindOfMethodStatement:
+    case KindOfClassStatement:
+    case KindOfInterfaceStatement:
+      return true;
+    default:
+      break;
+  }
+  return false;
+}
+
 void Construct::copyLocationTo(ConstructPtr other) {
   always_assert(other->getFileScope() == getFileScope());
   other->m_r = m_r;
 }
 
-void Construct::resetScope(BlockScopeRawPtr scope, bool resetOrigScope) {
+void Construct::resetScope(BlockScopeRawPtr scope) {
   setBlockScope(scope);
-  if (resetOrigScope) {
-    ExpressionPtr expr =
-      dynamic_pointer_cast<Expression>(shared_from_this());
-    if (expr) {
-      expr->setOriginalScope(scope);
-    }
-  }
   for (int i = 0, n = getKidCount(); i < n; i++) {
     if (ConstructPtr kid = getNthKid(i)) {
-      if (FunctionWalker::SkipRecurse(kid)) continue;
-      kid->resetScope(scope, resetOrigScope);
+      if (kid->skipRecurse()) continue;
+      kid->resetScope(scope);
     }
   }
 }
@@ -80,7 +85,7 @@ int Construct::getChildrenEffects() const {
   for (int i = getKidCount(); i--; ) {
     ConstructPtr child = getNthKid(i);
     if (child) {
-      if (FunctionWalker::SkipRecurse(child)) continue;
+      if (child->skipRecurse()) continue;
       childrenEffects |= child->getContainedEffects();
       if ((childrenEffects & UnknownEffect) == UnknownEffect) {
         break;
@@ -129,18 +134,17 @@ ExpressionPtr Construct::makeScalarExpression(AnalysisResultConstPtr ar,
                                           getRange(), value);
 }
 
-std::string Construct::getText(bool useCache /* = false */,
-                               bool translate /* = false */,
-                               AnalysisResultPtr ar
+std::string Construct::getText(AnalysisResultPtr ar
                                /* = AnalysisResultPtr() */) {
-  std::string &text = m_text;
-  if (useCache && !text.empty()) return text;
   std::ostringstream o;
   CodeGenerator cg(&o, CodeGenerator::PickledPHP);
-  cg.translatePredefined(translate);
+  cg.translatePredefined(false);
   outputPHP(cg, ar);
-  text = o.str();
-  return text;
+  return o.str();
+}
+
+std::string Construct::getText() {
+  return getText(AnalysisResultPtr{});
 }
 
 void Construct::serialize(JSON::CodeError::OutputStream &out) const {
@@ -175,8 +179,6 @@ void Construct::dumpNode(int spc) {
   std::string scontext = "";
   std::string value = "";
   std::string type_info = "";
-  unsigned id = 0;
-  ExpressionPtr idPtr = ExpressionPtr();
   int ef = 0;
 
   if (isStatement()) {
@@ -188,8 +190,6 @@ void Construct::dumpNode(int spc) {
   } else {
     assert(isExpression());
     Expression *e = static_cast<Expression*>(this);
-    id = e->getCanonID();
-    idPtr = e->getCanonLVal();
 
     ef = e->getLocalEffects();
 
@@ -197,7 +197,7 @@ void Construct::dumpNode(int spc) {
     name = Expression::nameOfKind(etype);
     switch (etype) {
       case Expression::KindOfSimpleFunctionCall:
-        value = static_cast<SimpleFunctionCall*>(e)->getName();
+        value = static_cast<SimpleFunctionCall*>(e)->getOriginalName();
         break;
       case Expression::KindOfSimpleVariable:
         value = static_cast<SimpleVariable*>(e)->getName();
@@ -274,16 +274,6 @@ void Construct::dumpNode(int spc) {
     }
 
     type = (int)etype;
-
-    if (e->getActualType()) {
-      type_info = e->getActualType()->toString();
-      if (e->getExpectedType()) {
-        type_info += ":" + e->getExpectedType()->toString();
-      } else {
-        type_info += ":";
-      }
-      type_info = "{" + type_info + "} ";
-    }
   }
 
   int s = spc;
@@ -297,20 +287,12 @@ void Construct::dumpNode(int spc) {
             << std::setw(10) << (int64_t)this << std::dec;
 
   std::cout << " " << name << "(" << type << ") ";
-  if (id) {
-    std::cout << "id=" << id << " ";
-  }
-  if (idPtr) {
-    std::cout << "idp=0x" <<
-      std::hex << std::setfill('0') << std::setw(10) <<
-      (int64_t)idPtr.get() << " ";
-  }
 
   if (value != "") {
     std::cout << "[" << value << "] ";
   }
 
-  string sef;
+  std::string sef;
   if ((ef & UnknownEffect) == UnknownEffect) {
     sef = "|UnknownEffect";
   } else {
@@ -331,42 +313,12 @@ void Construct::dumpNode(int spc) {
     sef = " (" + sef.substr(1) + ")";
   }
 
-  string localtered;
-  if (Expression *e = dynamic_cast<Expression*>(this)) {
-    localtered = e->isLocalExprAltered() ? "LocalAltered" : "NotLocalAltered";
-  }
-  if (localtered != "") {
-    localtered = " (" + localtered + ")";
-  }
-
-  string refstr;
-  if (dynamic_cast<SimpleVariable*>(this) != nullptr) {
-    if (isReferencedValid()) {
-      if (isReferenced()) {
-        refstr += ",Referenced";
-      } else {
-        refstr += ",NotReferenced";
-      }
-    }
-    if (!maybeRefCounted()) refstr += ",NotRefCounted";
-    if (!maybeInited()) refstr += ",NotInited";
-    if (isNonNull()) refstr += ",NotNull";
-    if (refstr.empty()) refstr = ",NoRefInfo";
-  }
-  if (refstr != "") refstr = " (" + refstr.substr(1) + ")";
-
-  string objstr;
+  std::string objstr;
   if (dynamic_cast<SimpleVariable*>(this) != nullptr) {
     objstr = " (NoObjInfo)";
   }
 
-  string noremoved;
-  if (isNoRemove()) {
-    noremoved = " (NoRemove)";
-  }
-
-  std::cout << type_info << nkid << scontext << sef
-    << localtered << refstr << objstr << noremoved;
+  std::cout << nkid << scontext << sef << objstr;
   if (auto scope = getFileScope()) {
     std::cout << " " << scope->getName() << ":"
       << "[" << m_r.line0 << "@" << m_r.char0 << ", "
@@ -375,69 +327,24 @@ void Construct::dumpNode(int spc) {
   std::cout << "\n";
 }
 
-class ConstructDumper : public FunctionWalker {
-public:
-  ConstructDumper(int spc, AnalysisResultConstPtr ar,
-                  bool functionOnly = false) :
-      m_spc(spc), m_ar(ar), m_functionOnly(functionOnly), m_showEnds(true) {}
-
-  void walk(AstWalkerStateVec state,
-            ConstructRawPtr endBefore, ConstructRawPtr endAfter) {
-    AstWalker::walk(*this, state, endBefore, endAfter);
-  }
-  int before(ConstructRawPtr cp) {
-    int ret = m_functionOnly ? FunctionWalker::before(cp) : WalkContinue;
-    cp->dumpNode(m_spc, m_ar);
-    m_spc += 2;
-    m_showEnds = false;
-    return ret;
-  }
-  int after(ConstructRawPtr cp) {
-    if (m_showEnds) {
-      int s = m_spc;
-      while (s > 0) {
-        int n = s > 10 ? 10 : s;
-        std::cout << ("          "+10-n);
-        s -= n;
-      }
-      std::cout << "<<";
-      cp->dumpNode(0, m_ar);
-    }
-    m_spc -= 2;
-    // HACK: dump the closure function as a "child" of the
-    // closure expression
-    ClosureExpressionPtr c =
-      dynamic_pointer_cast<ClosureExpression>(cp);
-    if (c) {
-      c->getClosureFunction()->dump(m_spc, m_ar);
-    }
-    return WalkContinue;
-  }
-private:
-  int m_spc;
-  AnalysisResultConstPtr m_ar;
-  bool m_functionOnly;
-  bool m_showEnds;
-};
-
 void Construct::dump(int spc, AnalysisResultConstPtr ar) {
-  ConstructDumper cd(spc, ar);
-  cd.walk(AstWalkerStateVec(ConstructRawPtr(this)),
-    ConstructRawPtr(), ConstructRawPtr());
-}
+  dumpNode(spc);
+  for (int i = 0, n = getKidCount(); i < n; i++) {
+    if (auto kid = getNthKid(i)) {
+      kid->dump(spc + 2, ar);
+    }
+  }
 
-void Construct::dump(int spc, AnalysisResultConstPtr ar, bool functionOnly,
-                     const AstWalkerStateVec &state,
-                     ConstructPtr endBefore, ConstructPtr endAfter) {
-  ConstructDumper cd(spc, ar, functionOnly);
-  cd.walk(state, endBefore, endAfter);
+  if (is(KindOfClosureExpression)) {
+    static_cast<ClosureExpression*>(this)->getClosureFunction()->dump(spc, ar);
+  }
 }
 
 void Construct::parseTimeFatal(FileScopeRawPtr fs,
                                Compiler::ErrorType err, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  string msg;
+  std::string msg;
   string_vsnprintf(msg, fmt, ap);
   va_end(ap);
 
@@ -450,7 +357,7 @@ void Construct::analysisTimeFatal(Compiler::ErrorType err,
                                   const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  string msg;
+  std::string msg;
   string_vsnprintf(msg, fmt, ap);
   va_end(ap);
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,9 +17,8 @@
 #ifndef incl_HPHP_VARIABLE_UNSERIALIZER_H_
 #define incl_HPHP_VARIABLE_UNSERIALIZER_H_
 
-#include "hphp/runtime/base/smart-containers.h"
+#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/base/type-variant.h"
-#include "hphp/runtime/base/types.h"
 
 namespace HPHP {
 
@@ -54,7 +53,7 @@ struct VariableUnserializer {
     size_t len,
     Type type,
     bool allowUnknownSerializableClass = false,
-    const Array& classWhitelist = null_array);
+    const Array& options = null_array);
 
   /*
    * Main API; unserialize the buffer and return as a Variant.
@@ -67,13 +66,14 @@ struct VariableUnserializer {
   int64_t readInt();
   double readDouble();
   char readChar();
-  void read(char* buf, unsigned n);
+
+  // Return a StringPiece of up to n characters pointing into m_buf
+  folly::StringPiece readStr(unsigned n);
 
   /*
    * Read a character and throw if it differs from expected.
    */
   void expectChar(char expected);
-  void throwUnexpected(char expected, char got);
 
   /*
    * Accessors.
@@ -88,7 +88,7 @@ struct VariableUnserializer {
   /*
    * True if clsName is allowed to be unserialized.
    */
-  bool isWhitelistedClass(const String& clsName) const;
+  bool whitelistCheck(const String& clsName) const;
 
   /*
    * Set the beginning and end of internal buffer.
@@ -137,18 +137,13 @@ private:
   Type m_type;
   const char* m_buf;
   const char* m_end;
-  smart::vector<RefInfo> m_refs;
+  req::vector<RefInfo> m_refs;
   bool m_unknownSerializable;
-  const Array& m_classWhiteList;    // classes allowed to be unserialized
+  const Array& m_options; // e.g. classes allowed to be unserialized
 };
 
-///////////////////////////////////////////////////////////////////////////////
-
-void unserializeVariant(Variant&, VariableUnserializer *unserializer,
-                        UnserializeMode mode = UnserializeMode::Value);
+void reserialize(VariableUnserializer *uns, StringBuffer &buf);
 
 }
-
-#include "hphp/runtime/base/variable-unserializer-inl.h"
 
 #endif // incl_HPHP_VARIABLE_UNSERIALIZER_H_

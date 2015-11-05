@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,20 +29,16 @@
 
 namespace HPHP {
 
-const Object Object::s_nullObject = Object();
+extern const Object null_object = Object();
 
 ///////////////////////////////////////////////////////////////////////////////
 
 void Object::compileTimeAssertions() {
-  static_assert(sizeof(Object) == sizeof(SmartPtr<ObjectData>), "Fix this.");
+  static_assert(sizeof(Object) == sizeof(req::ptr<ObjectData>), "Fix this.");
 }
 
 void ObjNR::compileTimeAssertions() {
   static_assert(offsetof(ObjNR, m_px) == kExpectedMPxOffset, "");
-}
-
-Object::~Object() {
-  // force it out of line
 }
 
 Array Object::toArray() const {
@@ -61,52 +57,6 @@ int64_t Object::toInt64ForCompare() const {
 double Object::toDoubleForCompare() const {
   check_collection_compare(get());
   return toDouble();
-}
-
-bool Object::equal(const Object& v2) const {
-  if (m_obj == v2.m_obj) {
-    return true;
-  }
-  if (!m_obj || !v2) {
-    return false;
-  }
-  if (m_obj->isCollection()) {
-    return collections::equals(get(), v2.get());
-  }
-  if (UNLIKELY(m_obj->instanceof(SystemLib::s_DateTimeInterfaceClass))) {
-    return DateTimeData::getTimestamp(*this) ==
-        DateTimeData::getTimestamp(v2);
-  }
-  if (v2.get()->getVMClass() != m_obj->getVMClass()) {
-    return false;
-  }
-  if (UNLIKELY(m_obj->instanceof(SystemLib::s_ArrayObjectClass))) {
-    // Compare the whole object, not just the array representation
-    Array ar1(ArrayData::Create());
-    Array ar2(ArrayData::Create());
-    m_obj->o_getArray(ar1);
-    v2->o_getArray(ar2);
-    return ar1->equal(ar2.get(), false);
-  }
-  return toArray().equal(v2.toArray());
-}
-
-bool Object::less(const Object& v2) const {
-  check_collection_compare(get(), v2.get());
-  if (UNLIKELY(m_obj->instanceof(SystemLib::s_DateTimeInterfaceClass))) {
-    return DateTimeData::getTimestamp(*this) <
-        DateTimeData::getTimestamp(v2);
-  }
-  return m_obj != v2.m_obj && toArray().less(v2.toArray());
-}
-
-bool Object::more(const Object& v2) const {
-  check_collection_compare(get(), v2.get());
-  if (UNLIKELY(m_obj->instanceof(SystemLib::s_DateTimeInterfaceClass))) {
-    return DateTimeData::getTimestamp(*this) >
-        DateTimeData::getTimestamp(v2);
-  }
-  return m_obj != v2.m_obj && toArray().more(v2.toArray());
 }
 
 static Variant warn_non_object() {
@@ -130,17 +80,6 @@ Variant Object::o_set(const String& propName, const Variant& val,
 
 const char* Object::classname_cstr() const {
   return m_obj->getClassName().c_str();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// output
-
-void Object::serialize(VariableSerializer *serializer) const {
-  if (m_obj) {
-    m_obj->serialize(serializer);
-  } else {
-    serializer->writeNull();
-  }
 }
 
 void Object::setToDefaultObject() {

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -14,7 +14,6 @@
    +----------------------------------------------------------------------+
 */
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -27,35 +26,37 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 // resources have a separate id space
-__thread int ResourceData::os_max_resource_id;
+static __thread int s_max_resource_id;
 
-ResourceData::ResourceData() {
-  m_hdr.init(0, HeaderKind::Resource, 0);
-  int& pmax = os_max_resource_id;
-  if (pmax < 3) pmax = 3; // reserving 1, 2, 3 for STDIN, STDOUT, STDERR
-  o_id = ++pmax;
-  assert(MM().checkContains(this));
+void ResourceHdr::resetMaxId() {
+  s_max_resource_id = 0;
 }
 
-void ResourceData::o_setId(int id) {
+void ResourceHdr::setId(int id) {
   assert(id >= 1 && id <= 3); // only for STDIN, STDOUT, STDERR
-  int &pmax = os_max_resource_id;
-  if (o_id != id) {
-    if (o_id == pmax) --pmax;
-    o_id = id;
+  if (m_id != id) {
+    if (m_id == s_max_resource_id) --s_max_resource_id;
+    m_id = id;
   }
+}
+
+ResourceData::ResourceData() {
+  assert(MM().checkContains(this));
+  // reserving 1, 2, 3 for STDIN, STDOUT, STDERR
+  if (s_max_resource_id < 3) s_max_resource_id = 3;
+  hdr()->setRawId(++s_max_resource_id);
 }
 
 ResourceData::~ResourceData() {
-  int &pmax = os_max_resource_id;
-  if (o_id && o_id == pmax) {
-    --pmax;
+  auto id = getId();
+  if (id && id == s_max_resource_id) {
+    --s_max_resource_id;
   }
-  o_id = -1;
+  hdr()->setRawId(-1);
 }
 
 String ResourceData::o_toString() const {
-  return String("Resource id #") + String(o_id);
+  return String("Resource id #") + String(getId());
 }
 
 Array ResourceData::o_toArray() const {
@@ -73,32 +74,17 @@ const String& ResourceData::o_getClassNameHook() const {
   throw FatalErrorException("Resource did not provide a name");
 }
 
-void ResourceData::serializeImpl(VariableSerializer *serializer) const {
-  serializer->pushResourceInfo(o_getResourceName(), o_id);
-  empty_array().serialize(serializer);
-  serializer->popResourceInfo();
-}
-
 const String& ResourceData::o_getResourceName() const {
   return o_getClassName();
 }
 
-void ResourceData::serialize(VariableSerializer* serializer) const {
-  if (UNLIKELY(serializer->incNestedLevel((void*)this, true))) {
-    serializer->writeOverflow((void*)this, true);
-  } else {
-    serializeImpl(serializer);
-  }
-  serializer->decNestedLevel((void*)this);
-}
-
-void ResourceData::compileTimeAssertions() {
-  static_assert(offsetof(ResourceData, m_hdr) == HeaderOffset, "");
+void ResourceHdr::compileTimeAssertions() {
+  static_assert(offsetof(ResourceHdr, m_hdr) == HeaderOffset, "");
 }
 
 void ResourceData::vscan(IMarker& mark) const {
   // default implementation scans for ambiguous pointers.
-  mark(this, heapSize());
+  mark(this, hdr()->heapSize() - sizeof(ResourceHdr));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

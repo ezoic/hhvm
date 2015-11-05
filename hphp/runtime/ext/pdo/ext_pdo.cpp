@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -14,6 +14,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+/* @nolint */
 
 #include "hphp/runtime/ext/pdo/ext_pdo.h"
 
@@ -35,9 +36,13 @@
 #include "hphp/runtime/vm/jit/translator-inline.h"
 
 #include "hphp/runtime/ext/array/ext_array.h"
-#include "hphp/runtime/ext/pdo_driver.h"
-#include "hphp/runtime/ext/pdo_mysql.h"
-#include "hphp/runtime/ext/pdo_sqlite.h"
+#include "hphp/runtime/ext/pdo/pdo_driver.h"
+#ifdef ENABLE_EXTENSION_PDO_MYSQL
+#include "hphp/runtime/ext/pdo_mysql/pdo_mysql.h"
+#endif
+#ifdef ENABLE_EXTENSION_PDO_SQLITE
+#include "hphp/runtime/ext/pdo_sqlite/pdo_sqlite.h"
+#endif
 #include "hphp/runtime/ext/std/ext_std_classobj.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/stream/ext_stream.h"
@@ -128,7 +133,7 @@ const int64_t q_PDO$$NULL_NATURAL             = PDO_NULL_NATURAL;
 const int64_t q_PDO$$NULL_EMPTY_STRING        = PDO_NULL_EMPTY_STRING;
 const int64_t q_PDO$$NULL_TO_STRING           = PDO_NULL_TO_STRING;
 
-const StaticString q_PDO$$ERR_NONE(LITSTR_INIT(PDO_ERR_NONE));
+const StaticString q_PDO$$ERR_NONE(PDO_ERR_NONE);
 
 const int64_t q_PDO$$FETCH_ORI_NEXT           = PDO_FETCH_ORI_NEXT;
 const int64_t q_PDO$$FETCH_ORI_PRIOR          = PDO_FETCH_ORI_PRIOR;
@@ -142,6 +147,7 @@ const int64_t q_PDO$$CURSOR_SCROLL            = PDO_CURSOR_SCROLL;
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#ifdef ENABLE_EXTENSION_PDO_MYSQL
 const int64_t q_PDO$$MYSQL_ATTR_USE_BUFFERED_QUERY =
   PDO_MYSQL_ATTR_USE_BUFFERED_QUERY;
 const int64_t q_PDO$$MYSQL_ATTR_LOCAL_INFILE = PDO_MYSQL_ATTR_LOCAL_INFILE;
@@ -156,6 +162,7 @@ const int64_t q_PDO$$MYSQL_ATTR_COMPRESS     = PDO_MYSQL_ATTR_COMPRESS;
 const int64_t q_PDO$$MYSQL_ATTR_DIRECT_QUERY = PDO_MYSQL_ATTR_DIRECT_QUERY;
 const int64_t q_PDO$$MYSQL_ATTR_FOUND_ROWS   = PDO_MYSQL_ATTR_FOUND_ROWS;
 const int64_t q_PDO$$MYSQL_ATTR_IGNORE_SPACE = PDO_MYSQL_ATTR_IGNORE_SPACE;
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // extension functions
@@ -920,42 +927,6 @@ static bool HHVM_METHOD(PDO, setattribute, int64_t attribute,
                         const Variant& value);
 
 ///////////////////////////////////////////////////////////////////////////////
-
-struct PDORequestData final : RequestEventHandler {
-  void requestInit() override {}
-
-  void requestShutdown() override {
-    for (auto pdo : m_persistent_connections) {
-      if (!pdo) {
-        // Dead handle in the set.
-        continue;
-      }
-      if (pdo->conn()->support(PDOConnection::MethodCheckLiveness) &&
-          !pdo->conn()->checkLiveness()) {
-        // Dead connection in the handle.
-        continue;
-      }
-      // All seems right, save it.
-      pdo->persistentSave();
-    }
-    m_persistent_connections.clear();
-  }
-
-  void addPersistent(const SmartPtr<PDOResource>& pdo) {
-    pdo->conn()->is_persistent = true;
-    m_persistent_connections.insert(pdo);
-  }
-  void removePersistent(const SmartPtr<PDOResource>& pdo) {
-    pdo->conn()->is_persistent = false;
-    m_persistent_connections.erase(pdo);
-  }
-
-public:
-  std::unordered_set<SmartPtr<PDOResource>> m_persistent_connections;
-};
-IMPLEMENT_STATIC_REQUEST_LOCAL(PDORequestData, s_pdo_request_data);
-
-///////////////////////////////////////////////////////////////////////////////
 // PDO
 
 namespace {
@@ -1052,11 +1023,7 @@ static void HHVM_METHOD(PDO, __construct, const String& dsn,
         if (conn->support(PDOConnection::MethodCheckLiveness) &&
             !conn->checkLiveness()) {
           /* nope... need to kill it */
-          s_pdo_request_data->removePersistent(data->m_dbh);
           data->m_dbh = nullptr;
-        } else {
-          /* Yep, use it and mark it for saving at rshutdown */
-          s_pdo_request_data->addPersistent(data->m_dbh);
         }
       }
 
@@ -1100,7 +1067,6 @@ static void HHVM_METHOD(PDO, __construct, const String& dsn,
     if (is_persistent) {
       assert(!shashkey.empty());
       s_connections[shashkey] = data->m_dbh->conn();
-      s_pdo_request_data->addPersistent(data->m_dbh);
     }
 
     data->m_dbh->conn()->driver = driver;
@@ -1573,6 +1539,7 @@ static Variant HHVM_METHOD(PDO, quote, const String& str,
 
 static bool HHVM_METHOD(PDO, sqlitecreatefunction, const String& name,
                         const Variant& callback, int64_t argcount /* = -1 */) {
+#ifdef ENABLE_EXTENSION_PDO_SQLITE
   auto data = Native::data<PDOData>(this_);
 
   auto conn = std::dynamic_pointer_cast<PDOSqliteConnection>(
@@ -1581,6 +1548,9 @@ static bool HHVM_METHOD(PDO, sqlitecreatefunction, const String& name,
     return false;
   }
   return conn->createFunction(name, callback, argcount);
+#else
+  raise_recoverable_error("PDO::sqliteCreateFunction not implemented");
+#endif
 }
 
 static bool HHVM_METHOD(PDO, sqlitecreateaggregate, const String& name,
@@ -2131,7 +2101,7 @@ static int register_bound_param(const Variant& paramno, VRefParam param,
                                 int64_t type, int64_t max_value_len,
                                 const Variant& driver_params,
                                 sp_PDOStatement stmt, bool is_param) {
-  auto p = makeSmartPtr<PDOBoundParam>();
+  auto p = req::make<PDOBoundParam>();
   // need to make sure this is NULL, in case a fatal errors occurs before it's
   // set inside really_register_bound_param
   p->stmt = NULL;
@@ -2463,7 +2433,7 @@ int pdo_parse_params(sp_PDOStatement stmt, const String& in, String &out) {
   int ret = 0;
   int newbuffer_len;
   Array params;
-  SmartPtr<PDOBoundParam> param;
+  req::ptr<PDOBoundParam> param;
   int query_type = PDO_PLACEHOLDER_NONE;
   struct placeholder *placeholders = NULL, *placetail = NULL, *plc = NULL;
 
@@ -2483,7 +2453,7 @@ int pdo_parse_params(sp_PDOStatement stmt, const String& in, String &out) {
         query_type |= PDO_PLACEHOLDER_POSITIONAL;
       }
 
-      plc = (placeholder*)smart_malloc(sizeof(*plc));
+      plc = (placeholder*)req::malloc(sizeof(*plc));
       memset(plc, 0, sizeof(*plc));
       plc->next = NULL;
       plc->pos = s.tok;
@@ -2737,7 +2707,7 @@ clean_up:
     plc = placeholders;
     placeholders = plc->next;
     plc->quoted.reset();
-    smart_free(plc);
+    req::free(plc);
   }
 
   return ret;
@@ -2769,7 +2739,7 @@ static Variant HHVM_METHOD(PDOStatement, execute,
   if (!params.empty()) {
     data->m_stmt->bound_params.reset();
     for (ArrayIter iter(params); iter; ++iter) {
-      auto param = makeSmartPtr<PDOBoundParam>();
+      auto param = req::make<PDOBoundParam>();
       param->param_type = PDO_PARAM_STR;
       param->parameter = iter.second();
       param->stmt = NULL;
@@ -3420,6 +3390,7 @@ static class PDOExtension final : public Extension {
 public:
   PDOExtension() : Extension("pdo", " 1.0.4dev") {}
 
+#ifdef ENABLE_EXTENSION_PDO_MYSQL
   std::string mysql_default_socket;
 
   void moduleLoad(const IniSetting::Map& ini, Hdf config) override {
@@ -3427,6 +3398,7 @@ public:
                      "pdo_mysql.default_socket", nullptr,
                      &mysql_default_socket);
   }
+#endif
 
   void moduleInit() override {
     HHVM_FE(pdo_drivers);
@@ -3826,6 +3798,7 @@ public:
       s_CURSOR_SCROLL.get(),
       q_PDO$$CURSOR_SCROLL
     );
+#ifdef ENABLE_EXTENSION_PDO_MYSQL
     Native::registerClassConstant<KindOfInt64>(
       s_PDO.get(),
       s_MYSQL_ATTR_USE_BUFFERED_QUERY.get(),
@@ -3876,6 +3849,7 @@ public:
       s_MYSQL_ATTR_IGNORE_SPACE.get(),
       q_PDO$$MYSQL_ATTR_IGNORE_SPACE
     );
+#endif
     Native::registerClassConstant<KindOfStaticString>(
       s_PDO.get(),
       s_ERR_NONE.get(),

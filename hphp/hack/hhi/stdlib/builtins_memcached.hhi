@@ -29,6 +29,7 @@ class Memcached {
   const DISTRIBUTION_MODULA = 0;
   const DISTRIBUTION_CONSISTENT = 0;
   const OPT_LIBKETAMA_COMPATIBLE = 0;
+  const OPT_LIBKETAMA_HASH = 0;
   const OPT_BUFFER_WRITES = 0;
   const OPT_BINARY_PROTOCOL = 0;
   const OPT_NO_BLOCK = 0;
@@ -78,6 +79,9 @@ class Memcached {
   public function decrement($key, $offset = 1) { }
   public function delete($key, $time = 0) { }
   public function deleteByKey($server_key, $key, $time = 0) { }
+  public function deleteMulti(array $keys, int $time = 0): mixed { }
+  public function deleteMultiByKey(string $server_key, array $keys,
+                                   int $time = 0): mixed { }
   public function fetch() { }
   public function fetchAll() { }
   public function flush($delay = 0) { }

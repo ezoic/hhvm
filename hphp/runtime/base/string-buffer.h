@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,6 +30,8 @@ struct StringBufferLimitException : FatalErrorException {
     : FatalErrorException(0, "StringBuffer exceeded %d bytes of memory", size),
       m_result(partialResult) {}
 
+  void vscan(IMarker& mark) const override;
+
   String m_result;
 };
 
@@ -37,16 +39,16 @@ struct StringBufferLimitException : FatalErrorException {
  * Efficient string concatenation.
  *
  * StringBuffer is designed not to contain any malloc()d memory (only
- * per-request smart allocated memory) based on sweeping-related assumptions.
+ * per-request allocated memory) based on sweeping-related assumptions.
  */
 struct StringBuffer {
-  static constexpr int kDefaultOutputLimit = StringData::MaxSize;
+  static constexpr uint32_t kDefaultOutputLimit = StringData::MaxSize;
 
   /*
    * Construct a string buffer with some initial size, subsequent allocation
    * will geometrically grow the size when needed.
    */
-  explicit StringBuffer(int initialSize = SmallStringReserve);
+  explicit StringBuffer(uint32_t initialSize = SmallStringReserve);
   ~StringBuffer();
 
   StringBuffer(const StringBuffer& sb) = delete;
@@ -82,7 +84,7 @@ struct StringBuffer {
    * The pointer and size should be considered invalidated after any
    * call to a non-const member function on this class.
    */
-  int size() const { return m_len; }
+  uint32_t size() const { return m_len; }
   const char* data() const;
 
   /*
@@ -119,7 +121,7 @@ struct StringBuffer {
    *
    * Post: size() == size
    */
-  void resize(int size);
+  void resize(uint32_t size);
 
   /*
    * Release all memory associated with this string buffer.
@@ -145,7 +147,7 @@ struct StringBuffer {
   /*
    * Mutate a character in existing buffer.
    */
-  void set(int offset, char c) {
+  void set(uint32_t offset, char c) {
     assert(offset < m_len);
     m_buffer[offset] = c;
   }
@@ -165,7 +167,7 @@ struct StringBuffer {
   void append(const String& s) { append(s.data(), s.size()); }
   void append(const std::string& s) { append(s.data(), s.size()); }
   void append(const StringData* s) { append(s->data(), s->size()); }
-  void append(StringSlice s) { append(s.ptr, s.len); }
+  void append(folly::StringPiece s) { append(s.data(), s.size()); }
   void append(const char* s, int len) {
     assert(len >= 0);
     if (m_buffer && len <= m_cap - m_len) {
@@ -189,7 +191,8 @@ struct StringBuffer {
   /*
    * Append to this string using a printf-style format specification.
    */
-  void printf(const char* format, ...) ATTRIBUTE_PRINTF(2,3);
+  void printf(ATTRIBUTE_PRINTF_STRING const char* format, ...)
+    ATTRIBUTE_PRINTF(2,3);
 
   /*
    * Read a file into this buffer. Use a larger page size to read more bytes
@@ -201,22 +204,20 @@ struct StringBuffer {
   template<class F> void scan(F& mark) const {
     mark(m_str);
   }
-  template <typename F> friend void scan(const StringBuffer&, F&);
-
 private:
   void appendHelper(const char* s, int len);
   void appendHelper(char c);
   void growBy(int spaceRequired);
-  void makeValid(int minCap);
+  void makeValid(uint32_t minCap);
   bool valid() const { return m_buffer != nullptr; }
 
 private:
   StringData* m_str;
   char *m_buffer;
-  int m_initialCap;
-  int m_maxBytes;
-  int m_cap;                    // doesn't include null terminator
-  int m_len;
+  uint32_t m_initialCap;
+  uint32_t m_maxBytes;
+  uint32_t m_cap;                    // doesn't include null terminator
+  uint32_t m_len;
 };
 
 /*
@@ -278,7 +279,7 @@ struct CstrBuffer {
    *
    * Pre: valid()
    */
-  void append(StringSlice slice);
+  void append(folly::StringPiece);
 
   /*
    * Create a request-local string from this buffer.

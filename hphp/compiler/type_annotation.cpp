@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,8 +15,14 @@
 */
 
 #include "hphp/compiler/type_annotation.h"
+
 #include <vector>
+
+#include "hphp/compiler/code_generator.h"
 #include "hphp/util/text-util.h"
+#include "hphp/runtime/base/type-array.h"
+#include "hphp/runtime/base/type-structure.h"
+#include "hphp/runtime/base/type-variant.h"
 
 namespace HPHP {
 
@@ -33,7 +39,9 @@ TypeAnnotation::TypeAnnotation(const std::string &name,
                                 m_function(false),
                                 m_xhp(false),
                                 m_typevar(false),
-                                m_typeaccess(false) { }
+                                m_typeaccess(false),
+                                m_shape(false),
+                                m_clsCnsShapeField(false) { }
 
 std::string TypeAnnotation::vanillaName() const {
   // filter out types that should not be exposed to the runtime
@@ -64,6 +72,8 @@ std::string TypeAnnotation::fullName() const {
     xhpTypeName(name);
   } else if (m_tuple) {
     tupleTypeName(name);
+  } else if (m_shape) {
+    shapeTypeName(name);
   } else if (m_typeArgs) {
     genericTypeName(name);
   } else {
@@ -104,8 +114,34 @@ void TypeAnnotation::getAllSimpleNames(std::vector<std::string>& names) const {
   if (m_typeList) {
     m_typeList->getAllSimpleNames(names);
   } else if (m_typeArgs) {
-    m_typeArgs->getAllSimpleNames(names);
+    // do not return the shape fields and keys
+    if (!m_shape) {
+      m_typeArgs->getAllSimpleNames(names);
+    }
   }
+}
+
+void TypeAnnotation::shapeTypeName(std::string& name) const {
+  name += "HH\\shape(";
+  TypeAnnotationPtr shapeField = m_typeArgs;
+  auto sep = "";
+  while (shapeField) {
+    name += sep;
+
+    if (shapeField->isClsCnsShapeField()) {
+      folly::toAppend(shapeField->m_name, &name);
+    } else {
+      folly::toAppend("'", shapeField->m_name, "'", &name);
+    }
+    auto fieldValue = shapeField->m_typeArgs;
+    assert(fieldValue);
+    folly::toAppend("=>", fieldValue->fullName(), &name);
+
+    sep = ", ";
+    shapeField = shapeField->m_typeList;
+  }
+
+  name += ")";
 }
 
 void TypeAnnotation::functionTypeName(std::string &name) const {
@@ -113,21 +149,14 @@ void TypeAnnotation::functionTypeName(std::string &name) const {
   // return value of function types is the first element of type list
   TypeAnnotationPtr retType = m_typeArgs;
   TypeAnnotationPtr typeEl = m_typeArgs->m_typeList;
-  bool hasArgs = (typeEl != nullptr);
+  auto sep = "";
   while (typeEl) {
-    name += typeEl->fullName();
+    folly::toAppend(sep, typeEl->fullName(), &name);
     typeEl = typeEl->m_typeList;
-    name += ", ";
-  }
-  // replace the trailing ", " (if any) with "): "
-  if (hasArgs) {
-    name.replace(name.size() - 2, 2, "): ");
-  } else {
-    name += "): ";
+    sep = ", ";
   }
   // add function return value
-  name += retType->fullName();
-  name += ")";
+  folly::toAppend("): ", retType->fullName(), ")", &name);
 }
 
 // xhp names are mangled so we get them back to their original definition
@@ -147,34 +176,32 @@ void TypeAnnotation::xhpTypeName(std::string &name) const {
 void TypeAnnotation::tupleTypeName(std::string &name) const {
   name += "(";
   TypeAnnotationPtr typeEl = m_typeArgs;
+  auto sep = "";
   while (typeEl) {
-    name += typeEl->fullName();
+    folly::toAppend(sep, typeEl->fullName(), &name);
     typeEl = typeEl->m_typeList;
-    name += ", ";
+    sep = ", ";
   }
-  // replace the trailing ", " with ")"
-  name.replace(name.size() - 2, 2, ")");
+  name += ")";
 }
 
 void TypeAnnotation::genericTypeName(std::string &name) const {
-  name += m_name;
-  name += "<";
+  folly::toAppend(m_name, "<", &name);
   TypeAnnotationPtr typeEl = m_typeArgs;
+  auto sep = "";
   while (typeEl) {
-    name += typeEl->fullName();
+    folly::toAppend(sep, typeEl->fullName(), &name);
     typeEl = typeEl->m_typeList;
-    name += ", ";
+    sep = ", ";
   }
-  // replace the trailing ", " with ">"
-  name.replace(name.size() - 2, 2, ">");
+  name += ">";
 }
 
 void TypeAnnotation::accessTypeName(std::string &name) const {
   name += m_name;
   TypeAnnotationPtr typeEl = m_typeArgs;
   while (typeEl) {
-    name += "::";
-    name += typeEl->fullName();
+    folly::toAppend("::", typeEl->fullName(), &name);
     typeEl = typeEl->m_typeList;
   }
 }
@@ -189,53 +216,6 @@ void TypeAnnotation::appendToTypeList(TypeAnnotationPtr typeList) {
   } else {
     m_typeList = typeList;
   }
-}
-
-void TypeAnnotation::outputCodeModel(CodeGenerator& cg) {
-  TypeAnnotationPtr typeArgsElem = m_typeArgs;
-  auto numTypeArgs = this->numTypeArgs();
-  auto numProps = 1;
-  if (m_nullable) numProps++;
-  if (m_soft) numProps++;
-  if (m_function) {
-    numProps++;
-    // Since this is a function type, the first type argument is the return type
-    // and no typeArguments property will be serialized unless there are at
-    // least two type arguments.
-    if (numTypeArgs > 1) numProps++;
-  } else {
-    if (numTypeArgs > 0) numProps++;
-  }
-  cg.printObjectHeader("TypeExpression", numProps);
-  cg.printPropertyHeader("name");
-  cg.printValue(m_tuple ? "tuple" : m_name);
-  if (m_nullable) {
-    cg.printPropertyHeader("isNullable");
-    cg.printBool(true);
-  }
-  if (m_soft) {
-    cg.printPropertyHeader("isSoft");
-    cg.printBool(true);
-  }
-  if (m_function) {
-    cg.printPropertyHeader("returnType");
-    typeArgsElem->outputCodeModel(cg);
-    typeArgsElem = typeArgsElem->m_typeList;
-    // Since we've grabbed the first element of the list as the return
-    // type, make sure that the logic for serializing type arguments gets
-    // disabled unless there is at least one more type argument.
-    numTypeArgs--;
-  }
-  if (numTypeArgs > 0) {
-    cg.printPropertyHeader("typeArguments");
-    cg.printf("V:9:\"HH\\Vector\":%d:{", numTypeArgs);
-    while (typeArgsElem != nullptr) {
-      typeArgsElem->outputCodeModel(cg);
-      typeArgsElem = typeArgsElem->m_typeList;
-    }
-    cg.printf("}");
-  }
-  cg.printObjectFooter();
 }
 
 int TypeAnnotation::numTypeArgs() const {
@@ -259,6 +239,186 @@ TypeAnnotationPtr TypeAnnotation::getTypeArg(int n) const {
     typeEl = typeEl->m_typeList;
   }
   return TypeAnnotationPtr();
+}
+
+bool TypeAnnotation::isPrimType(const char* str) const{
+  return !strcasecmp(m_name.c_str(), str);
+}
+
+TypeStructure::Kind TypeAnnotation::getKind() const {
+  if (isVoid()) {
+    return TypeStructure::Kind::T_void;
+  }
+
+  // Primitive types
+  if (isPrimType("HH\\int")) {
+    return TypeStructure::Kind::T_int;
+  }
+  if (isPrimType("HH\\bool")) {
+    return TypeStructure::Kind::T_bool;
+  }
+  if (isPrimType("HH\\float")) {
+    return TypeStructure::Kind::T_float;
+  }
+  if (isPrimType("HH\\string")) {
+    return TypeStructure::Kind::T_string;
+  }
+  if (isPrimType("HH\\resource")) {
+    return TypeStructure::Kind::T_resource;
+  }
+  if (isPrimType("HH\\num")) {
+    return TypeStructure::Kind::T_num;
+  }
+  if (isPrimType("HH\\arraykey")) {
+    return TypeStructure::Kind::T_arraykey;
+  }
+  if (isPrimType("HH\\noreturn")) {
+    return TypeStructure::Kind::T_noreturn;
+  }
+
+  if (isMixed()) {
+    return TypeStructure::Kind::T_mixed;
+  }
+  if (m_tuple) {
+    return TypeStructure::Kind::T_tuple;
+  }
+  if (m_function) {
+    return TypeStructure::Kind::T_fun;
+  }
+  if (!strcasecmp(m_name.c_str(), "array")) {
+    return (m_shape)
+      ? TypeStructure::Kind::T_shape
+      : TypeStructure::Kind::T_array;
+  }
+  if (m_typevar) {
+    return TypeStructure::Kind::T_typevar;
+  }
+  if (m_typeaccess) {
+    return TypeStructure::Kind::T_typeaccess;
+  }
+  if (m_xhp) {
+    // TODO(7657500): in the runtime, resolve this type to a class.
+    return TypeStructure::Kind::T_xhp;
+  }
+
+  return TypeStructure::Kind::T_unresolved;
+}
+
+const StaticString
+  s_nullable("nullable"),
+  s_kind("kind"),
+  s_name("name"),
+  s_classname("classname"),
+  s_elem_types("elem_types"),
+  s_return_type("return_type"),
+  s_param_types("param_types"),
+  s_generic_types("generic_types"),
+  s_root_name("root_name"),
+  s_access_list("access_list"),
+  s_fields("fields"),
+  s_is_cls_cns("is_cls_cns"),
+  s_value("value"),
+  s_typevars("typevars")
+;
+
+/* Turns the argsList linked list of TypeAnnotation into a positioned
+ * static array. */
+Array TypeAnnotation::argsListToScalarArray(TypeAnnotationPtr ta) const {
+  int i = 0;
+  auto typeargs = Array::Create();
+
+  auto typeEl = ta;
+  while (typeEl) {
+    typeargs.add(i, Variant(typeEl->getScalarArrayRep()));
+    ++i;
+    typeEl = typeEl->m_typeList;
+  }
+  return typeargs;
+}
+
+void TypeAnnotation::shapeFieldsToScalarArray(Array& rep,
+                                              TypeAnnotationPtr ta) const {
+  auto fields = Array::Create();
+  auto shapeField = ta;
+  while (shapeField) {
+    assert(shapeField->m_typeArgs);
+    auto field = Array::Create();
+    if (shapeField->isClsCnsShapeField()) field.add(s_is_cls_cns, true_varNR);
+    field.add(s_value, Variant(shapeField->m_typeArgs->getScalarArrayRep()));
+    fields.add(String(shapeField->m_name), Variant(field.get()));
+    shapeField = shapeField->m_typeList;
+  }
+  rep.add(s_fields, Variant(fields));
+}
+
+Array TypeAnnotation::getScalarArrayRep() const {
+  auto rep = Array::Create();
+
+  bool nullable = (bool) m_nullable;
+  if (nullable) {
+    rep.add(s_nullable, true_varNR);
+  }
+
+  TypeStructure::Kind kind = getKind();
+  rep.add(s_kind, Variant(static_cast<uint8_t>(kind)));
+
+  switch (kind) {
+  case TypeStructure::Kind::T_tuple:
+    assert(m_typeArgs);
+    rep.add(s_elem_types, Variant(argsListToScalarArray(m_typeArgs)));
+    break;
+  case TypeStructure::Kind::T_fun:
+    assert(m_typeArgs);
+    // return type is the first of the typeArgs
+    rep.add(s_return_type, Variant(m_typeArgs->getScalarArrayRep()));
+    rep.add(s_param_types,
+            Variant(argsListToScalarArray(m_typeArgs->m_typeList)));
+    break;
+  case TypeStructure::Kind::T_array:
+    if (m_typeArgs) {
+      rep.add(s_generic_types, Variant(argsListToScalarArray(m_typeArgs)));
+    }
+    break;
+  case TypeStructure::Kind::T_shape:
+    shapeFieldsToScalarArray(rep, m_typeArgs);
+    break;
+  case TypeStructure::Kind::T_typevar:
+    rep.add(s_name, Variant(m_name));
+    break;
+  case TypeStructure::Kind::T_typeaccess: {
+    // for now, only store the vanilla names (strings) as part of the
+    // access list
+    rep.add(s_root_name, Variant(m_name));
+    auto accList = Array::Create();
+    auto typeEl = m_typeArgs;
+    int i = 0;
+    while (typeEl) {
+      accList.add(i, Variant(typeEl->vanillaName()));
+      ++i;
+      typeEl = typeEl->m_typeList;
+    }
+    rep.add(s_access_list, Variant(accList));
+    break;
+  }
+  case TypeStructure::Kind::T_xhp:
+    rep.add(s_classname, Variant(m_name));
+    break;
+  case TypeStructure::Kind::T_unresolved:
+    rep.add(s_classname, Variant(m_name));
+    if (m_typeArgs) {
+      rep.add(s_generic_types, Variant(argsListToScalarArray(m_typeArgs)));
+    }
+    break;
+  default:
+    break;
+  }
+
+  if (!m_generics.empty()) {
+    rep.add(s_typevars, Variant(m_generics));
+  }
+
+  rep.setEvalScalar();
+  return rep;
 }
 
 }

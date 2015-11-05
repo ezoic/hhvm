@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -128,13 +128,13 @@ Array HHVM_FUNCTION(get_class_constants, const String& className) {
   for (size_t i = 0; i < numConstants; i++) {
     // Note: hphpc doesn't include inherited constants in
     // get_class_constants(), so mimic that behavior
-    if (consts[i].m_class == cls && !consts[i].isAbstract() &&
+    if (consts[i].cls == cls && !consts[i].isAbstract() &&
         !consts[i].isType()) {
-      auto const name  = const_cast<StringData*>(consts[i].m_name.get());
-      Cell value = consts[i].m_val;
+      auto const name  = const_cast<StringData*>(consts[i].name.get());
+      Cell value = consts[i].val;
       // Handle dynamically set constants
       if (value.m_type == KindOfUninit) {
-        value = cls->clsCnsGet(consts[i].m_name);
+        value = cls->clsCnsGet(consts[i].name);
       }
       assert(value.m_type != KindOfUninit);
       arrayInit.set(name, cellAsCVarRef(value));
@@ -151,41 +151,44 @@ Variant HHVM_FUNCTION(get_class_vars, const String& className) {
   }
   cls->initialize();
 
-  const Class::SProp* sPropInfo = cls->staticProperties();
-  const size_t numSProps = cls->numStaticProperties();
-  const Class::Prop* propInfo = cls->declProperties();
-  const size_t numDeclProps = cls->numDeclProperties();
+
+  auto const propInfo = cls->declProperties();
+
+  auto const numDeclProps = cls->numDeclProperties();
+  auto const numSProps    = cls->numStaticProperties();
 
   // The class' instance property initialization template is in different
   // places, depending on whether it has any request-dependent initializers
   // (i.e. constants)
-  const Class::PropInitVec& declPropInitVec = cls->declPropInit();
-  const Class::PropInitVec* propVals = !cls->pinitVec().empty()
-    ? cls->getPropData() : &declPropInitVec;
-  assert(propVals != NULL);
+  auto const& declPropInitVec = cls->declPropInit();
+  auto const propVals = !cls->pinitVec().empty()
+    ? cls->getPropData()
+    : &declPropInitVec;
+
+  assert(propVals != nullptr);
   assert(propVals->size() == numDeclProps);
 
   // For visibility checks
   CallerFrame cf;
-  Class* ctx = arGetContextClass(cf());
+  auto ctx = arGetContextClass(cf());
 
   ArrayInit arr(numDeclProps + numSProps, ArrayInit::Map{});
 
   for (size_t i = 0; i < numDeclProps; ++i) {
-    StringData* name = const_cast<StringData*>(propInfo[i].m_name.get());
-    // Empty names are used for invisible/private parent properties; skip them
+    auto const name = const_cast<StringData*>(propInfo[i].name.get());
+    // Empty names are used for invisible/private parent properties; skip them.
     assert(name->size() != 0);
     if (Class::IsPropAccessible(propInfo[i], ctx)) {
-      const TypedValue* value = &((*propVals)[i]);
+      auto const value = &((*propVals)[i]);
       arr.set(name, tvAsCVarRef(value));
     }
   }
 
-  for (size_t i = 0; i < numSProps; ++i) {
-    auto const lookup = cls->getSProp(ctx, sPropInfo[i].m_name);
+  for (auto const& sprop : cls->staticProperties()) {
+    auto const lookup = cls->getSProp(ctx, sprop.name);
     if (lookup.accessible) {
       arr.set(
-        const_cast<StringData*>(sPropInfo[i].m_name.get()),
+        const_cast<StringData*>(sprop.name.get()),
         tvAsCVarRef(lookup.prop)
       );
     }
@@ -201,7 +204,7 @@ Variant HHVM_FUNCTION(get_class, const Variant& object /* = null_variant */) {
     // No arg passed.
     String ret;
     CallerFrame cf;
-    Class* cls = arGetContextClassImpl<true>(cf());
+    auto cls = arGetContextClassImpl<true>(cf());
     if (cls) {
       ret = String(cls->nameStr());
     }

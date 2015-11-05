@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -51,21 +51,29 @@
  *      could be done without this if you feel like changing it.
  *
  *
- * Caveats:
+ * Wishlist:
  *
  *   - It might be nice if you could refer to iterators by name
  *     instead of by index.
  *
  *   - DefCls by name would be nice.
  *
- *   - Line number information can't be propagated to the various Unit
- *     structures.  (It might make sense to do this via something like
- *     a .line directive at some point.)
+ * Missing features (partial list):
  *
- *   - You can't currently create non-top functions or non-hoistable
- *     classes.
+ *   - line number information. (It might make sense to do this via
+ *     something like a .line directive at some point.)
  *
- *   - Missing support for static variables in a function/method.
+ *   - non-top functions
+ *
+ *   - static variables in a function/method
+ *
+ *   - builtinType (for native funcs) field on ParamInfo
+ *
+ *   - typeStructure fields on type aliases, etc
+ *
+ *   - while class/function names can contains ':', '$', and ';',
+ *     .use declarations can't handle those names because of syntax
+ *     conflicts
  *
  * @author Jordan DeLong <delong.j@fb.com>
  */
@@ -78,12 +86,12 @@
 #include <iterator>
 #include <vector>
 #include <boost/algorithm/string.hpp>
-#include <boost/format.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <boost/noncopyable.hpp>
 #include <boost/bind.hpp>
 
 #include <folly/Conv.h>
+#include <folly/Memory.h>
 #include <folly/Range.h>
 #include <folly/String.h>
 
@@ -113,15 +121,14 @@ typedef void (*ParserFunc)(AsmState& as);
 
 struct Error : std::runtime_error {
   explicit Error(int where, const std::string& what)
-    : std::runtime_error(str(
-        boost::format("Assembler Error: line %1%: %2%") % where % what))
+    : std::runtime_error(folly::sformat(
+        "Assembler Error: line {}: {}", where, what))
   {}
 };
 
 struct Input {
   explicit Input(std::istream& in)
     : m_in(in)
-    , m_lineNumber(1)
   {}
 
   int peek() { return m_in.peek(); }
@@ -143,7 +150,7 @@ struct Input {
 
   void expect(int c) {
     if (getc() != c) {
-      error(str(boost::format("expected character `%1%'") % char(c)));
+      error(folly::sformat("expected character `{}'", char(c)));
     }
   }
 
@@ -157,7 +164,7 @@ struct Input {
     skipWhitespace();
     if (getc() != c) {
       throw Error(currentLine,
-        str(boost::format("expected character `%1%'") % char(c)));
+        folly::sformat("expected character `{}'", char(c)));
     }
   }
 
@@ -173,7 +180,14 @@ struct Input {
     consumePred(is_bareword(), std::back_inserter(word));
     return !word.empty();
   }
-
+  // Skips whitespace, then populates name with valid extname
+  // characters.  Returns true if we read any characters into name.
+  bool readname(std::string& name) {
+    name.clear();
+    skipWhitespace();
+    consumePred(is_extname(), std::back_inserter(name));
+    return !name.empty();
+  }
   // Try to consume a bareword.  Skips whitespace.  If we can't
   // consume the specified word, returns false.
   bool tryConsume(const std::string& what) {
@@ -219,11 +233,12 @@ struct Input {
     case '\"': out.push_back('\"'); break;
     case '\?': out.push_back('\?'); break;
     case '\\': out.push_back('\\'); break;
+    case '\r': /* ignore */         break;
     case '\n': /* ignore */         break;
     default:
       if (is_oct(src)) {
         auto val = int64_t{src} - '0';
-        for (auto i = int{0}; i < 3; ++i) {
+        for (auto i = int{1}; i < 3; ++i) {
           src = getc();
           if (!is_oct(src)) { ungetc(src); break; }
           val *= 8;
@@ -239,11 +254,12 @@ struct Input {
       if (src == 'x' || src == 'X') {
         auto val = uint64_t{0};
         if (!is_hex(peek())) error("\\x used without no following hex digits");
-        do {
+        for (auto i = int{0}; i < 2; ++i) {
           src = getc();
+          if (!is_hex(src)) { ungetc(src); break; }
           val *= 0x10;
           val += hex_val(src);
-        } while (is_hex(peek()));
+        }
         if (val > std::numeric_limits<uint8_t>::max()) {
           error("hex escape sequence overflowed");
         }
@@ -329,7 +345,7 @@ struct Input {
   // Skips whitespace (including newlines and comments).
   void skipWhitespace() {
     for (;;) {
-      skipPred(boost::is_any_of(" \t\n"));
+      skipPred(boost::is_any_of(" \t\r\n"));
       if (peek() == '#') {
         skipPred(!boost::is_any_of("\n"));
         expect('\n');
@@ -363,6 +379,15 @@ private:
       return isalnum(i) || i == '_' || i == '.' || i == '$' || i == '\\';
     }
   };
+  // whether a character is a valid part of the extended sorts of
+  // names that HHVM uses for certain generated constructs
+  // (closures, __Memoize implementations, etc)
+  struct is_extname {
+    bool operator()(int i) const {
+      is_bareword is_bw;
+      return is_bw(i) || i == ':' || i == ';' || i == '#';
+    }
+  };
 
   void error(const std::string& what) {
     throw Error(getLineNumber(), what);
@@ -377,7 +402,7 @@ private:
 
 private:
   std::istream& m_in;
-  int m_lineNumber;
+  int m_lineNumber{1};
 };
 
 struct StackDepth;
@@ -439,9 +464,7 @@ struct StackDepth {
 };
 
 struct Label {
-  Label() : bound(false) {}
-
-  bool bound;
+  bool bound{false};
   Offset target;
   StackDepth stackDepth;
 
@@ -452,8 +475,7 @@ struct Label {
    * jump/switch/etc instruction, while the first points to the
    * immediate.)
    */
-  typedef std::vector<std::pair<Offset,Offset> > SourcesVec;
-  SourcesVec sources;
+  std::vector<std::pair<Offset,Offset>> sources;
 
   /*
    * List of a parameter ids that use this label for its DV
@@ -471,20 +493,12 @@ struct Label {
    * Map from exception names to the list of EHEnt's that have a catch
    * block jumping to this label for that name.
    */
-  typedef std::map<std::string,std::vector<size_t> > CatchesMap;
-  CatchesMap ehCatches;
+  std::map<std::string,std::vector<size_t>> ehCatches;
 };
 
 struct AsmState : private boost::noncopyable {
   explicit AsmState(std::istream& in)
     : in(in)
-    , emittedPseudoMain(false)
-    , fe(0)
-    , numItersSet(false)
-    , currentStackDepth(&initStackDepth)
-    , stackHighWater(0)
-    , fdescDepth(0)
-    , fdescHighWater(0)
   {
     currentStackDepth->setBase(*this, 0);
   }
@@ -522,7 +536,7 @@ struct AsmState : private boost::noncopyable {
   }
 
   void addLabelTarget(const std::string& name) {
-    Label& label = labelMap[name];
+    auto& label = labelMap[name];
     if (label.bound) {
       error("Duplicate label " + name);
     }
@@ -543,7 +557,7 @@ struct AsmState : private boost::noncopyable {
   }
 
   void addLabelJump(const std::string& name, Offset immOff, Offset opcodeOff) {
-    Label& label = labelMap[name];
+    auto& label = labelMap[name];
 
     if (currentStackDepth == nullptr) {
       // Jump is unreachable, nothing to do here
@@ -554,7 +568,7 @@ struct AsmState : private boost::noncopyable {
     // (whatever this may be: it may still be unknown)
     currentStackDepth->addListener(*this, &label.stackDepth);
 
-    label.sources.push_back(std::make_pair(immOff, opcodeOff));
+    label.sources.emplace_back(immOff, opcodeOff);
   }
 
   void enforceStackDepth(int stackDepth) {
@@ -599,11 +613,11 @@ struct AsmState : private boost::noncopyable {
       error("beginFpi called from unreachable instruction");
     }
 
-    fpiRegs.push_back(FPIReg());
-    FPIReg& fpi = fpiRegs.back();
-    fpi.fpushOff = fpushOff;
-    fpi.stackDepth = currentStackDepth;
-    fpi.fpOff = currentStackDepth->currentOffset;
+    fpiRegs.push_back(FPIReg{
+      fpushOff,
+      currentStackDepth,
+      currentStackDepth->currentOffset
+    });
     fdescDepth += kNumActRecCells;
     fdescHighWater = std::max(fdescDepth, fdescHighWater);
   }
@@ -611,8 +625,8 @@ struct AsmState : private boost::noncopyable {
   void endFpi() {
     assert(!fpiRegs.empty());
 
-    FPIEnt& ent = fe->addFPIEnt();
-    FPIReg& reg = fpiRegs.back();
+    auto& ent = fe->addFPIEnt();
+    const auto& reg = fpiRegs.back();
     ent.m_fpushOff = reg.fpushOff;
     ent.m_fcallOff = ue->bcPos();
     ent.m_fpOff = reg.fpOff;
@@ -632,53 +646,42 @@ struct AsmState : private boost::noncopyable {
 
   void finishClass() {
     assert(!fe);
+    ue->addPreClassEmitter(pce);
     pce = 0;
+    enumTySet = false;
   }
 
   void patchLabelOffsets(const Label& label) {
-    for (Label::SourcesVec::const_iterator it = label.sources.begin();
-        it != label.sources.end();
-        ++it) {
-      ue->emitInt32(label.target - it->second, it->first);
+    for (auto const& source : label.sources) {
+      ue->emitInt32(label.target - source.second, source.first);
     }
 
-    for (std::vector<Id>::const_iterator it = label.dvInits.begin();
-        it != label.dvInits.end();
-        ++it) {
-      fe->params[*it].funcletOff = label.target;
+    for (auto const& dvinit : label.dvInits) {
+      fe->params[dvinit].funcletOff = label.target;
     }
 
-    for (std::vector<size_t>::const_iterator it = label.ehFaults.begin();
-        it != label.ehFaults.end();
-        ++it) {
-      fe->ehtab[*it].m_fault = label.target;
+    for (auto const& fault : label.ehFaults) {
+      fe->ehtab[fault].m_fault = label.target;
     }
 
-    for (Label::CatchesMap::const_iterator it = label.ehCatches.begin();
-        it != label.ehCatches.end();
-        ++it) {
-      Id exId = ue->mergeLitstr(makeStaticString(it->first));
-      for (std::vector<size_t>::const_iterator idx_it = it->second.begin();
-          idx_it != it->second.end();
-          ++idx_it) {
-        fe->ehtab[*idx_it].m_catches.push_back(
-          std::make_pair(exId, label.target));
+    for (auto const& eh_catch : label.ehCatches) {
+      auto const exId = ue->mergeLitstr(makeStaticString(eh_catch.first));
+      for (auto const& idx : eh_catch.second) {
+        fe->ehtab[idx].m_catches.emplace_back(exId, label.target);
       }
     }
   }
 
   void finishFunction() {
-    for (LabelMap::const_iterator it = labelMap.begin();
-        it != labelMap.end();
-        ++it) {
-      if (!it->second.bound) {
-        error("Undefined label " + it->first);
+    for (auto const& label : labelMap) {
+      if (!label.second.bound) {
+        error("Undefined label " + label.first);
       }
-      if (it->second.target >= ue->bcPos()) {
-        error("label " + it->first + " falls of the end of the function");
+      if (label.second.target >= ue->bcPos()) {
+        error("label " + label.first + " falls of the end of the function");
       }
 
-      patchLabelOffsets(it->second);
+      patchLabelOffsets(label.second);
     }
 
     // Patch the FPI structures
@@ -692,6 +695,12 @@ struct AsmState : private boost::noncopyable {
 
     // Stack depth should be 0 at the end of a function body
     enforceStackDepth(0);
+
+    // Bump up the unnamed local count
+    const int numLocals = maxUnnamed + 1;
+    while (fe->numLocals() < numLocals) {
+      fe->allocUnnamedLocal();
+    }
 
     fe->maxStackCells = fe->numLocals() +
                         fe->numIterators() * kNumIterCells +
@@ -710,12 +719,19 @@ struct AsmState : private boost::noncopyable {
     stackHighWater = 0;
     fdescDepth = 0;
     fdescHighWater = 0;
+    maxUnnamed = -1;
     fpiToUpdate.clear();
   }
 
   int getLocalId(const std::string& name) {
+    if (name[0] == '_') {
+      int id = folly::to<int>(name.substr(1));
+      if (id > maxUnnamed) maxUnnamed = id;
+      return id;
+    }
+
     if (name[0] != '$') {
-      error("local variables must be prefixed with $");
+      error("local variables must be prefixed with $ or _");
     }
 
     const StringData* sd = makeStaticString(name.c_str() + 1);
@@ -732,28 +748,28 @@ struct AsmState : private boost::noncopyable {
 
   UnitEmitter* ue;
   Input in;
-  bool emittedPseudoMain;
+  bool emittedPseudoMain{false};
 
-  typedef std::map<std::string,ArrayData*> ADataMap;
-  ADataMap adataMap;
+  std::map<std::string,ArrayData*> adataMap;
 
   // When inside a class, this state is active.
   PreClassEmitter* pce;
 
   // When we're doing a function or method body, this state is active.
-  FuncEmitter* fe;
+  FuncEmitter* fe{nullptr};
   std::vector<FPIReg> fpiRegs;
-  typedef std::map<std::string,Label> LabelMap;
   std::map<std::string,Label> labelMap;
-  bool numItersSet;
+  bool numItersSet{false};
+  bool enumTySet{false};
   StackDepth initStackDepth;
-  StackDepth* currentStackDepth;
-  int stackHighWater;
-  int fdescDepth;
-  int fdescHighWater;
+  StackDepth* currentStackDepth{&initStackDepth};
+  int stackHighWater{0};
+  int fdescDepth{0};
+  int fdescHighWater{0};
+  int maxUnnamed{-1};
   std::vector<std::pair<size_t, StackDepth*>> fpiToUpdate;
+  std::set<std::string,stdltistr> hoistables;
 };
-
 
 void StackDepth::adjust(AsmState& as, int delta) {
   currentOffset += delta;
@@ -781,7 +797,7 @@ void StackDepth::addListener(AsmState& as, StackDepth* target) {
   if (baseValue) {
     target->setBase(as, *baseValue + currentOffset);
   } else {
-    listeners.push_back(std::make_pair(target, currentOffset));
+    listeners.emplace_back(target, currentOffset);
   }
 }
 
@@ -824,7 +840,7 @@ void StackDepth::setCurrentAbsolute(AsmState& as, int stackDepth) {
 template<class Target> Target read_opcode_arg(AsmState& as) {
   as.in.skipSpaceTab();
   std::string strVal;
-  as.in.consumePred(!boost::is_any_of(" \t\n#;>"),
+  as.in.consumePred(!boost::is_any_of(" \t\r\n#;>"),
                     std::back_inserter(strVal));
   if (strVal.empty()) {
     as.error("expected opcode or directive argument");
@@ -857,6 +873,20 @@ const StringData* read_litstr(AsmState& as) {
   return makeStaticString(strVal);
 }
 
+/*
+ * maybe-string-literal : N
+ *                      | string-literal
+ *                      ;
+ */
+const StringData* read_maybe_litstr(AsmState& as) {
+  as.in.skipSpaceTab();
+  if (as.in.peek() == 'N') {
+    as.in.getc();
+    return nullptr;
+  }
+  return read_litstr(as);
+}
+
 std::vector<std::string> read_strvector(AsmState& as) {
   std::vector<std::string> ret;
   as.in.skipSpaceTab();
@@ -880,7 +910,7 @@ ArrayData* read_litarray(AsmState& as) {
     as.error("expected name of .adata literal");
   }
 
-  AsmState::ADataMap::const_iterator it = as.adataMap.find(name);
+  auto const it = as.adataMap.find(name);
   if (it == as.adataMap.end()) {
     as.error("unknown array data literal name " + name);
   }
@@ -920,7 +950,7 @@ std::vector<unsigned char> read_immvector(AsmState& as, int& stackCount) {
     as.error("expected location code in immediate vector");
   }
 
-  LocationCode lcode = parseLocationCode(word.c_str());
+  auto lcode = parseLocationCode(word.c_str());
   if (lcode == InvalidLocationCode) {
     as.error("expected location code, saw `" + word + "'");
   }
@@ -1087,8 +1117,7 @@ std::vector<uint32_t> read_itervec(AsmState& as) {
     as.in.skipSpaceTab();
 
     if (!as.in.readword(word)) as.error("Was expecting iterator id.");
-    uint32_t iterId = folly::to<uint32_t>(word);
-    ret.push_back(iterId);
+    ret.push_back(folly::to<uint32_t>(word));
 
     if (!isdigit(word.back())) {
       if (word.back() == '>') break;
@@ -1138,10 +1167,10 @@ SSwitchJmpVector read_sswitch_jmpvector(AsmState& as) {
 
     as.in.readword(defLabel);
 
-    ret.push_back(std::make_pair(
+    ret.emplace_back(
       as.ue->mergeLitstr(makeStaticString(caseStr)),
       defLabel
-    ));
+    );
 
     as.in.skipWhitespace();
   } while (as.in.peek() != '-');
@@ -1151,7 +1180,7 @@ SSwitchJmpVector read_sswitch_jmpvector(AsmState& as) {
   as.in.readword(defLabel);
 
   // -1 stand for default case.
-  ret.push_back(std::make_pair(-1, defLabel));
+  ret.emplace_back(-1, defLabel);
 
   as.in.expect('>');
 
@@ -1160,8 +1189,7 @@ SSwitchJmpVector read_sswitch_jmpvector(AsmState& as) {
 
 //////////////////////////////////////////////////////////////////////
 
-typedef std::map<std::string,ParserFunc> OpcodeParserMap;
-OpcodeParserMap opcode_parsers;
+std::map<std::string,ParserFunc> opcode_parsers;
 
 #define IMM_NA
 #define IMM_ONE(t) IMM_##t
@@ -1169,7 +1197,7 @@ OpcodeParserMap opcode_parsers;
 #define IMM_THREE(t1, t2, t3) IMM_##t1; IMM_##t2; IMM_##t3
 #define IMM_FOUR(t1, t2, t3, t4) IMM_##t1; IMM_##t2; IMM_##t3; IMM_##t4
 
-// FCall and NewPackedArray need to know the the first imm do POP_*MANY.
+// Some bytecodes need to know the the first iva imm for (PUSH|POP)_*.
 #define IMM_IVA do {                            \
     int imm = read_opcode_arg<int64_t>(as);     \
     as.ue->emitIVA(imm);                        \
@@ -1206,8 +1234,8 @@ OpcodeParserMap opcode_parsers;
   auto vecImm = read_immvector(as, vecImmStackValues);                \
   as.ue->emitInt32(vecImm.size());                                    \
   as.ue->emitInt32(vecImmStackValues);                                \
-  for (size_t i = 0; i < vecImm.size(); ++i) {                        \
-    as.ue->emitByte(vecImm[i]);                                       \
+  for (auto const& imm : vecImm) {                                    \
+    as.ue->emitByte(imm);                                             \
   }
 
 #define IMM_ILA do {                               \
@@ -1221,29 +1249,27 @@ OpcodeParserMap opcode_parsers;
 #define IMM_BLA do {                                    \
   std::vector<std::string> vecImm = read_jmpvector(as); \
   as.ue->emitInt32(vecImm.size());                      \
-  for (size_t i = 0; i < vecImm.size(); ++i) {          \
-    labelJumps.push_back(                               \
-      std::make_pair(vecImm[i], as.ue->bcPos()));       \
+  for (auto const& imm : vecImm) {                      \
+    labelJumps.emplace_back(imm, as.ue->bcPos());       \
     as.ue->emitInt32(0); /* to be patched */            \
   }                                                     \
 } while (0)
 
 #define IMM_SLA do {                                       \
-  SSwitchJmpVector vecImm = read_sswitch_jmpvector(as);    \
+  auto vecImm = read_sswitch_jmpvector(as);                \
   as.ue->emitInt32(vecImm.size());                         \
   for (auto const& pair : vecImm) {                        \
     as.ue->emitInt32(pair.first);                          \
-    labelJumps.push_back(                                  \
-      std::make_pair(pair.second, as.ue->bcPos()));        \
+    labelJumps.emplace_back(pair.second, as.ue->bcPos());  \
     as.ue->emitInt32(0); /* to be patched */               \
   }                                                        \
 } while(0)
 
 #define IMM_BA do {                                                 \
-  labelJumps.push_back(std::make_pair(                              \
+  labelJumps.emplace_back(                                          \
     read_opcode_arg<std::string>(as),                               \
     as.ue->bcPos()                                                  \
-  ));                                                               \
+  );                                                                \
   as.ue->emitInt32(0);                                              \
 } while (0)
 
@@ -1253,19 +1279,25 @@ OpcodeParserMap opcode_parsers;
 #define NUM_PUSH_THREE(a,b,c) 3
 #define NUM_PUSH_INS_1(a) 1
 #define NUM_PUSH_INS_2(a) 1
+#define NUM_PUSH_IDX_A immIVA
 #define NUM_POP_NOV 0
 #define NUM_POP_ONE(a) 1
 #define NUM_POP_TWO(a,b) 2
 #define NUM_POP_THREE(a,b,c) 3
 #define NUM_POP_MMANY vecImmStackValues
-#define NUM_POP_V_MMANY (1 + vecImmStackValues)
-#define NUM_POP_R_MMANY (1 + vecImmStackValues)
 #define NUM_POP_C_MMANY (1 + vecImmStackValues)
+#define NUM_POP_V_MMANY NUM_POP_C_MMANY
+#define NUM_POP_R_MMANY NUM_POP_C_MMANY
+#define NUM_POP_MFINAL immIVA
+#define NUM_POP_C_MFINAL (immIVA + 1)
+#define NUM_POP_R_MFINAL NUM_POP_C_MFINAL
+#define NUM_POP_V_MFINAL NUM_POP_C_MFINAL
 #define NUM_POP_FMANY immIVA /* number of arguments */
 #define NUM_POP_CVMANY immIVA /* number of arguments */
 #define NUM_POP_CVUMANY immIVA /* number of arguments */
 #define NUM_POP_CMANY immIVA /* number of arguments */
 #define NUM_POP_SMANY vecImmStackValues
+#define NUM_POP_IDX_A immIVA + 1
 
 #define O(name, imm, pop, push, flags)                                 \
   void parse_opcode_##name(AsmState& as) {                             \
@@ -1341,6 +1373,7 @@ OPCODES
 #undef NUM_PUSH_THREE
 #undef NUM_PUSH_POS_N
 #undef NUM_PUSH_INS_1
+#undef NUM_PUSH_IDX_A
 #undef NUM_POP_NOV
 #undef NUM_POP_ONE
 #undef NUM_POP_TWO
@@ -1350,11 +1383,16 @@ OPCODES
 #undef NUM_POP_V_MMANY
 #undef NUM_POP_R_MMANY
 #undef NUM_POP_C_MMANY
+#undef NUM_POP_MFINAL
+#undef NUM_POP_C_MFINAL
+#undef NUM_POP_R_MFINAL
+#undef NUM_POP_V_MFINAL
 #undef NUM_POP_FMANY
 #undef NUM_POP_CVMANY
 #undef NUM_POP_CVUMANY
 #undef NUM_POP_CMANY
 #undef NUM_POP_SMANY
+#undef NUM_POP_IDX_A
 
 void initialize_opcode_map() {
 #define O(name, imm, pop, push, flags) \
@@ -1420,6 +1458,22 @@ void parse_numiters(AsmState& as) {
   as.in.expectWs(';');
 }
 
+/*
+ * directive-declvars : var-name* ';'
+ *                    ;
+ *
+ * Variables are usually allocated when first seen, but
+ * declvars can be used to preallocate varibles for when
+ * the exact assignment matters (like for closures).
+ */
+void parse_declvars(AsmState& as) {
+  std::string var;
+  while (as.in.readword(var)) {
+    as.getLocalId(var);
+  }
+  as.in.expectWs(';');
+}
+
 void parse_function_body(AsmState&, int nestLevel = 0);
 
 /*
@@ -1473,7 +1527,7 @@ void parse_catch(AsmState& as, int nestLevel) {
 
     as.in.expectWs(')');
 
-    catches.push_back(std::make_pair(except, label));
+    catches.emplace_back(except, label);
     as.in.skipWhitespace();
   }
   if (catches.empty()) {
@@ -1490,9 +1544,9 @@ void parse_catch(AsmState& as, int nestLevel) {
   eh.m_past = as.ue->bcPos();
   eh.m_iterId = -1;
 
-  for (size_t i = 0; i < catches.size(); ++i) {
-    as.addLabelEHCatch(catches[i].first,
-                       catches[i].second,
+  for (const auto& eh_catch : catches) {
+    as.addLabelEHCatch(eh_catch.first,
+                       eh_catch.second,
                        as.fe->ehtab.size() - 1);
   }
 }
@@ -1502,6 +1556,7 @@ void parse_catch(AsmState& as, int nestLevel) {
  *               ;
  *
  * fbody-line :  ".numiters" directive-numiters
+ *            |  ".declvars" directive-declvars
  *            |  ".try_fault" directive-fault
  *            |  ".try_catch" directive-catch
  *            |  label-name
@@ -1531,6 +1586,7 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
     }
     if (word[0] == '.') {
       if (word == ".numiters")  { parse_numiters(as); continue; }
+      if (word == ".declvars")  { parse_declvars(as); continue; }
       if (word == ".try_fault") { parse_fault(as, nestLevel); continue; }
       if (word == ".try_catch") { parse_catch(as, nestLevel); continue; }
       as.error("unrecognized directive `" + word + "' in function");
@@ -1542,27 +1598,56 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
     }
 
     // Ok, it better be an opcode now.
-    OpcodeParserMap::const_iterator it = opcode_parsers.find(word);
+    auto it = opcode_parsers.find(word);
     if (it == opcode_parsers.end()) {
       as.error("unrecognized opcode `" + word + "'");
     }
     it->second(as);
 
     as.in.skipSpaceTab();
-    if (as.in.peek() != '\n' && as.in.peek() != '#' && as.in.peek() != EOF) {
+    if (as.in.peek() != '\n' &&
+        as.in.peek() != '\r' &&
+        as.in.peek() != '#' &&
+        as.in.peek() != EOF) {
       as.error("too many arguments for opcode `" + word + "'");
     }
   }
 }
 
+void parse_user_attribute(AsmState& as,
+                          UserAttributeMap& userAttrs) {
+  auto name = read_litstr(as);
+  as.in.expectWs('(');
+
+  TypedValue tvInit;
+  tvWriteNull(&tvInit); // Don't confuse Variant with uninit data
+  tvAsVariant(&tvInit) = parse_php_serialized(as);
+
+  as.in.expectWs(')');
+
+  if (!isArrayType(tvInit.m_type)) {
+    as.error("user attribute values must be arrays");
+  }
+
+  tvInit = make_tv<KindOfArray>(ArrayData::GetScalarArray(tvInit.m_data.parr));
+  userAttrs[name] = tvInit;
+}
+
 /*
+ * attribute : attribute-name
+ *           | string-literal '(' long-string-literal ')'
+ *           ;
+ *
  * attribute-list : empty
- *                | '[' attribute-name* ']'
+ *                | '[' attribute* ']'
  *                ;
  *
  * The `attribute-name' rule is context-sensitive; see as-shared.cpp.
+ * The second attribute form is for user attributes and only applies
+ * if attributeMap is non null.
  */
-Attr parse_attribute_list(AsmState& as, AttrContext ctx) {
+Attr parse_attribute_list(AsmState& as, AttrContext ctx,
+                          UserAttributeMap *userAttrs = nullptr) {
   as.in.skipWhitespace();
   int ret = AttrNone;
   if (ctx == AttrContext::Class || ctx == AttrContext::Func) {
@@ -1577,6 +1662,10 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx) {
   for (;;) {
     as.in.skipWhitespace();
     if (as.in.peek() == ']') break;
+    if (as.in.peek() == '"' && userAttrs) {
+      parse_user_attribute(as, *userAttrs);
+      continue;
+    }
     if (!as.in.readword(word)) break;
 
     auto const abit = string_to_attr(ctx, word);
@@ -1590,6 +1679,49 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx) {
   as.in.expect(']');
   return Attr(ret);
 }
+
+/*
+ * type-info       : empty
+ *                 | '<' maybe-string-literal maybe-string-literal
+ *                       type-flag* '>'
+ *                 ;
+ * type-constraint : empty
+ *                 | '<' maybe-string-literal
+ *                       type-flag* '>'
+ *                 ;
+ * This parses type-info if noUserType is false, type-constraint if true
+ */
+std::pair<const StringData *, TypeConstraint> parse_type_info(
+    AsmState& as, bool noUserType = false) {
+  as.in.skipWhitespace();
+  if (as.in.peek() != '<') return {};
+  as.in.getc();
+
+  const StringData *userType = noUserType ? nullptr : read_maybe_litstr(as);
+  const StringData *typeName = read_maybe_litstr(as);
+
+  std::string word;
+  auto flags = TypeConstraint::NoFlags;
+  for (;;) {
+    as.in.skipWhitespace();
+    if (as.in.peek() == '>') break;
+    if (!as.in.readword(word)) break;
+
+    auto const abit = string_to_type_flag(word);
+    if (abit) {
+      flags = flags | *abit;
+      continue;
+    }
+
+    as.error("unrecognized type flag `" + word + "' in this context");
+  }
+  as.in.expect('>');
+  return std::make_pair(userType, TypeConstraint{typeName, flags});
+}
+TypeConstraint parse_type_constraint(AsmState& as) {
+  return parse_type_info(as, true).second;
+}
+
 
 /*
  * parameter-list : '(' param-name-list ')'
@@ -1624,9 +1756,10 @@ void parse_parameter_list(AsmState& as) {
     FuncEmitter::ParamInfo param;
 
     as.in.skipWhitespace();
-    int ch = as.in.getc();
-    if (ch == ')') break; // allow empty param lists
+    int ch = as.in.peek();
+    if (ch == ')') { as.in.getc(); break; } // allow empty param lists
     if (ch == '.') {
+      as.in.getc();
       if (as.in.getc() != '.' ||
           as.in.getc() != '.') {
         as.error("expecting '...'");
@@ -1635,6 +1768,11 @@ void parse_parameter_list(AsmState& as) {
       as.fe->attrs |= AttrMayUseVV;
       break;
     }
+
+    std::tie(param.userType, param.typeConstraint) = parse_type_info(as);
+    as.in.skipWhitespace();
+    ch = as.in.getc();
+
     if (ch == '&') {
       param.byRef = true;
       ch = as.in.getc();
@@ -1726,15 +1864,19 @@ void parse_function(AsmState& as) {
     as.error(".function blocks must all follow the .main block");
   }
 
-  Attr attrs = parse_attribute_list(as, AttrContext::Func);
+  UserAttributeMap userAttrs;
+  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
+  auto typeInfo = parse_type_info(as);
   std::string name;
-  if (!as.in.readword(name)) {
+  if (!as.in.readname(name)) {
     as.error(".function must have a name");
   }
 
   as.fe = as.ue->newFuncEmitter(makeStaticString(name));
   as.fe->init(as.in.getLineNumber(), as.in.getLineNumber() + 1 /* XXX */,
               as.ue->bcPos(), attrs, true, 0);
+  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = typeInfo;
+  as.fe->userAttributes = userAttrs;
 
   parse_parameter_list(as);
   parse_function_flags(as);
@@ -1745,16 +1887,18 @@ void parse_function(AsmState& as) {
 }
 
 /*
- * directive-method : attribute-list identifier parameter-list
+ * directive-method : attribute-list identifier parameter-list function-flags
  *                      '{' function-body
  *                  ;
  */
 void parse_method(AsmState& as) {
   as.in.skipWhitespace();
 
-  Attr attrs = parse_attribute_list(as, AttrContext::Func);
+  UserAttributeMap userAttrs;
+  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
+  auto typeInfo = parse_type_info(as);
   std::string name;
-  if (!as.in.readword(name)) {
+  if (!as.in.readname(name)) {
     as.error(".method requires a method name");
   }
 
@@ -1762,8 +1906,12 @@ void parse_method(AsmState& as) {
   as.pce->addMethod(as.fe);
   as.fe->init(as.in.getLineNumber(), as.in.getLineNumber() + 1 /* XXX */,
               as.ue->bcPos(), attrs, true, 0);
+  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = typeInfo;
+  as.fe->userAttributes = userAttrs;
 
   parse_parameter_list(as);
+  parse_function_flags(as);
+
   as.in.expectWs('{');
 
   parse_function_body(as);
@@ -1797,10 +1945,10 @@ TypedValue parse_member_tv_initializer(AsmState& as) {
     }
 
     tvAsVariant(&tvInit) = parse_php_serialized(as);
-    if (IS_STRING_TYPE(tvInit.m_type)) {
+    if (isStringType(tvInit.m_type)) {
       tvInit.m_data.pstr = makeStaticString(tvInit.m_data.pstr);
       as.ue->mergeLitstr(tvInit.m_data.pstr);
-    } else if (IS_ARRAY_TYPE(tvInit.m_type)) {
+    } else if (isArrayType(tvInit.m_type)) {
       tvInit.m_data.parr = ArrayData::GetScalarArray(tvInit.m_data.parr);
       as.ue->mergeArray(tvInit.m_data.parr);
     } else if (tvInit.m_type == KindOfObject) {
@@ -1841,7 +1989,10 @@ void parse_property(AsmState& as) {
 }
 
 /*
- * directive-const : identifier member-tv-initializer
+ * const-flags     : isType
+ *                 ;
+ *
+ * directive-const : identifier const-flags member-tv-initializer
  *                 ;
  */
 void parse_constant(AsmState& as) {
@@ -1852,10 +2003,12 @@ void parse_constant(AsmState& as) {
     as.error("expected name for constant");
   }
 
+  bool isType = as.in.tryConsume("isType");
   TypedValue tvInit = parse_member_tv_initializer(as);
   as.pce->addConstant(makeStaticString(name),
                       staticEmptyString(), &tvInit,
-                      staticEmptyString(), false);
+                      staticEmptyString(),
+                      isType);
 }
 
 /*
@@ -1980,6 +2133,22 @@ void parse_use(AsmState& as) {
 }
 
 /*
+ * directive-enum_ty : type-constraint ';'
+ *                   ;
+ *
+ */
+void parse_enum_ty(AsmState& as) {
+  if (as.enumTySet) {
+    as.error("only one .enum_ty directive may appear in a given class");
+  }
+  as.enumTySet = true;
+
+  as.pce->setEnumBaseTy(parse_type_constraint(as));
+
+  as.in.expectWs(';');
+}
+
+/*
  * class-body : class-body-line* '}'
  *            ;
  *
@@ -1988,6 +2157,7 @@ void parse_use(AsmState& as) {
  *                 | ".const"        directive-const
  *                 | ".use"          directive-use
  *                 | ".default_ctor" directive-default-ctor
+ *                 | ".enum_ty"      directive-enum-ty
  *                 ;
  */
 void parse_class_body(AsmState& as) {
@@ -2002,11 +2172,37 @@ void parse_class_body(AsmState& as) {
     if (directive == ".const")        { parse_constant(as);     continue; }
     if (directive == ".use")          { parse_use(as);          continue; }
     if (directive == ".default_ctor") { parse_default_ctor(as); continue; }
+    if (directive == ".enum_ty")      { parse_enum_ty(as);      continue; }
 
     as.error("unrecognized directive `" + directive + "' in class");
   }
   as.in.expect('}');
-  as.finishClass();
+}
+
+PreClass::Hoistable compute_hoistable(AsmState& as,
+                                      const std::string &name,
+                                      const std::string &parentName) {
+  auto &pce = *as.pce;
+  bool system = pce.attrs() & AttrBuiltin;
+
+  if (pce.methods().size() == 1 && pce.methods()[0]->isClosureBody) {
+    return PreClass::ClosureHoistable;
+  }
+  if (!system) {
+    if (!pce.interfaces().empty() ||
+        !pce.usedTraits().empty() ||
+        !pce.requirements().empty() ||
+        (pce.attrs() & AttrEnum)) {
+      return PreClass::Mergeable;
+    }
+    if (!parentName.empty() && !as.hoistables.count(parentName)) {
+      return PreClass::MaybeHoistable;
+    }
+  }
+  as.hoistables.insert(name);
+
+  return pce.attrs() & AttrUnique ?
+    PreClass::AlwaysHoistable : PreClass::MaybeHoistable;
 }
 
 /*
@@ -2026,15 +2222,16 @@ void parse_class_body(AsmState& as) {
 void parse_class(AsmState& as) {
   as.in.skipWhitespace();
 
-  Attr attrs = parse_attribute_list(as, AttrContext::Class);
+  UserAttributeMap userAttrs;
+  Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs);
   std::string name;
-  if (!as.in.readword(name)) {
+  if (!as.in.readname(name)) {
     as.error(".class must have a name");
   }
 
   std::string parentName;
   if (as.in.tryConsume("extends")) {
-    if (!as.in.readword(parentName)) {
+    if (!as.in.readname(parentName)) {
       as.error("expected parent class name after `extends'");
     }
   }
@@ -2043,26 +2240,30 @@ void parse_class(AsmState& as) {
   if (as.in.tryConsume("implements")) {
     as.in.expectWs('(');
     std::string word;
-    while (as.in.readword(word)) {
+    while (as.in.readname(word)) {
       ifaces.push_back(word);
     }
     as.in.expect(')');
   }
 
-  as.pce = as.ue->newPreClassEmitter(makeStaticString(name),
-                                     PreClass::MaybeHoistable);
+  as.pce = as.ue->newBarePreClassEmitter(makeStaticString(name),
+                                         PreClass::MaybeHoistable);
   as.pce->init(as.in.getLineNumber(),
                as.in.getLineNumber() + 1, // XXX
                as.ue->bcPos(),
                attrs,
                makeStaticString(parentName),
                staticEmptyString());
-  for (size_t i = 0; i < ifaces.size(); ++i) {
-    as.pce->addInterface(makeStaticString(ifaces[i]));
+  for (auto const& iface : ifaces) {
+    as.pce->addInterface(makeStaticString(iface));
   }
+  as.pce->setUserAttributes(userAttrs);
 
   as.in.expectWs('{');
   parse_class_body(as);
+
+  as.pce->setHoistable(compute_hoistable(as, name, parentName));
+  as.finishClass();
 }
 
 /*
@@ -2124,6 +2325,46 @@ void parse_adata(AsmState& as) {
 }
 
 /*
+ * directive-alias :  attribute-list identifier '=' type-constraint ';'
+ *                 ;
+ *
+ * We represent alias type information using the syntax for
+ * TypeConstraints. We populate the name and nullable field of the
+ * alias directly from the specified type constraint and derive the
+ * AnnotType from the compute AnnotType in the constraint.
+ */
+void parse_alias(AsmState& as) {
+  as.in.skipWhitespace();
+
+  Attr attrs = parse_attribute_list(as, AttrContext::Alias);
+  std::string name;
+  if (!as.in.readname(name)) {
+    as.error(".alias must have a name");
+  }
+  as.in.expectWs('=');
+
+  TypeConstraint ty = parse_type_constraint(as);
+
+  const StringData* typeName = ty.typeName();
+  if (!typeName) typeName = makeStaticString("");
+  const StringData* sname = makeStaticString(name);
+  // Merge to ensure namedentity creation, according to
+  // emitTypedef in emitter.cpp
+  as.ue->mergeLitstr(sname);
+  as.ue->mergeLitstr(typeName);
+
+  TypeAlias record;
+  record.name = sname;
+  record.value = typeName;
+  record.type = ty.type();
+  record.nullable = (ty.flags() & TypeConstraint::Nullable) != 0;
+  record.attrs = attrs;
+  as.ue->addTypeAlias(record);
+
+  as.in.expectWs(';');
+}
+
+/*
  * asm-file : asm-tld* <EOF>
  *          ;
  *
@@ -2132,6 +2373,7 @@ void parse_adata(AsmState& as) {
  *         |    ".function"    directive-function
  *         |    ".adata"       directive-adata
  *         |    ".class"       directive-class
+ *         |    ".alias"       directive-alias
  *         ;
  */
 void parse(AsmState& as) {
@@ -2154,6 +2396,7 @@ void parse(AsmState& as) {
     if (directive == ".function")    { parse_function(as); continue; }
     if (directive == ".adata")       { parse_adata(as);    continue; }
     if (directive == ".class")       { parse_class(as);    continue; }
+    if (directive == ".alias")       { parse_alias(as);    continue; }
 
     as.error("unrecognized top-level directive `" + directive + "'");
   }
@@ -2169,7 +2412,7 @@ void parse(AsmState& as) {
 
 UnitEmitter* assemble_string(const char* code, int codeLen,
                              const char* filename, const MD5& md5) {
-  std::unique_ptr<UnitEmitter> ue(new UnitEmitter(md5));
+  auto ue = folly::make_unique<UnitEmitter>(md5);
   StringData* sd = makeStaticString(filename);
   ue->m_filepath = sd;
 

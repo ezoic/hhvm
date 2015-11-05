@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -104,7 +104,7 @@ bool checkFunc(const Func*, bool verbose = false);
  *
  * Checked:
  * -- Primitive argument types are correct: int64_t, bool, and double
- * -- Complex arguments use correct smart pointer wrapper: String, Object,
+ * -- Complex arguments use correct req::ptr wrapper: String, Object,
  *    Resource, and Array
  * -- Mixed arguments are taken as Variant
  * -- By-reference arguments are taken as VRefParam

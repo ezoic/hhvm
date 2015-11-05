@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,11 +17,10 @@
 #ifndef incl_HPHP_STRING_H_
 #define incl_HPHP_STRING_H_
 
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/util/assertions.h"
 #include "hphp/util/hash-map-typedefs.h"
 #include "hphp/util/functional.h"
@@ -33,8 +32,9 @@ namespace HPHP {
 //////////////////////////////////////////////////////////////////////
 
 class Array;
-class String;
 class VarNR;
+class VariableSerializer;
+class VariableUnserializer;
 
 // reserve space for buffer that will be filled in by client.
 enum ReserveStringMode { ReserveString };
@@ -67,12 +67,10 @@ std::string convDblToStrWithPhpFormat(double n);
  * literal string handling (to avoid string copying).
  */
 class String {
-  SmartPtr<StringData> m_str;
+  req::ptr<StringData> m_str;
 
 protected:
-  using IsUnowned = SmartPtr<StringData>::IsUnowned;
-  using NoIncRef = SmartPtr<StringData>::NoIncRef;
-
+  using NoIncRef = req::ptr<StringData>::NoIncRef;
   String(StringData* sd, NoIncRef) : m_str(sd, NoIncRef{}) {}
 
 public:
@@ -94,10 +92,10 @@ public:
 
   // create a string from a character
   static String FromChar(char ch) {
-    return makeStaticString(ch);
+    return String{makeStaticString(ch)};
   }
   static String FromCStr(const char* str) {
-    return makeStaticString(str);
+    return String{makeStaticString(str)};
   }
 
   static const StringData *ConvertInteger(int64_t n);
@@ -120,7 +118,7 @@ public:
   ~String();
 
   StringData* get() const { return m_str.get(); }
-  void reset() { m_str.reset(); }
+  void reset(StringData* str = nullptr) { m_str.reset(str); }
 
   // Transfer ownership of our reference to this StringData.
   StringData* detach() { return m_str.detach(); }
@@ -128,7 +126,7 @@ public:
   /**
    * Constructors
    */
-  /* implicit */ String(StringData *data) : m_str(data) { }
+  explicit String(StringData *data) : m_str(data) { }
   /* implicit */ String(int     n);
   /* implicit */ String(int64_t n);
   /* implicit */ String(double  n);
@@ -150,6 +148,10 @@ public:
   // Move assign
   String& operator=(String&& src) {
     m_str = std::move(src.m_str);
+    return *this;
+  }
+  String& operator=(req::ptr<StringData>&& src) {
+    m_str = std::move(src);
     return *this;
   }
 
@@ -211,18 +213,18 @@ public:
   const String& shrink(size_t len) {
     assert(m_str);
     if (m_str->capacity() - len > kMinShrinkThreshold) {
-      m_str = SmartPtr<StringData>::attach(m_str->shrinkImpl(len));
+      m_str = req::ptr<StringData>::attach(m_str->shrinkImpl(len));
     } else {
       assert(len < StringData::MaxSize);
       m_str->setSize(len);
     }
     return *this;
   }
-  MutableSlice reserve(size_t size) {
-    if (!m_str) return MutableSlice("", 0);
+  folly::MutableStringPiece reserve(size_t size) {
+    if (!m_str) return folly::MutableStringPiece();
     auto const tmp = m_str->reserve(size);
     if (UNLIKELY(tmp != m_str)) {
-      m_str = SmartPtr<StringData>::attach(tmp);
+      m_str = req::ptr<StringData>::attach(tmp);
     }
     return m_str->bufferSlice();
   }
@@ -241,11 +243,11 @@ public:
   uint32_t capacity() const {
     return m_str->capacity(); // intentionally skip nullptr check
   }
-  StringSlice slice() const {
-    return m_str ? m_str->slice() : StringSlice("", 0);
+  folly::StringPiece slice() const {
+    return m_str ? m_str->slice() : folly::StringPiece();
   }
-  MutableSlice bufferSlice() {
-    return m_str ? m_str->bufferSlice() : MutableSlice("", 0);
+  folly::MutableStringPiece bufferSlice() {
+    return m_str ? m_str->bufferSlice() : folly::MutableStringPiece();
   }
   bool isNull() const { return !m_str; }
   bool isNumeric() const {
@@ -300,16 +302,17 @@ public:
   friend String operator+(const String & lhs, String&& rhs);
   friend String operator+(const String& lhs, const char* rhs);
   friend String operator+(const String & lhs, const String & rhs);
-  String &operator += (const char* v);
-  String &operator += (const String& v);
-  String &operator += (const StringSlice& slice);
-  String &operator += (const MutableSlice& slice);
+  String& operator += (const char* v);
+  String& operator += (const String& v);
+  String& operator += (const std::string& v);
+  String& operator += (folly::StringPiece slice);
+  String& operator += (folly::MutableStringPiece slice);
   String  operator |  (const String& v) const = delete;
   String  operator &  (const String& v) const = delete;
   String  operator ^  (const String& v) const = delete;
-  String &operator |= (const String& v) = delete;
-  String &operator &= (const String& v) = delete;
-  String &operator ^= (const String& v) = delete;
+  String& operator |= (const String& v) = delete;
+  String& operator &= (const String& v) = delete;
+  String& operator ^= (const String& v) = delete;
   String  operator ~  () const = delete;
   explicit operator std::string () const { return toCppString(); }
   explicit operator bool() const { return (bool)m_str; }
@@ -409,30 +412,23 @@ public:
   char operator[](int pos) const { return charAt(pos);}
 
   /**
-   * Input/Output
-   */
-  void serialize(VariableSerializer *serializer) const;
-  void unserialize(VariableUnserializer *uns, char delimiter0 = '"',
-                   char delimiter1 = '"');
-
-  /**
    * Debugging
    */
   void dump() const;
 
  private:
-  static SmartPtr<StringData> buildString(int n);
-  static SmartPtr<StringData> buildString(int64_t n);
+  static req::ptr<StringData> buildString(int n);
+  static req::ptr<StringData> buildString(int64_t n);
 
   String rvalAtImpl(int key) const {
     if (m_str) {
-      return m_str->getChar(key);
+      return String{m_str->getChar(key)};
     }
     return String();
   }
 
   static void compileTimeAssertions() {
-    static_assert(sizeof(String) == sizeof(SmartPtr<StringData>), "");
+    static_assert(sizeof(String) == sizeof(req::ptr<StringData>), "");
   }
 };
 
@@ -570,24 +566,16 @@ private:
  * so that they won't be garbage collected by MemoryManager. This is used by
  * constant strings, so they can be pre-allocated before request handling.
  */
-class StaticString : public String {
-public:
-  friend class StringUtil;
-
+struct StaticString : String {
   explicit StaticString(const char* s);
   StaticString(const char* s, int length); // binary string
   explicit StaticString(std::string s);
   ~StaticString() {
-    // prevent ~SmartPtr from destroying contents.
+    // prevent ~req::ptr from destroying contents.
     detach();
   }
   StaticString& operator=(const StaticString &str);
-
-private:
-  void insert();
 };
-
-#define LITSTR_INIT(str)    (true ? (str) : ("" str "")), (sizeof(str)-1)
 
 StaticString getDataTypeString(DataType t);
 
@@ -599,7 +587,7 @@ inline String::String(const StaticString& str) :
 }
 
 inline String& String::operator=(const StaticString& v) {
-  m_str = SmartPtr<StringData>::attach(v.m_str.get());
+  m_str = req::ptr<StringData>::attach(v.m_str.get());
   return *this;
 }
 
@@ -611,6 +599,20 @@ ALWAYS_INLINE String empty_string() {
 
 //////////////////////////////////////////////////////////////////////
 
+}
+
+namespace folly {
+template<> struct FormatValue<HPHP::String> {
+  explicit FormatValue(const HPHP::String& str) : m_val(str) {}
+
+  template<typename Callback>
+  void format(FormatArg& arg, Callback& cb) const {
+    FormatValue<HPHP::StringData*>(m_val.get()).format(arg, cb);
+  }
+
+ private:
+  const HPHP::String& m_val;
+};
 }
 
 #endif

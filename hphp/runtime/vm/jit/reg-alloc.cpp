@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,12 +17,15 @@
 #include "hphp/runtime/vm/jit/reg-alloc.h"
 
 #include "hphp/runtime/base/arch.h"
+
+#include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/abi-arm.h"
-#include "hphp/runtime/vm/jit/mc-generator.h"
+#include "hphp/runtime/vm/jit/irlower.h"
 #include "hphp/runtime/vm/jit/minstr-effects.h"
 #include "hphp/runtime/vm/jit/native-calls.h"
 #include "hphp/runtime/vm/jit/print.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
+#include "hphp/runtime/vm/jit/vasm-unit.h"
 
 #include <boost/dynamic_bitset.hpp>
 
@@ -63,6 +66,7 @@ bool loadsCell(Opcode op) {
     switch (arch()) {
     case Arch::X64: return true;
     case Arch::ARM: return false;
+    case Arch::PPC64: not_implemented(); break;
     }
     not_reached();
 
@@ -80,6 +84,7 @@ bool storesCell(const IRInstruction& inst, uint32_t srcIdx) {
   switch (arch()) {
   case Arch::X64: break;
   case Arch::ARM: return false;
+  case Arch::PPC64: not_implemented(); break;
   }
 
   // If this function returns true for an operand, then the register allocator
@@ -98,9 +103,6 @@ bool storesCell(const IRInstruction& inst, uint32_t srcIdx) {
 
   case StStk:
     return srcIdx == 1;
-
-  case CallBuiltin:
-    return srcIdx < inst.numSrcs();
 
   default:
     return false;
@@ -121,6 +123,7 @@ PhysReg forceAlloc(const SSATmp& tmp) {
     switch (arch()) {
     case Arch::X64: return false;
     case Arch::ARM: return true;
+    case Arch::PPC64: not_implemented(); break;
     }
     not_reached();
   }();
@@ -132,13 +135,13 @@ PhysReg forceAlloc(const SSATmp& tmp) {
       "unexpected StkPtr dest from {}",
       opcodeName(opc)
     );
-    return mcg->backEnd().rVmSp();
+    return rvmsp();
   }
 
   // LdContActRec and LdAFWHActRec, loading a generator's AR, is the only time
-  // we have a pointer to an AR that is not in rVmFp.
+  // we have a pointer to an AR that is not in rvmfp().
   if (opc != LdContActRec && opc != LdAFWHActRec && tmp.isA(TFramePtr)) {
-    return mcg->backEnd().rVmFp();
+    return rvmfp();
   }
 
   return InvalidReg;
@@ -150,7 +153,7 @@ PhysReg forceAlloc(const SSATmp& tmp) {
 // a known DataType only get one register. Assign "wide" locations when
 // possible (when all uses and defs can be wide). These will be assigned
 // SIMD registers later.
-void assignRegs(IRUnit& unit, Vunit& vunit, CodegenState& state,
+void assignRegs(IRUnit& unit, Vunit& vunit, irlower::IRLS& state,
                 const BlockList& blocks) {
   // visit instructions to find tmps eligible to use SIMD registers
   auto const try_wide = RuntimeOption::EvalHHIRAllocSIMDRegs;
@@ -223,39 +226,43 @@ void getEffects(const Abi& abi, const Vinstr& i,
                 RegSet& uses, RegSet& across, RegSet& defs) {
   uses = defs = across = RegSet();
   switch (i.op) {
-    case Vinstr::mccall:
     case Vinstr::call:
     case Vinstr::callm:
     case Vinstr::callr:
-      defs = abi.all() - abi.calleeSaved;
-      switch (arch()) {
-        case Arch::ARM:
-          defs.add(PhysReg(arm::rLinkReg));
-          defs.remove(PhysReg(arm::rVmFp));
-          break;
-        case Arch::X64:
-          defs.remove(reg::rbp);
-          break;
-      }
-      break;
-    case Vinstr::bindcall:
-      defs = abi.all();
-      switch (arch()) {
-      case Arch::ARM: break;
-      case Arch::X64: defs.remove(x64::rVmTl); break;
-      }
-      break;
-    case Vinstr::contenter:
+    case Vinstr::calls:
     case Vinstr::callstub:
-      defs = abi.all();
+      defs = abi.all() - (abi.calleeSaved | rvmfp());
+
       switch (arch()) {
-      case Arch::ARM: defs.remove(PhysReg(arm::rVmFp)); break;
-      case Arch::X64: defs -= reg::rbp | x64::rVmTl; break;
+        case Arch::ARM: defs.add(PhysReg(arm::rLinkReg)); break;
+        case Arch::X64: break;
+        case Arch::PPC64: not_implemented(); break;
       }
       break;
+
     case Vinstr::callfaststub:
-      defs = abi.all() - abi.calleeSaved - x64::kGPCallerSaved;
+      defs = abi.all() - abi.calleeSaved - abi.gpUnreserved;
       break;
+
+    case Vinstr::callphp:
+      defs = abi.all();
+      switch (arch()) {
+        case Arch::ARM: break;
+        case Arch::X64: defs.remove(rvmtl()); break;
+        case Arch::PPC64: not_implemented(); break;
+      }
+      break;
+
+    case Vinstr::callarray:
+    case Vinstr::contenter:
+      defs = abi.all() - RegSet(rvmfp());
+      switch (arch()) {
+        case Arch::ARM: break;
+        case Arch::X64: defs.remove(rvmtl()); break;
+        case Arch::PPC64: not_implemented(); break;
+      }
+      break;
+
     case Vinstr::cqo:
       uses = RegSet(reg::rax);
       defs = reg::rax | reg::rdx;
@@ -267,15 +274,18 @@ void getEffects(const Abi& abi, const Vinstr& i,
     case Vinstr::sarq:
       across = RegSet(reg::rcx);
       break;
+
     // arm instrs
     case Vinstr::hostcall:
       defs = (abi.all() - abi.calleeSaved) |
              RegSet(PhysReg(arm::rHostCallReg));
       break;
+
     case Vinstr::vcall:
     case Vinstr::vinvoke:
-    case Vinstr::vcallstub:
+    case Vinstr::vcallarray:
       always_assert(false && "Unsupported instruction in vxls");
+
     default:
       break;
   }

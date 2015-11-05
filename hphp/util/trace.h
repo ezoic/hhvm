@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -99,10 +99,12 @@ namespace Trace {
       TM(debuggerflow)  \
       TM(debuginfo)     \
       TM(dispatchBB)    \
+      TM(emitter)       \
       TM(fixup)         \
       TM(fr)            \
       TM(gc)            \
       TM(heap)          \
+      TM(heapreport)    \
       TM(hhas)          \
       TM(hhbbc)         \
       TM(hhbbc_dce)     \
@@ -151,8 +153,7 @@ namespace Trace {
       TM(runtime)       \
       TM(servicereq)    \
       TM(simplify)      \
-      TM(smartalloc)    \
-      TM(heaptrace)     \
+      TM(mm)            \
       TM(stat)          \
       TM(statgroups)    \
       TM(stats)         \
@@ -167,6 +168,7 @@ namespace Trace {
       TM(ustubs)        \
       TM(xenon)         \
       TM(objprof)       \
+      TM(heapgraph)     \
       TM(xls)           \
       /* Stress categories, to exercise rare paths */ \
       TM(stress_txInterpPct)  \
@@ -235,7 +237,8 @@ std::string prettyNode(const char* name, const P1& p1, const P2& p2) {
     string(")");
 }
 
-void traceRelease(const char*, ...) ATTRIBUTE_PRINTF(1,2);
+void traceRelease(ATTRIBUTE_PRINTF_STRING const char*, ...)
+  ATTRIBUTE_PRINTF(1,2);
 void traceRelease(const std::string& s);
 
 template<typename... Args>
@@ -247,7 +250,8 @@ void ftraceRelease(Args&&... args) {
 #define TRACE_RB(n, ...)                                        \
   ONTRACE(n, HPHP::Trace::traceRingBufferRelease(__VA_ARGS__)); \
   TRACE(n, __VA_ARGS__);
-void traceRingBufferRelease(const char* fmt, ...) ATTRIBUTE_PRINTF(1,2);
+void traceRingBufferRelease(ATTRIBUTE_PRINTF_STRING const char* fmt, ...)
+  ATTRIBUTE_PRINTF(1,2);
 
 extern int levels[NumModules];
 extern __thread int tl_levels[NumModules];
@@ -357,13 +361,14 @@ inline void itraceImpl(const char* fmtRaw, Args&&... args) {
 #define ITRACE_MOD(mod, level, ...)                             \
   ONTRACE_MOD(mod, level, Trace::itraceImpl(__VA_ARGS__));
 
-void trace(const char *, ...) ATTRIBUTE_PRINTF(1,2);
+void trace(ATTRIBUTE_PRINTF_STRING const char *, ...) ATTRIBUTE_PRINTF(1,2);
 void trace(const std::string&);
 
 template<typename Pretty>
 inline void trace(Pretty p) { trace(p.pretty() + std::string("\n")); }
 
-void vtrace(const char *fmt, va_list args) ATTRIBUTE_PRINTF(1,0);
+void vtrace(ATTRIBUTE_PRINTF_STRING const char *fmt, va_list args)
+  ATTRIBUTE_PRINTF(1,0);
 void dumpRingbuffer();
 
 //////////////////////////////////////////////////////////////////////
@@ -445,7 +450,11 @@ namespace folly {
 template<typename Val>
 struct FormatValue<Val,
                    typename std::enable_if<
-                     HPHP::has_toString<Val, std::string() const>::value,
+                     HPHP::has_toString<Val, std::string() const>::value &&
+                     // This is here because MSVC decides that StringPiece matches
+                     // both this overload as well as the FormatValue overload for
+                     // string-y types in folly itself.
+                     !std::is_same<Val, StringPiece>::value,
                      void
                    >::type> {
   explicit FormatValue(const Val& val) : m_val(val) {}

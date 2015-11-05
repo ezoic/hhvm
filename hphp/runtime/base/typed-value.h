@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -32,7 +32,7 @@ struct ArrayData;
 struct StringData;
 struct ObjectData;
 struct RefData;
-struct ResourceData;
+struct ResourceHdr;
 struct TypedValue;
 
 //////////////////////////////////////////////////////////////////////
@@ -48,7 +48,7 @@ union Value {
   StringData*   pstr;   // KindOfString, KindOfStaticString
   ArrayData*    parr;   // KindOfArray
   ObjectData*   pobj;   // KindOfObject
-  ResourceData* pres;   // KindOfResource
+  ResourceHdr*  pres;   // KindOfResource
   Class*        pcls;   // only in vm stack, no type tag.
   RefData*      pref;   // KindOfRef
 };
@@ -113,7 +113,7 @@ constexpr size_t alignTypedValue(size_t sz) {
  */
 struct TypedValueAux : TypedValue {
   static constexpr size_t auxOffset = offsetof(TypedValue, m_aux);
-  static const size_t auxSize = sizeof(m_aux);
+  static const size_t auxSize = sizeof(decltype(m_aux));
   int32_t& hash() { return m_aux.u_hash; }
   const int32_t& hash() const { return m_aux.u_hash; }
   int32_t& rdsHandle() { return m_aux.u_rdsHandle; }
@@ -170,7 +170,7 @@ X(KindOfInt64,        int64_t);
 X(KindOfDouble,       double);
 X(KindOfArray,        ArrayData*);
 X(KindOfObject,       ObjectData*);
-X(KindOfResource,     ResourceData*);
+X(KindOfResource,     ResourceHdr*);
 X(KindOfRef,          RefData*);
 X(KindOfString,       StringData*);
 X(KindOfStaticString, const StringData*);
@@ -256,7 +256,7 @@ typename std::enable_if<
   typename DataTypeCPPType<DType>::type
 >::type unpack_tv(TypedValue *tv) {
   assert((DType == tv->m_type) ||
-         (IS_STRING_TYPE(DType) && IS_STRING_TYPE(tv->m_type)));
+         (isStringType(DType) && isStringType(tv->m_type)));
   return reinterpret_cast<typename DataTypeCPPType<DType>::type>
            (tv->m_data.pstr);
 }

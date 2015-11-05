@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Core
 open Utils
 
 (*****************************************************************************)
@@ -88,10 +89,10 @@ let walk content pos_level_list =
     result := (level_opt, String.sub content !i size) :: !result;
     i := !i + size
   in
-  List.iter begin fun ((char_start, char_end), level) ->
+  List.iter pos_level_list begin fun ((char_start, char_end), level) ->
     add None char_start;
     add (Some level) char_end;
-  end pos_level_list;
+  end;
   add None (String.length content);
   List.rev !result
 

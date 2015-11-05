@@ -126,7 +126,15 @@ UNSUPPORTED_FILES_UNPARSER = {
     ],
     "TypeConst": [
         'tconst/*.php',
+        'classname/with_tconst*.php',
+        'type_structure/*.php',
+        'constraints/class_type_constant*.php',
+        'instantiate_from_unresolved_class_id_type.php',
+        'array_get_tconst.php',
     ],
+    "Memoize": [
+        'memoize/*.php',
+    ]
 }
 
 UNSUPPORTED_FILES_CONVERTER = {
@@ -154,7 +162,11 @@ UNSUPPORTED_FILES_CONVERTER = {
     ],
     "Collection initializers in instance variables are currently not supported. (Other[0])": [
         "reset_after_foreach.php",
-        "static_collection_init.php"
+        "static_collection_init.php",
+        "class_property_initialization/map_non_static.php",
+        "class_property_initialization/collection_non_static.php",
+        "class_property_initialization/"
+        "initialize_property_with_static_literal.php",
     ],
     "Unsupported collection type StableMap (Other[0])": [
         "collection_literals.php",
@@ -276,6 +288,8 @@ UNSUPPORTED_FILES_CONVERTER = {
         'yield_wait_forva_bad1.php',
         'yield_wait_forvr.php',
         'yield_wait_forvr_result_bad1.php',
+        'akshape/gena_ok.php',
+        'akshape/gena_error.php',
     ],
     "await is currently not supported. (Other[0])": [
         'dynamic_yield/IUseDynamicYield_interface1.php',
@@ -344,6 +358,7 @@ INTERNAL_ERRORS = {
 }
 
 OTHER_UNPARSEABLE_FILES = [
+    'abstract_final_classname.php',
     'capitalization2.php',
     'capitalization4.php',
     'class_abstract_final_1.php',
@@ -356,6 +371,7 @@ OTHER_UNPARSEABLE_FILES = [
     'class_abstract_final_7.php',
     'class_abstract_final_5.php',
     'class_abstract_final_9.php',
+    'classname/new_abstract_final.php',
     'concat_untyped_with_string.php',
     'covariance7.php',
     'covariance8.php',
@@ -410,6 +426,10 @@ OTHER_UNPARSEABLE_FILES = [
     'unsafeexpr2.php',
     'unsafeexpr3.php',
     'variadic_args1.php',
+    'constraints/tapply_is_newtype.php',
+    'array_get_newtype.php',
+    'references/call_time_reference1.php',
+    'references/call_time_reference3.php',
 ]
 
 UNPARSEABLE_OUTPUT = set([

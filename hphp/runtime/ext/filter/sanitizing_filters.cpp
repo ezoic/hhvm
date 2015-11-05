@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -21,7 +21,6 @@
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/zend-string.h"
-#include "hphp/system/constants.h"
 
 namespace HPHP {
 
@@ -228,7 +227,7 @@ Variant php_filter_full_special_chars(PHP_INPUT_FILTER_PARAM_DECL) {
   if (!(flags & k_FILTER_FLAG_NO_ENCODE_QUOTES)) {
     quotes = k_ENT_QUOTES;
   } else {
-    quotes = k_ENT_NOQUOTES;
+    quotes = k_ENT_HTML_QUOTE_NONE;
   }
   return HHVM_FN(htmlentities)(value, quotes);
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -335,7 +335,7 @@ static String staticString(const char *s) {
   if (!s) {
     return String();
   }
-  return makeStaticString(s);
+  return String{makeStaticString(s)};
 }
 
 void ClassInfo::ReadUserAttributes(const char **&p,
@@ -438,7 +438,7 @@ ClassInfoUnique::ClassInfoUnique(const char **&p) {
 
   // ClassInfoUnique is only created by ClassInfo::Load(), which is called
   // from hphp_process_init() in the thread-neutral initialization phase.
-  // It is OK to create StaticStrings here, and throw the smart ptrs away,
+  // It is OK to create StaticStrings here, and throw the String wrapper away,
   // because the underlying static StringData will not be released.
   m_name = staticString(*p++);
   m_parent = staticString(*p++);

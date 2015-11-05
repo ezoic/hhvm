@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -1756,7 +1756,7 @@ and xhp_class_attribute env =
   Try.one_line env
     (xhp_class_attribute_impl ~enum_list_elts:(list_comma_single expr))
     (xhp_class_attribute_impl ~enum_list_elts:
-      (fun env -> right env (list_comma_multi_nl ~trailing:true expr)))
+      (fun env -> right env (list_comma_multi_nl ~trailing:false expr)))
 
 and xhp_class_attribute_impl ~enum_list_elts env =
   let curr_pos = !(env.abs_pos) in
@@ -2326,10 +2326,6 @@ and rhs_assign env =
         space env; expr env
     | _ ->
         back env;
-        try_word env "await" begin fun env ->
-          space env;
-          last_token env
-        end;
         keep_best env
           begin fun env ->
             let line = !(env.line) in
@@ -2508,11 +2504,8 @@ and expr_remain lowest env =
       lowest
   | Tlp ->
       let env = { env with break_on = 0 } in
-      out tok_str env;
-      keep_comment env;
-      if next_token env <> Trp
-      then right env expr_call_list;
-      expect ")" env;
+      back env;
+      arg_list env;
       lowest
   | Tlb ->
       last_token env;
@@ -2541,6 +2534,8 @@ and expr_remain lowest env =
        *   ...
        *)
       1
+  | Tqmqm ->
+      expr_binop lowest "??" Tqmqm env
   | Tword when !(env.last_str) = "xor" ->
       expr_binop lowest "xor" Txor env
   | Tword when !(env.last_str) = "instanceof" ->
@@ -2599,7 +2594,7 @@ and expr_atomic env =
      expr_atomic env
  | Tword ->
       let word = !(env.last_str) in
-      expr_atomic_word env last word
+      expr_atomic_word env last (String.lowercase word)
  | Tlb ->
      last_token env;
      right env array_body;
@@ -2651,6 +2646,9 @@ and expr_atomic_word env last_tok = function
       expect "(" env;
       right env array_body;
       expect ")" env
+  | "empty" | "unset" | "isset" as v ->
+      out v env;
+      arg_list ~trailing:false env
   | "new" ->
       last_token env;
       space env;
@@ -2699,9 +2697,9 @@ and expr_atomic_word env last_tok = function
             back env
       end
 
-and expr_call_list env =
+and expr_call_list ?(trailing=true) env =
   let env = { env with break_on = 0; priority = 0 } in
-  list_comma_nl ~trailing:true expr_call_elt env
+  list_comma_nl ~trailing expr_call_elt env
 
 and expr_call_elt env = wrap env begin function
   | Tellipsis -> seq env [last_token; expr]
@@ -2821,6 +2819,17 @@ and arrow_opt env =
         (fun env -> newline env; right env expr)
   | _ ->
       back env
+
+(*****************************************************************************)
+(* Argument lists *)
+(*****************************************************************************)
+
+and arg_list ?(trailing=true) env =
+  expect "(" env;
+  keep_comment env;
+  if next_token env <> Trp
+  then right env (expr_call_list ~trailing);
+  expect ")" env
 
 (*****************************************************************************)
 (* The outside API *)

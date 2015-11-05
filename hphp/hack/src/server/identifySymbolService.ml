@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,6 +7,8 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
+
+open Core
 
 type target_type =
 | Class
@@ -75,9 +77,9 @@ let process_named_class result_ref is_target_fun class_ =
   process_class_id result_ref is_target_fun class_.Nast.c_name ();
   let c_name = snd class_.Nast.c_name in
   let all_methods = class_.Nast.c_methods @ class_.Nast.c_static_methods in
-  List.iter begin fun method_ ->
+  List.iter all_methods begin fun method_ ->
     process_method result_ref is_target_fun c_name method_.Nast.m_name
-  end all_methods;
+  end;
   match class_.Nast.c_constructor with
     | Some method_ ->
       let id =

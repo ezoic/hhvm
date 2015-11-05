@@ -10,16 +10,46 @@ abstract final class CacheKeys {
   const string RESULT_CACHE_KEY = '__systemlib__hh_client_result';
 }
 
-function typecheck_impl(string $client_name): TypecheckResult {
+function locate_hh(string $client_name): ?string {
+  if (\strlen($client_name) > 0 && $client_name[0] == '/') {
+    if (\is_executable($client_name)) {
+      return $client_name;
+    } else {
+      return null;
+    }
+  }
+
+  $base = \dirname(\PHP_BINARY);
+
+  $next_to_hhvm = $base . '/' . $client_name;
+  if (\is_executable($next_to_hhvm)) {
+    return $next_to_hhvm;
+  }
+
+  $oss_build = $base . '/../hack/bin/' . $client_name;
+  if (\is_executable($oss_build)) {
+    return $oss_build;
+  }
+
   $cmd = \sprintf('which %s > /dev/null 2>&1', \escapeshellarg($client_name));
   $ret = null;
   $output_arr = null;
   \exec($cmd, $output_arr, $ret);
 
-  if ($ret !== 0) {
+  if ($ret === 0) {
+    return $client_name;
+  } else {
+    return null;
+  }
+}
+
+function typecheck_impl(string $input_client_name): TypecheckResult {
+  $client_name = locate_hh($input_client_name);
+
+  if (!$client_name) {
     $error_text = \sprintf(
       'Hack typechecking failed: typechecker command not found: %s',
-      $client_name,
+      $input_client_name,
     );
 
     return new TypecheckResult(TypecheckStatus::COMMAND_NOT_FOUND, $error_text);
@@ -42,16 +72,14 @@ function typecheck_impl(string $client_name): TypecheckResult {
   $output_arr = null;
   $output = \exec($cmd, $output_arr, $ret);
 
-  // 4 -> busy
-  // 6 -> just started up
-  // 7 -> still starting up
-  //
-  // Yes this is terrible, one of these days I'll get around to fixing up the
-  // hh_client return codes.
-  if ($ret == 4 || $ret === 6 || $ret == 7) {
+  // 7 -> timeout, or ran out of retries
+  if ($ret == 7) {
     return new TypecheckResult(
       TypecheckStatus::SERVER_BUSY,
-      'Hack typechecking failed: server not ready'
+      'Hack typechecking failed: server not ready. Unless you have run '.
+      '"hh_client" manually, you may be missing Hack type errors! Once the '.
+      'typechecker server has started up, the errors, if any, will then show '.
+      'up in this error log.'
     );
   }
 
@@ -121,6 +149,7 @@ final class TypecheckResult implements \JsonSerializable {
   public function triggerError(
     int $type_error_level = \E_RECOVERABLE_ERROR,
     int $client_error_level = \E_RECOVERABLE_ERROR,
+    int $server_busy_level = \E_WARNING,
   ): void {
     switch ($this->status) {
     case TypecheckStatus::SUCCESS:
@@ -130,6 +159,8 @@ final class TypecheckResult implements \JsonSerializable {
       \trigger_error($this->error, $type_error_level);
       break;
     case TypecheckStatus::SERVER_BUSY:
+      \trigger_error($this->error, $server_busy_level);
+      break;
     case TypecheckStatus::COMMAND_NOT_FOUND:
     case TypecheckStatus::OTHER_ERROR:
       \trigger_error($this->error, $client_error_level);

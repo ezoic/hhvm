@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,6 +24,8 @@
 #include "hphp/compiler/expression/simple_variable.h"
 #include "hphp/compiler/expression/assignment_expression.h"
 #include "hphp/compiler/option.h"
+
+#include "hphp/runtime/base/comparisons.h"
 
 using namespace HPHP;
 
@@ -63,10 +65,15 @@ static bool isEquivRedecl(const std::string &name,
       symbol->isStatic()    != modif->isStatic())
     return false;
 
-  ExpressionPtr symDeclExp =
+  auto symDeclExp =
     dynamic_pointer_cast<Expression>(symbol->getDeclaration());
   if (!exp) return !symDeclExp;
-  return exp->equals(symDeclExp);
+  Variant v1, v2;
+  auto s1 = exp->getScalarValue(v1);
+  auto s2 = symDeclExp->getScalarValue(v2);
+  if (s1 != s2) return false;
+  if (s1) return same(v1, v2);
+  return exp->getText() == symDeclExp->getText();
 }
 
 void ClassVariable::onParseRecur(AnalysisResultConstPtr ar,
@@ -113,10 +120,9 @@ void ClassVariable::onParseRecur(AnalysisResultConstPtr ar,
     VariableTablePtr variables = scope->getVariables();
     ExpressionPtr exp = (*m_declaration)[i];
     if (exp->is(Expression::KindOfAssignmentExpression)) {
-      AssignmentExpressionPtr assignment =
-        dynamic_pointer_cast<AssignmentExpression>(exp);
+      auto assignment = dynamic_pointer_cast<AssignmentExpression>(exp);
       ExpressionPtr var = assignment->getVariable();
-      const std::string &name =
+      const auto& name =
         dynamic_pointer_cast<SimpleVariable>(var)->getName();
       if (variables->isPresent(name)) {
         exp->parseTimeFatal(fs,
@@ -135,7 +141,7 @@ void ClassVariable::onParseRecur(AnalysisResultConstPtr ar,
                             "Cannot redeclare %s::$%s",
                             scope->getOriginalName().c_str(), name.c_str());
       } else {
-        variables->add(name, Type::Null, false, ar, exp, m_modifiers);
+        variables->add(name, false, ar, exp, m_modifiers);
       }
     }
   }
@@ -148,25 +154,24 @@ void ClassVariable::onParseRecur(AnalysisResultConstPtr ar,
 
 void ClassVariable::analyzeProgram(AnalysisResultPtr ar) {
   m_declaration->analyzeProgram(ar);
-  AnalysisResult::Phase phase = ar->getPhase();
+  auto phase = ar->getPhase();
   if (phase != AnalysisResult::AnalyzeAll) {
     return;
   }
-  ClassScopePtr scope = getClassScope();
+  auto scope = getClassScope();
   for (int i = 0; i < m_declaration->getCount(); i++) {
-    ExpressionPtr exp = (*m_declaration)[i];
+    auto exp = (*m_declaration)[i];
     bool error;
     if (exp->is(Expression::KindOfAssignmentExpression)) {
-      AssignmentExpressionPtr assignment =
+      auto assignment =
         dynamic_pointer_cast<AssignmentExpression>(exp);
-      SimpleVariablePtr var =
+      auto var =
         dynamic_pointer_cast<SimpleVariable>(assignment->getVariable());
-      ExpressionPtr value = assignment->getValue();
+      auto value = assignment->getValue();
       scope->getVariables()->setClassInitVal(var->getName(), value);
       error = scope->getVariables()->markOverride(ar, var->getName());
     } else {
-      SimpleVariablePtr var =
-        dynamic_pointer_cast<SimpleVariable>(exp);
+      auto var = dynamic_pointer_cast<SimpleVariable>(exp);
       error = scope->getVariables()->markOverride(ar, var->getName());
       scope->getVariables()->setClassInitVal(var->getName(),
                                              makeConstant(ar, "null"));
@@ -188,8 +193,7 @@ void ClassVariable::addTraitPropsToScope(AnalysisResultPtr ar,
     SimpleVariablePtr var;
     ExpressionPtr value;
     if (exp->is(Expression::KindOfAssignmentExpression)) {
-      AssignmentExpressionPtr assignment =
-        dynamic_pointer_cast<AssignmentExpression>(exp);
+      auto assignment = dynamic_pointer_cast<AssignmentExpression>(exp);
       var = dynamic_pointer_cast<SimpleVariable>(assignment->getVariable());
       value = assignment->getValue();
     } else {
@@ -197,7 +201,7 @@ void ClassVariable::addTraitPropsToScope(AnalysisResultPtr ar,
       value = makeConstant(ar, "null");
     }
 
-    const string &name = var->getName();
+    auto const& name = var->getName();
     Symbol *sym;
     ClassScopePtr prevScope = variables->isPresent(name) ? scope :
       scope->getVariables()->findParent(ar, name, sym);
@@ -209,7 +213,7 @@ void ClassVariable::addTraitPropsToScope(AnalysisResultPtr ar,
       m_declaration->removeElement(i--);
     } else {
       if (prevScope != scope) { // Property is new or override, so add it
-        variables->add(name, Type::Variant, false, ar, exp, m_modifiers);
+        variables->add(name, false, ar, exp, m_modifiers);
         variables->getSymbol(name)->setValue(exp);
         variables->setClassInitVal(name, value);
         variables->markOverride(ar, name);
@@ -253,37 +257,18 @@ void ClassVariable::setNthKid(int n, ConstructPtr cp) {
 }
 
 StatementPtr ClassVariable::preOptimize(AnalysisResultConstPtr ar) {
-  ClassScopePtr scope = getClassScope();
+  auto scope = getClassScope();
   for (int i = 0; i < m_declaration->getCount(); i++) {
-    ExpressionPtr exp = (*m_declaration)[i];
+    auto exp = (*m_declaration)[i];
     if (exp->is(Expression::KindOfAssignmentExpression)) {
-      AssignmentExpressionPtr assignment =
-        dynamic_pointer_cast<AssignmentExpression>(exp);
-      SimpleVariablePtr var =
+      auto assignment = dynamic_pointer_cast<AssignmentExpression>(exp);
+      auto var =
         dynamic_pointer_cast<SimpleVariable>(assignment->getVariable());
-      ExpressionPtr value = assignment->getValue();
+      auto value = assignment->getValue();
       scope->getVariables()->setClassInitVal(var->getName(), value);
     }
   }
   return StatementPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ClassVariable::outputCodeModel(CodeGenerator &cg) {
-  auto numProps = m_typeConstraint.empty() ? 3 : 4;
-  cg.printObjectHeader("ClassVariableStatement", numProps);
-  cg.printPropertyHeader("modifiers");
-  m_modifiers->outputCodeModel(cg);
-  if (!m_typeConstraint.empty()) {
-    cg.printPropertyHeader("typeAnnotation");
-    cg.printTypeExpression(m_typeConstraint);
-  }
-  cg.printPropertyHeader("expressions");
-  cg.printExpressionVector(m_declaration);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,7 +21,7 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 inline void* ExecutionContext::operator new(size_t s) {
-  return smart_malloc(s);
+  return req::malloc(s);
 }
 
 inline void* ExecutionContext::operator new(size_t s, void* p) {
@@ -29,7 +29,7 @@ inline void* ExecutionContext::operator new(size_t s, void* p) {
 }
 
 inline void ExecutionContext::operator delete(void* p) {
-  smart_free(p);
+  req::free(p);
 }
 
 inline Transport* ExecutionContext::getTransport() {
@@ -122,14 +122,6 @@ inline void ExecutionContext::setTimeZone(const String& timezone) {
   m_timezone = timezone;
 }
 
-inline String ExecutionContext::getDefaultTimeZone() const {
-  return m_timezoneDefault;
-}
-
-inline void ExecutionContext::setDefaultTimeZone(const String& timezone) {
-  m_timezoneDefault = timezone;
-}
-
 inline bool ExecutionContext::getThrowAllErrors() const {
   return m_throwAllErrors;
 }
@@ -147,11 +139,11 @@ inline void ExecutionContext::setExitCallback(Variant callback) {
 }
 
 inline void
-ExecutionContext::setStreamContext(const SmartPtr<StreamContext>& context) {
+ExecutionContext::setStreamContext(const req::ptr<StreamContext>& context) {
   m_streamContext = context;
 }
 
-inline const SmartPtr<StreamContext>& ExecutionContext::getStreamContext() {
+inline const req::ptr<StreamContext>& ExecutionContext::getStreamContext() {
   return m_streamContext;
 }
 

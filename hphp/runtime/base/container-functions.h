@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,7 +17,7 @@
 #define incl_HPHP_CONTAINER_FUNCTIONS_H_
 
 #include "hphp/runtime/base/type-variant.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 
 namespace HPHP {
 
@@ -35,7 +35,7 @@ inline bool isContainer(const Variant& v) {
 
 inline bool isContainerOrNull(const Cell c) {
   assert(cellIsPlausible(c));
-  return IS_NULL_TYPE(c.m_type) || c.m_type == KindOfArray ||
+  return isNullType(c.m_type) || c.m_type == KindOfArray ||
          (c.m_type == KindOfObject && c.m_data.pobj->isCollection());
 }
 

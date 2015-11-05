@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,15 +7,13 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
-open Utils
+open Core
 open Typing_defs
+open Utils
 
 module Env = Typing_env
 module TUtils = Typing_utils
-module TDef = Typing_tdef
-module Inst = Typing_instantiate
 module TUEnv = Typing_unification_env
-module TAccess = Typing_taccess
 
 (* Most code -- notably the cases in unify_ -- do *not* need to thread through
  * the uenv, since for example just because we know an array<foo, bar> can't
@@ -46,7 +44,8 @@ and unify_with_uenv env (uenv1, ty1) (uenv2, ty2) =
       let p1 = TUtils.find_pos (Reason.to_pos r) tyl in
       let str_ty = Typing_print.error ty_ in
       let r = Reason.Rcoerced (p1, env.Env.pos, str_ty) in
-      let env = List.fold_left (fun env x -> TUtils.sub_type env ty x) env tyl in
+      let env = List.fold_left tyl
+        ~f:(fun env x -> TUtils.sub_type env ty x) ~init:env in
       env, (r, ty_)
   | (_, Toption ty1), _ when uenv1.TUEnv.non_null ->
       unify_with_uenv env (uenv1, ty1) (uenv2, ty2)
@@ -91,23 +90,55 @@ and unify_var env (r1, uenv1, n1) (r2, uenv2, n2) =
 and unify_ env r1 ty1 r2 ty2 =
   match ty1, ty2 with
   | Tprim x, Tprim y ->
-      (match x, y with
-      | x, y when x = y ->
-          env, Tprim x
-      | _ ->
-          TUtils.uerror r1 ty1 r2 ty2;
-          env, Tany
-      )
-  | Tarray (None, None), (Tarray _ as ty)
-  | (Tarray _ as ty), Tarray (None, None) ->
+    if x == y then env, Tprim x
+    else
+      let () = TUtils.uerror r1 ty1 r2 ty2 in
+      env, Tany
+  | Tarraykind (AKany | AKempty), (Tarraykind _ as ty)
+  | (Tarraykind _ as ty), Tarraykind (AKany | AKempty) ->
       env, ty
-  | Tarray (Some ty1, None), Tarray (Some ty2, None) ->
+  | Tarraykind AKvec ty1, Tarraykind AKvec ty2 ->
       let env, ty = unify env ty1 ty2 in
-      env, Tarray (Some ty, None)
-  | Tarray (Some ty1, Some ty2), Tarray (Some ty3, Some ty4) ->
+      env, Tarraykind (AKvec ty)
+  | Tarraykind AKmap (ty1, ty2), Tarraykind AKmap (ty3, ty4) ->
       let env, ty1 = unify env ty1 ty3 in
       let env, ty2 = unify env ty2 ty4 in
-      env, Tarray (Some ty1, Some ty2)
+      env, Tarraykind (AKmap (ty1, ty2))
+  | Tarraykind (AKvec _ | AKmap _), Tarraykind (AKshape _ | AKtuple _)->
+    unify_ env r2 ty2 r1 ty1
+  | Tarraykind AKshape fdm1, Tarraykind (AKvec _ | AKmap _) ->
+    Typing_arrays.fold_akshape_as_akmap_with_acc begin fun env ty2 (r1, ty1) ->
+      unify_ env r1 ty1 r2 ty2
+    end env ty2 r1 fdm1
+  | Tarraykind AKtuple fields, Tarraykind (AKvec _ | AKmap _) ->
+    Typing_arrays.fold_aktuple_as_akvec_with_acc begin fun env ty2 (r1, ty1) ->
+      unify_ env r1 ty1 r2 ty2
+    end env ty2 r1 fields
+  | Tarraykind (AKshape fdm1), Tarraykind (AKshape fdm2) ->
+    let env, fdm = Nast.ShapeMap.fold begin fun k (tk1, tv1) (env, fdm) ->
+      match Nast.ShapeMap.get k fdm2 with
+        | Some (tk2, tv2) ->
+          let env, tk = unify env tk1 tk2 in
+          let env, tv = unify env tv1 tv2 in
+          env, (Nast.ShapeMap.add k (tk, tv) fdm)
+        | None -> env, (Nast.ShapeMap.add k (tk1, tv1) fdm)
+      end fdm1 (env, fdm2) in
+    env, Tarraykind (AKshape fdm)
+  (* We allow tuple-like arrays of different lengths to unify (unify the common
+   * prefix, and append the remaining suffix), because the worst thing that can
+   * happen if we don't do this is array get returning null. But that is true
+   * for any PHP array get operation - if the key is not there, you will get
+   * null even when the value type is not nullable, so we will allow it here
+   * too. *)
+  | Tarraykind (AKtuple fields1), Tarraykind (AKtuple fields2) ->
+    let env, fields = IMap.fold begin fun k ty1 (env, fields) ->
+      match IMap.get k fields2 with
+        | Some ty2 ->
+          let env, ty = unify env ty1 ty2 in
+          env, (IMap.add k ty fields)
+        | None -> env, (IMap.add k ty1 fields)
+      end fields1 (env, fields2) in
+    env, Tarraykind (AKtuple fields)
   | Tfun ft1, Tfun ft2 ->
       let env, ft = unify_funs env r1 ft1 r2 ft2 in
       env, Tfun ft
@@ -116,12 +147,12 @@ and unify_ env r1 ty1 r2 ty2 =
         (* We handle the case where a generic A<T> is used as A *)
         let argl1 =
           if argl1 = [] && not (Env.is_strict env)
-          then List.map (fun _ -> (r1, Tany)) argl2
+          then List.map argl2 (fun _ -> (r1, Tany))
           else argl1
         in
         let argl2 =
           if argl2 = [] && not (Env.is_strict env)
-          then List.map (fun _ -> (r1, Tany)) argl1
+          then List.map argl1 (fun _ -> (r1, Tany))
           else argl2
         in
         if List.length argl1 <> List.length argl2
@@ -170,7 +201,7 @@ and unify_ env r1 ty1 r2 ty2 =
         | None -> env, None
         | Some (env, cstr) -> env, Some cstr in
       env, Tabstract (ak1, tcstr)
-  | Tabstract (AKdependent (_, _),
+  | Tabstract (AKdependent (expr_dep, _),
       Some (_, Tclass ((_, x) as id, _) as ty)), _ ->
       let class_ = Env.get_class env x in
       (* For final class C, there is no difference between abstract<X> and X.
@@ -183,23 +214,28 @@ and unify_ env r1 ty1 r2 ty2 =
           env, snd ty
       | _ ->
           (Errors.try_when
-             (fun () -> TUtils.uerror r1 ty1 r2 ty2)
+             (fun () -> TUtils.simplified_uerror env (r1, ty1) (r2, ty2))
              ~when_: begin fun () ->
                match ty2 with
                | Tclass ((_, y), _) -> y = x
-               | Tany | Tmixed | Tarray (_, _) | Tprim _
+               | Tany | Tmixed | Tarraykind _ | Tprim _
                | Toption _ | Tvar _ | Tabstract (_, _) | Ttuple _
                | Tanon (_, _) | Tfun _ | Tunresolved _ | Tobject
                | Tshape _ -> false
              end
-             ~do_:(fun error -> Errors.this_final id (Reason.to_pos r1) error)
+             ~do_: begin fun error ->
+               if expr_dep = `cls x then
+                 Errors.exact_class_final id (Reason.to_pos r2) error
+               else
+                 Errors.this_final id (Reason.to_pos r2) error
+             end
           );
           env, Tany
         )
   | _, Tabstract (AKdependent (_, _), Some (_, Tclass _)) ->
       unify_ env r2 ty2 r1 ty1
-  | (Ttuple _ as ty), Tarray (None, None)
-  | Tarray (None, None), (Ttuple _ as ty) ->
+  | (Ttuple _ as ty), Tarraykind (AKany | AKempty)
+  | Tarraykind (AKany | AKempty), (Ttuple _ as ty) ->
       env, ty
   | Ttuple tyl1, Ttuple tyl2 ->
       let size1 = List.length tyl1 in
@@ -217,7 +253,13 @@ and unify_ env r1 ty1 r2 ty2 =
         env, Ttuple tyl
   | Tmixed, Tmixed -> env, Tmixed
   | Tanon (_, id1), Tanon (_, id2) when id1 = id2 -> env, ty1
-  | Tanon _, Tanon _ -> env, Tunresolved [r1, ty1; r2, ty2]
+  | Tanon _, Tanon _ ->
+      (* This could be smarter, but the only place where we currently compare
+       * two anonymous functions is when trying to normalize intersection -
+       * saying that they never unify will just keep the intersection
+       * unchanged, which is always a valid option. *)
+      TUtils.uerror r1 ty1 r2 ty2;
+      env, Tany
   | Tfun ft, Tanon (anon_arity, id)
   | Tanon (anon_arity, id), Tfun ft ->
       (match Env.get_anonymous env id with
@@ -236,14 +278,6 @@ and unify_ env r1 ty1 r2 ty2 =
   | Tobject, Tclass _
   | Tclass _, Tobject -> env, Tobject
   | Tshape (fields_known1, fdm1), Tshape (fields_known2, fdm2)  ->
-      if fields_known1 <> fields_known2 then begin
-        let pos1 = Reason.to_pos r1 in
-        let pos2 = Reason.to_pos r2 in
-        if not fields_known1 then
-          Errors.shape_fields_unknown pos1 pos2
-        else
-          Errors.shape_fields_unknown pos2 pos1
-      end;
       let on_common_field (env, acc) name ty1 ty2 =
         let env, ty = unify env ty1 ty2 in
         env, Nast.ShapeMap.add name ty acc in
@@ -259,8 +293,10 @@ and unify_ env r1 ty1 r2 ty2 =
         ~on_common_field
         ~on_missing_optional_field
         (env, res) (r2, fields_known2, fdm2) (r1, fields_known1, fdm1) in
-      env, Tshape (fields_known1 && fields_known2, res)
-  | (Tany | Tmixed | Tarray (_, _) | Tprim _ | Toption _
+        (* After doing apply_shape in both directions we can be sure that
+         * fields_known1 = fields_known2 *)
+      env, Tshape (fields_known1, res)
+  | (Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
       | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
       | Tfun _ | Tunresolved _ | Tobject | Tshape _), _ ->
         (* Make sure to add a dependency on any classes referenced here, even if
@@ -306,7 +342,7 @@ and unify_ env r1 ty1 r2 ty2 =
           | _ -> () in
         add env ty1;
         add env ty2;
-        TUtils.uerror r1 ty1 r2 ty2;
+        TUtils.simplified_uerror env (r1, ty1) (r2, ty2);
         env, Tany
 
 and unify_arities ~ellipsis_is_variadic anon_arity func_arity : bool =

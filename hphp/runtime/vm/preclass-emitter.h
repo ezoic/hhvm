@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,7 @@
 #define incl_HPHP_VM_CLASS_EMIT_H_
 
 #include "hphp/runtime/base/repo-auth-type.h"
-#include "hphp/runtime/base/types.h"
+#include "hphp/runtime/base/array-data.h"
 
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
@@ -188,10 +188,11 @@ class PreClassEmitter {
   const Prop& lookupProp(const StringData* propName) const;
   bool addConstant(const StringData* n, const StringData* typeConstraint,
                    const TypedValue* val, const StringData* phpCode,
-                   const bool typeConst);
+                   const bool typeConst = false,
+                   const Array typeStructure = Array::Create());
   bool addAbstractConstant(const StringData* n,
                            const StringData* typeConstraint,
-                           const bool typeConst);
+                           const bool typeConst = false);
   void addUsedTrait(const StringData* traitName);
   void addClassRequirement(const PreClass::ClassRequirement req) {
     m_requirements.push_back(req);

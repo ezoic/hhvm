@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -51,7 +51,6 @@ class apcExtension final : public Extension {
   static int TTLLimit;
   static bool UseFileStorage;
   static int64_t FileStorageChunkSize;
-  static int64_t FileStorageMaxSize;
   static std::string FileStoragePrefix;
   static int FileStorageAdviseOutPeriod;
   static std::string FileStorageFlagKey;
@@ -175,8 +174,7 @@ String apc_reserialize(const String& str);
 
 ///////////////////////////////////////////////////////////////////////////////
 // debugging support
-bool apc_dump(const char *filename, bool keyOnly, bool metaDump,
-              int waitSeconds);
+bool apc_dump(const char *filename, bool keyOnly, bool metaDump);
 size_t get_const_map_size();
 bool apc_get_random_entries(std::ostream &out, uint32_t count);
 

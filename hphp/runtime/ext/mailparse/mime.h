@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -39,7 +39,7 @@ public:
     DecodeNoBody    = 4,  /* don't include the body */
   };
 
-  static bool ProcessLine(SmartPtr<MimePart> workpart, const String& line);
+  static bool ProcessLine(req::ptr<MimePart> workpart, const String& line);
 
 public:
   DECLARE_RESOURCE_ALLOCATION_NO_SWEEP(MimePart);
@@ -47,8 +47,9 @@ public:
   MimePart();
 
   CLASSNAME_IS("mailparse_mail_structure")
-  // overriding ResourceData
-  virtual const String& o_getClassNameHook() const { return classnameof(); }
+  const String& o_getClassNameHook() const override {
+    return classnameof();
+  }
 
   bool parse(const char *buf, int bufsize);
   Variant extract(const Variant& filename, const Variant& callbackfunc, int decode,
@@ -82,13 +83,11 @@ private:
                          int charset_p, int prevcharset_p);
   };
 
-  template <typename F> friend void scan(const MimePart::MimeHeader&, F&);
-
 private:
-  static void UpdatePositions(SmartPtr<MimePart> part, int newendpos,
+  static void UpdatePositions(req::ptr<MimePart> part, int newendpos,
                               int newbodyend, int deltanlines);
 
-  SmartPtr<MimePart> m_parent;
+  req::ptr<MimePart> m_parent;
   Array  m_children;   /* child parts */
 
   int m_startpos, m_endpos;   /* offsets of this part in the message */
@@ -121,13 +120,13 @@ private:
 
     String workbuf;
     String headerbuf;
-    SmartPtr<MimePart> lastpart;
+    req::ptr<MimePart> lastpart;
   } m_parsedata;
 
-  int extractImpl(int decode, SmartPtr<File> src);
-  SmartPtr<MimePart> createChild(int startpos, bool inherit);
+  int extractImpl(int decode, req::ptr<File> src);
+  req::ptr<MimePart> createChild(int startpos, bool inherit);
   bool processHeader();
-  const SmartPtr<MimePart>& getParent() { return m_parent; }
+  const req::ptr<MimePart>& getParent() { return m_parent; }
 
   void decoderPrepare(bool do_decode);
   void decoderFeed(const String& str);

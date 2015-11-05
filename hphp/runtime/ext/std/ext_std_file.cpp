@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -35,10 +35,9 @@
 #include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/thread-info.h"
-#include "hphp/runtime/base/thread-init-fini.h"
 #include "hphp/runtime/base/user-stream-wrapper.h"
 #include "hphp/runtime/base/zend-scanf.h"
-#include "hphp/runtime/ext/ext_hash.h"
+#include "hphp/runtime/ext/hash/ext_hash.h"
 #include "hphp/runtime/ext/std/ext_std_options.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/server/static-content-cache.h"
@@ -181,7 +180,7 @@ static int statSyscall(
     const String& path,
     struct stat* buf,
     bool useFileCache = false) {
-  bool isRelative = path.charAt(0) != '/';
+  bool isRelative = !FileUtil::isAbsolutePath(path.slice());
   int pathIndex = 0;
   Stream::Wrapper* w = Stream::getWrapperFromURI(path, &pathIndex);
   if (!w) return -1;
@@ -189,8 +188,7 @@ static int statSyscall(
   auto canUseFileCache = useFileCache && isFileStream;
   if (isRelative && !pathIndex) {
     auto fullpath = g_context->getCwd() + String::FromChar('/') + path;
-    if (!ThreadInfo::s_threadInfo->m_reqInjectionData.hasSafeFileAccess() &&
-        !canUseFileCache) {
+    if (!RID().hasSafeFileAccess() && !canUseFileCache) {
       if (strlen(fullpath.data()) != fullpath.size()) return ENOENT;
       return ::stat(fullpath.data(), buf);
     }
@@ -300,7 +298,7 @@ Variant HHVM_FUNCTION(popen,
                       const String& command,
                       const String& mode) {
   CHECK_PATH_FALSE(command, 1);
-  auto file = makeSmartPtr<Pipe>();
+  auto file = req::make<Pipe>();
   bool ret = CHECK_ERROR(file->open(File::TranslateCommand(command), mode));
   if (!ret) {
     raise_warning("popen(%s,%s): Invalid argument",
@@ -413,7 +411,7 @@ Variant HHVM_FUNCTION(fgetss,
 
 Variant fscanfImpl(const Resource& handle,
                    const String& format,
-                   const std::vector<Variant*>& args) {
+                   const req::vector<Variant*>& args) {
   CHECK_HANDLE(handle, f);
   String line = f->readLine();
   if (line.length() == 0) {
@@ -423,18 +421,18 @@ Variant fscanfImpl(const Resource& handle,
 }
 
 TypedValue* HHVM_FN(fscanf)(ActRec* ar) {
-  Resource handle = getArg<KindOfResource>(ar, 0);
+  Resource handle{getArg<KindOfResource>(ar, 0)};
   if (ar->numArgs() < 1) {
     return arReturn(ar, init_null());
   }
-  String format = getArg<KindOfString>(ar, 1);
+  String format{getArg<KindOfString>(ar, 1)};
   if (ar->numArgs() < 2) {
     return arReturn(ar, false);
   }
-
-  std::vector<Variant*> args;
+  req::vector<Variant*> args;
+  args.reserve(ar->numArgs() - 2);
   for (int i = 2; i < ar->numArgs(); ++i) {
-    args.push_back(&getArg<KindOfRef>(ar, i));
+    args.push_back(getArg<KindOfRef>(ar, i));
   }
   return arReturn(ar, fscanfImpl(handle, format, args));
 }
@@ -521,7 +519,7 @@ bool HHVM_FUNCTION(flock,
   }
   act = flock_values[act - 1] | (operation & 4 ? LOCK_NB : 0);
   bool ret = f->lock(act, block);
-  wouldblock = block;
+  wouldblock.assignIfRef(block);
   return ret;
 }
 
@@ -539,12 +537,14 @@ Variant HHVM_FUNCTION(fputcsv,
                       const Resource& handle,
                       const Array& fields,
                       const String& delimiter /* = "," */,
-                      const String& enclosure /* = "\"" */) {
+                      const String& enclosure /* = "\"" */,
+                      const String& escape /* = "\\" */) {
   FCSV_CHECK_ARG(delimiter);
   FCSV_CHECK_ARG(enclosure);
+  FCSV_CHECK_ARG(escape);
 
   CHECK_HANDLE_RET_NULL(handle, f);
-  return f->writeCSV(fields, delimiter_char, enclosure_char);
+  return f->writeCSV(fields, delimiter_char, enclosure_char, escape_char);
 }
 
 Variant HHVM_FUNCTION(fgetcsv,
@@ -590,9 +590,21 @@ Variant HHVM_FUNCTION(file_put_contents,
                       int flags /* = 0 */,
                       const Variant& context /* = null */) {
   CHECK_PATH(filename, 1);
+
+  char mode[3] = "wb";
+  if (flags & PHP_FILE_APPEND) {
+    mode[0] = 'a';
+  } else if (flags & LOCK_EX) {
+    // Open in "create" mode (writing only, create if needed, no truncate)
+    // so that the file is not modified before we attempt to aquire the
+    // requested lock.
+    mode[0] = 'c';
+  }
+  mode[2] = '\0';
+
   auto file = File::Open(
     filename,
-    (flags & PHP_FILE_APPEND) ? "ab" : "wb",
+    mode,
     flags,
     dyn_cast_or_null<StreamContext>(context)
   );
@@ -613,6 +625,10 @@ Variant HHVM_FUNCTION(file_put_contents,
     if (!file->lock(LOCK_EX)) {
       return false;
     }
+  }
+
+  if (mode[0] == 'c') {
+    file->truncate(0);
   }
 
   int numbytes = 0;
@@ -1079,11 +1095,13 @@ static VFileType lookupVirtualFile(const String& filename) {
 
   String cwd;
   std::string root;
-  bool isRelative = (filename.charAt(0) != '/');
+  bool isRelative = !FileUtil::isAbsolutePath(filename.slice());
   if (isRelative) {
     cwd = g_context->getCwd();
     root = RuntimeOption::SourceRoot;
-    if (cwd.empty() || cwd[cwd.size() - 1] != '/') root.pop_back();
+    if (cwd.empty() || FileUtil::isDirSeparator(cwd[cwd.size() - 1])) {
+      root.pop_back();
+    }
   }
 
   if (!isRelative || !root.compare(cwd.data())) {
@@ -1218,7 +1236,14 @@ Variant HHVM_FUNCTION(readlink,
 Variant HHVM_FUNCTION(realpath,
                       const String& path) {
   CHECK_PATH(path, 1);
-  String translated = File::TranslatePath(path);
+
+  String translated;
+  if (path.empty()) {
+    translated = File::TranslatePath(g_context->getCwd());
+  } else {
+    translated = File::TranslatePath(path);
+  }
+
   if (translated.empty()) {
     return false;
   }
@@ -1505,6 +1530,10 @@ bool HHVM_FUNCTION(touch,
                    int64_t atime /* = 0 */) {
   CHECK_PATH_FALSE(filename, 1);
 
+  if (filename.empty()) {
+    return false;
+  }
+
   // If filename points to a user file, invoke UserStreamWrapper::touch(..)
   Stream::Wrapper* w = Stream::getWrapperFromURI(filename);
   auto usw = dynamic_cast<UserStreamWrapper*>(w);
@@ -1641,7 +1670,7 @@ String HHVM_FUNCTION(basename,
   const char *comp, *cend;
   comp = cend = c;
   for (int cnt = path.size(); cnt > 0; --cnt, ++c) {
-    if (*c == '/') {
+    if (FileUtil::isDirSeparator(*c)) {
       if (state == 1) {
         state = 0;
         cend = c;
@@ -1720,7 +1749,7 @@ Variant HHVM_FUNCTION(glob,
   }
 
   if (!globbuf.gl_pathc || !globbuf.gl_pathv) {
-    if (ThreadInfo::s_threadInfo->m_reqInjectionData.hasSafeFileAccess()) {
+    if (RID().hasSafeFileAccess()) {
       if (!HHVM_FN(is_dir)(work_pattern)) {
         globfree(&globbuf);
         return false;
@@ -1763,7 +1792,7 @@ Variant HHVM_FUNCTION(glob,
     return false;
   }
   // php's glob always produces an array, but Variant::Variant(CArrRef)
-  // will produce KindOfNull if given a SmartPtr wrapped around null.
+  // will produce KindOfNull if given a req::ptr wrapped around null.
   if (ret.isNull()) {
     return empty_array();
   }
@@ -1801,7 +1830,7 @@ Variant HHVM_FUNCTION(tempnam,
 Variant HHVM_FUNCTION(tmpfile) {
   FILE *f = tmpfile();
   if (f) {
-    return Variant(makeSmartPtr<PlainFile>(f));
+    return Variant(req::make<PlainFile>(f));
   }
   return false;
 }
@@ -1847,7 +1876,7 @@ bool HHVM_FUNCTION(chdir,
                    const String& directory) {
   CHECK_PATH_FALSE(directory, 1);
   if (HHVM_FN(is_dir)(directory)) {
-    g_context->setCwd(HHVM_FN(realpath)(directory));
+    g_context->setCwd(HHVM_FN(realpath)(directory).toString());
     return true;
   }
   raise_warning("No such file or directory (errno 2)");
@@ -1876,7 +1905,10 @@ struct DirectoryData final : RequestEventHandler {
   void requestShutdown() override {
     defaultDirectory = nullptr;
   }
-  SmartPtr<Directory> defaultDirectory;
+  void vscan(IMarker& mark) const override {
+    mark(defaultDirectory);
+  }
+  req::ptr<Directory> defaultDirectory;
 };
 
 IMPLEMENT_STATIC_REQUEST_LOCAL(DirectoryData, s_directory_data);
@@ -1885,7 +1917,7 @@ const StaticString
   s_handle("handle"),
   s_path("path");
 
-SmartPtr<Directory> get_dir(const Resource& dir_handle) {
+req::ptr<Directory> get_dir(const Resource& dir_handle) {
   if (dir_handle.isNull()) {
     auto defaultDir = s_directory_data->defaultDirectory;
     if (!defaultDir) {
@@ -2061,6 +2093,14 @@ void StandardExtension::initFile() {
   Native::registerConstant(s_STDIN.get(),  BuiltinFiles::GetSTDIN);
   Native::registerConstant(s_STDOUT.get(), BuiltinFiles::GetSTDOUT);
   Native::registerConstant(s_STDERR.get(), BuiltinFiles::GetSTDERR);
+
+  HHVM_RC_INT(INI_SCANNER_NORMAL, k_INI_SCANNER_NORMAL);
+  HHVM_RC_INT(INI_SCANNER_RAW,    k_INI_SCANNER_RAW);
+
+  HHVM_RC_INT(PATHINFO_BASENAME,  PHP_PATHINFO_BASENAME);
+  HHVM_RC_INT(PATHINFO_DIRNAME,   PHP_PATHINFO_DIRNAME);
+  HHVM_RC_INT(PATHINFO_EXTENSION, PHP_PATHINFO_EXTENSION);
+  HHVM_RC_INT(PATHINFO_FILENAME,  PHP_PATHINFO_FILENAME);
 
   HHVM_FE(fopen);
   HHVM_FE(popen);

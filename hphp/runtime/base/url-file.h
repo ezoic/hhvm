@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -41,6 +41,7 @@ public:
 
   void setProxy(const String& proxy_host, int proxy_port,
                 const String& proxy_user, const String& proxy_pass);
+  void setTimeout(int timeout) { m_timeout = timeout; }
   bool open(const String& filename, const String& mode) override;
   int64_t writeImpl(const char *buffer, int64_t length) override;
   bool seekable() override { return false; }

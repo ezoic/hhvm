@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -46,7 +46,7 @@ Array createImagickPixelArray(size_t num, PixelWand* wands[], bool owner) {
 }
 
 ALWAYS_INLINE
-SmartPtr<WandResource<PixelWand>> getPixelWand(const Variant& obj) {
+req::ptr<WandResource<PixelWand>> getPixelWand(const Variant& obj) {
   if (!obj.isObject()) {
     IMAGICKPIXEL_THROW("Invalid color parameter provided");
   } else if (!obj.getObjectData()->instanceof(s_ImagickPixel)) {
@@ -54,19 +54,19 @@ SmartPtr<WandResource<PixelWand>> getPixelWand(const Variant& obj) {
       "The parameter must be an instance of ImagickPixel or a string");
   } else {
     auto wand = getPixelWandResource(obj.toCObjRef());
-    return makeSmartPtr<WandResource<PixelWand>>(wand->getWand(), false);
+    return req::make<WandResource<PixelWand>>(wand->getWand(), false);
   }
 }
 
-SmartPtr<WandResource<PixelWand>> newPixelWand() {
-  auto ret = makeSmartPtr<WandResource<PixelWand>>(NewPixelWand());
+req::ptr<WandResource<PixelWand>> newPixelWand() {
+  auto ret = req::make<WandResource<PixelWand>>(NewPixelWand());
   if (ret->getWand() == nullptr) {
     IMAGICKPIXEL_THROW("Failed to allocate PixelWand structure");
   }
   return ret;
 }
 
-SmartPtr<WandResource<PixelWand>> buildColorWand(const Variant& color) {
+req::ptr<WandResource<PixelWand>> buildColorWand(const Variant& color) {
   if (!color.isString()) {
     return getPixelWand(color);
   }
@@ -78,7 +78,7 @@ SmartPtr<WandResource<PixelWand>> buildColorWand(const Variant& color) {
   return ret;
 }
 
-SmartPtr<WandResource<PixelWand>> buildOpacityWand(const Variant& opacity) {
+req::ptr<WandResource<PixelWand>> buildOpacityWand(const Variant& opacity) {
   if (!opacity.isInteger() && !opacity.isDouble()) {
     return getPixelWand(opacity);
   }
@@ -90,7 +90,7 @@ SmartPtr<WandResource<PixelWand>> buildOpacityWand(const Variant& opacity) {
 //////////////////////////////////////////////////////////////////////////////
 // class ImagickPixel
 static bool HHVM_METHOD(ImagickPixel, clear) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   ClearPixelWand(wand->getWand());
   return true;
 }
@@ -100,7 +100,7 @@ static void HHVM_METHOD(ImagickPixel, __construct, const String& color) {
   if (wand == nullptr) {
     IMAGICKPIXEL_THROW("Failed to allocate PixelWand structure");
   } else {
-    setWandResource(s_ImagickPixel, this_, wand);
+    setWandResource(s_ImagickPixel, Object{this_}, wand);
   }
   if (!color.isNull() && !color.empty()) {
     if (PixelSetColor(wand, color.c_str()) == MagickFalse) {
@@ -120,7 +120,7 @@ static Array HHVM_METHOD(ImagickPixel, getColor, bool normalized) {
   static const StaticString key[4] = {
     s_r, s_g, s_b, s_a
   };
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
 
   ArrayInit ret(4, ArrayInit::Map{});
   for (int i = 0; i < 4; ++i) {
@@ -136,12 +136,12 @@ static Array HHVM_METHOD(ImagickPixel, getColor, bool normalized) {
 }
 
 static String HHVM_METHOD(ImagickPixel, getColorAsString) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   return convertMagickString(PixelGetColorAsString(wand->getWand()));
 }
 
 static int64_t HHVM_METHOD(ImagickPixel, getColorCount) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   return PixelGetColorCount(wand->getWand());
 }
 
@@ -160,7 +160,7 @@ static double HHVM_METHOD(ImagickPixel, getColorValue, int64_t color) {
   };
 
   if (0 <= color && color < sizeof(pixelGet) / sizeof(pixelGet[0])) {
-    auto wand = getPixelWandResource(this_);
+    auto wand = getPixelWandResource(Object{this_});
     return pixelGet[color](wand->getWand());
   } else {
     IMAGICKPIXEL_THROW("Unknown color type");
@@ -168,7 +168,7 @@ static double HHVM_METHOD(ImagickPixel, getColorValue, int64_t color) {
 }
 
 static Array HHVM_METHOD(ImagickPixel, getHSL) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   double hue, saturation, luminosity;
   PixelGetHSL(wand->getWand(), &hue, &saturation, &luminosity);
   return make_map_array(
@@ -179,7 +179,7 @@ static Array HHVM_METHOD(ImagickPixel, getHSL) {
 
 static bool isSimilar(ObjectData* this_, const Variant& color,
                       double fuzz, bool useQuantum) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   auto pixel = buildColorWand(color);
   if (useQuantum) {
     fuzz *= QuantumRange;
@@ -202,7 +202,7 @@ static bool HHVM_METHOD(ImagickPixel, isSimilar,
 
 static bool HHVM_METHOD(ImagickPixel, setColor,
     const String& color) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   if (PixelSetColor(wand->getWand(), color.c_str()) == MagickFalse) {
     IMAGICKPIXEL_THROW("Unable to set ImagickPixel color");
   }
@@ -225,7 +225,7 @@ static bool HHVM_METHOD(ImagickPixel, setColorValue,
   };
 
   if (0 <= color && color < sizeof(pixelSet) / sizeof(pixelSet[0])) {
-    auto wand = getPixelWandResource(this_);
+    auto wand = getPixelWandResource(Object{this_});
     pixelSet[color](wand->getWand(), value);
     return true;
   } else {
@@ -235,7 +235,7 @@ static bool HHVM_METHOD(ImagickPixel, setColorValue,
 
 static bool HHVM_METHOD(ImagickPixel, setHSL,
     double hue, double saturation, double luminosity) {
-  auto wand = getPixelWandResource(this_);
+  auto wand = getPixelWandResource(Object{this_});
   PixelSetHSL(wand->getWand(), hue, saturation, luminosity);
   return true;
 }

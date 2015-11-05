@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,7 +15,7 @@
 */
 
 #include "hphp/runtime/vm/jit/vasm.h"
-#include "hphp/runtime/vm/jit/vasm-emit.h"
+#include "hphp/runtime/vm/jit/vasm-gen.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-print.h"
 #include "hphp/runtime/vm/jit/vasm-unit.h"
@@ -95,6 +95,23 @@ struct Simplifier {
     return false;
   }
 
+  // Whether we have a copyargs where none of its sources is a dest.
+  bool match_copyargs_no_overlap(const Vblock& block, size_t iIdx) {
+    if (!match_instr(block, iIdx, Vinstr::copyargs)) return false;
+
+    auto const& inst = block.code[iIdx].copyargs_;
+    auto const& dsts = unit.tuples[inst.d];
+    auto const& srcs = unit.tuples[inst.s];
+    assertx(dsts.size() == srcs.size());
+
+    for (auto const src : srcs) {
+      for (auto const dst : dsts) {
+        if (src == dst) return false;
+      }
+    }
+    return true;
+  }
+
   // Perform any simplification steps for the instructions beginning
   // at the given index.  Add additional simplification matchers here.
   size_t simplify(Vout& v, const Vblock& block, size_t iIdx) {
@@ -103,6 +120,17 @@ struct Simplifier {
     if (match_setcc_xorbi(block, iIdx, inst, dst)) {
       // Rewrite setcc/xorbi pair as setcc with inverted condition.
       v << setcc{ccNegate(inst.setcc_.cc), inst.setcc_.sf, dst};
+    }
+
+    // Convert simple copyargs to a list of copies.
+    if (match_copyargs_no_overlap(block, iIdx)) {
+      auto const& inst = block.code[iIdx].copyargs_;
+      auto const& dsts = unit.tuples[inst.d];
+      auto const& srcs = unit.tuples[inst.s];
+
+      for (size_t i = 0; i < srcs.size(); ++i) {
+        v << copy{srcs[i], dsts[i]};
+      }
     }
     return iIdx;
   }

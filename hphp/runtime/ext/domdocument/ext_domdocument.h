@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -34,7 +34,7 @@ namespace HPHP {
 Variant HHVM_FUNCTION(dom_import_simplexml,
                       const Object& node);
 
-Variant php_dom_create_object(xmlNodePtr obj, SmartPtr<XMLDocumentData> doc);
+Variant php_dom_create_object(xmlNodePtr obj, req::ptr<XMLDocumentData> doc);
 
 Object newDOMDocument(bool construct = true);
 
@@ -49,13 +49,13 @@ struct DOMNode {
       m_node->clearCache();
     }
   }
-  SmartPtr<XMLDocumentData> doc() const { return m_node->doc(); }
+  req::ptr<XMLDocumentData> doc() const { return m_node->doc(); }
   XMLNode node() const { return m_node; }
   xmlNodePtr nodep() const {
     return m_node ? m_node->nodep() : nullptr;
   }
 
-  void setDoc(SmartPtr<XMLDocumentData>&& doc) {
+  void setDoc(req::ptr<XMLDocumentData>&& doc) {
     assert(m_node);
     m_node->setDoc(std::move(doc));
   }
@@ -74,7 +74,6 @@ struct DOMNode {
   void setNode(xmlNodePtr n) { setNode(libxml_register_node(n)); }
 
 private:
-  template <typename F> friend void scan(const HPHP::DOMNode&, F&);
   ObjectData* toObject() {
     return reinterpret_cast<ObjectData*>(this + 1);
   }
@@ -104,7 +103,7 @@ struct DOMIterable {
     return Native::data<DOMNode>(m_baseobj);
   }
 
-  SmartPtr<XMLDocumentData> m_doc {nullptr};
+  req::ptr<XMLDocumentData> m_doc {nullptr};
   Object m_baseobj;
   int m_nodetype;
   xmlHashTable* m_ht {nullptr};

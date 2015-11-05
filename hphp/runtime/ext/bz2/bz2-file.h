@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -35,7 +35,7 @@ public:
   const String& o_getClassNameHook() const override { return classnameof(); }
 
   BZ2File();
-  explicit BZ2File(SmartPtr<PlainFile>&& innerFile);
+  explicit BZ2File(req::ptr<PlainFile>&& innerFile);
   virtual ~BZ2File();
 
   bool open(const String& filename, const String& mode) override;
@@ -50,7 +50,7 @@ public:
 
 private:
   BZFILE * m_bzFile;
-  SmartPtr<PlainFile> m_innerFile;
+  req::ptr<PlainFile> m_innerFile;
   bool closeImpl();
 };
 

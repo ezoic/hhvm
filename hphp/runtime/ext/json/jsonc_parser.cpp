@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -28,7 +28,7 @@
 #include <json/json.h>
 #endif
 
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/ext/json/JSON_parser.h"
 #include "hphp/runtime/ext/json/ext_json.h"
 #include "hphp/runtime/base/collections.h"
@@ -100,7 +100,7 @@ Variant json_type_array_to_variant(json_object *new_obj, const bool assoc,
   Variant var, tmpvar;
   nb = json_object_array_length(new_obj);
   if (collections) {
-    var = makeSmartPtr<c_Vector>();
+    var = req::make<c_Vector>();
   } else {
     var = Array::Create();
   }
@@ -124,7 +124,7 @@ Variant json_type_object_to_variant(json_object *new_obj, const bool assoc,
     Variant       var, tmpvar;
 
   if (collections) {
-    var = makeSmartPtr<c_Map>();
+    var = req::make<c_Map>();
   } else if (assoc) {
     var = Array::Create();
   } else {

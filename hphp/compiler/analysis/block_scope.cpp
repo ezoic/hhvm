@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -44,14 +44,9 @@ BlockScope::BlockScope(const std::string &name, const std::string &docComment,
     m_effectsTag(1), m_numDepsToWaitFor(0),
     m_forceRerun(false),
     m_rescheduleFlags(0), m_selfUser(0) {
-  m_originalName = name;
-  m_name = toLower(name);
+  m_scopeName = name;
   m_variables = VariableTablePtr(new VariableTable(*this));
   m_constants = ConstantTablePtr(new ConstantTable(*this));
-
-  Lock lock(SymbolTable::AllSymbolTablesMutex);
-  SymbolTable::AllSymbolTables.push_back(m_variables);
-  SymbolTable::AllSymbolTables.push_back(m_constants);
 }
 
 void BlockScope::incLoopNestedLevel() {
@@ -116,7 +111,7 @@ ClassScopeRawPtr BlockScope::getContainingClass() {
 
 ClassScopeRawPtr BlockScope::findExactClass(ClassScopeRawPtr cls) {
   if (ClassScopeRawPtr currentCls = getContainingClass()) {
-    if (cls->getName() == currentCls->getName()) {
+    if (cls->isNamed(currentCls->getOriginalName())) {
       return currentCls;
     }
   }
@@ -134,8 +129,7 @@ bool BlockScope::hasUser(BlockScopeRawPtr user, int useKinds) const {
     }
 
     Lock lock(s_depsMutex);
-    BlockScopeRawPtrFlagsHashMap::const_iterator it =
-      m_userMap.find(user);
+    const auto it = m_userMap.find(user);
     return it != m_userMap.end() && it->second & useKinds;
   }
   return true; // builtins/systems always have a user of anybody
@@ -151,13 +145,11 @@ void BlockScope::addUse(BlockScopeRawPtr user, int useKinds) {
 
     Lock lock(s_depsMutex);
     Lock l2(s_jobStateMutex);
-    std::pair<BlockScopeRawPtrFlagsHashMap::iterator,bool> val =
-      m_userMap.insert(BlockScopeRawPtrFlagsHashMap::value_type(user,
-                                                                useKinds));
+    auto val = m_userMap.emplace(user, useKinds);
     if (val.second) {
       m_orderedUsers.push_back(&*val.first);
-      user->m_orderedDeps.push_back(
-          std::make_pair(BlockScopeRawPtr(this), &(val.first->second)));
+      user->m_orderedDeps.emplace_back(BlockScopeRawPtr{this},
+                                       &(val.first->second));
       assert(user->getMark() != BlockScope::MarkReady &&
              user->getMark() != BlockScope::MarkWaiting);
     } else {
@@ -171,21 +163,7 @@ void BlockScope::addUpdates(int f) {
   m_updated |= f;
 }
 
-ModifierExpressionPtr
-BlockScope::setModifiers(ModifierExpressionPtr modifiers) {
-  ModifierExpressionPtr oldModifiers = m_modifiers;
-  m_modifiers = modifiers;
-  return oldModifiers;
-}
-
 void BlockScope::outputPHP(CodeGenerator &cg, AnalysisResultPtr ar) {
   m_constants->outputPHP(cg, ar);
   m_variables->outputPHP(cg, ar);
-}
-
-int BlockScope::ScopeCompare::cmp(const BlockScopeRawPtr &p1,
-                                  const BlockScopeRawPtr &p2) const {
-  int d1 = p1->m_kind - p2->m_kind;
-  if (d1) return d1;
-  return strcasecmp(p1->getName().c_str(), p2->getName().c_str());
 }

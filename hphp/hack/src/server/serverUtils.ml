@@ -8,11 +8,12 @@
  *
  *)
 
-type client = {
-  ic : in_channel;
-  oc : out_channel;
-  close : unit -> unit;
-}
+let shutdown_client (_ic, oc) =
+  let cli = Unix.descr_of_out_channel oc in
+  try
+    Unix.shutdown cli Unix.SHUTDOWN_ALL;
+    close_out oc
+  with _ -> ()
 
 type connection_state =
   | Connection_ok
@@ -26,12 +27,11 @@ type file_input =
   | FileName of string
   | FileContent of string
 
-let die_nicely genv =
+let die_nicely () =
   HackEventLogger.killed ();
   Printf.printf "Status: Error\n";
   Printf.printf "Sent KILL command by client. Dying.\n";
-  (match genv.ServerEnv.dfind with
-  | Some handle -> Unix.kill (DfindLib.pid handle) Sys.sigterm;
-  | None -> ()
-  );
+  (* XXX when we exit, the dfind process will attempt to read from the broken
+   * pipe and then exit with SIGPIPE, so it is unnecessary to kill it
+   * explicitly *)
   exit 0

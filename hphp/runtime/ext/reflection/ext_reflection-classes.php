@@ -1070,3 +1070,71 @@ class ReflectionExtension implements Reflector {
     return $this->info['info'];
   }
 }
+
+namespace HH {
+  /* These enum values correspond to the 'kind' field in the
+   * TypeStructure shape returned by type_structure() or
+   * ReflectionTypeConstant::getTypeStructure(). The following enum
+   * values are replicated in hphp/runtime/base/type-structure.h
+   */
+  enum TypeStructureKind: int {
+    OF_VOID = 0;
+    OF_INT = 1;
+    OF_BOOL = 2;
+    OF_FLOAT = 3;
+    OF_STRING = 4;
+    OF_RESOURCE = 5;
+    OF_NUM = 6;
+    OF_ARRAYKEY = 7;
+    OF_NORETURN = 8;
+    OF_MIXED = 9;
+    OF_TUPLE = 10;
+    OF_FUNCTION = 11;
+    OF_ARRAY = 12;
+    OF_GENERIC = 13;
+    OF_SHAPE = 14;
+    OF_CLASS = 15;
+    OF_INTERFACE = 16;
+    OF_TRAIT = 17;
+    OF_ENUM = 18;
+    OF_UNRESOLVED = 101; // for type aliases only
+  }
+
+  type TypeStructure<T> = shape(
+    'kind' => TypeStructureKind,
+    'nullable' => ?bool,
+    // classname for classes, interfaces, enums, or traits
+    'classname' => ?classname<T>,
+    // for tuples
+    'elem_types' => ?array,
+    // for functions
+    'param_types' => ?array,
+    'return_type' => ?array,
+    // for arrays, classes
+    'generic_types' => ?array,
+    // for shapes
+    'fields' => ?array,
+    // name for generics (type variables)
+    'name' => ?string,
+    // for type aliases
+    'alias' => ?string,
+  );
+
+  /**
+   * Retrieves the TypeStructure for a type constant or a type alias.
+   *
+   * @cls_or_obj    mixed    An instance of a class or the name of a class. If
+   *                         @cns_name is null or not provided, then this must
+   *                         the name of a type alias.
+   *
+   * @cns_name      ?string  If @cls_or_obj references a class, then this is
+   *                         the name of the type constant whose TypeStructure
+   *                         is being retrieved. This is null when retrieving
+   *                         the type constant for a type alias.
+   *
+   * @return        array    The resolved type structure for either a type
+   *                         constant or a type alias.
+   */
+  <<__Native>>
+  function type_structure(mixed $cls_or_obj, ?string $cns_name = null): array;
+}

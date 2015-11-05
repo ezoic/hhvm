@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -50,19 +50,17 @@ IRGS::IRGS(TransContext context, TransFlags flags)
 std::string show(const IRGS& irgs) {
   std::ostringstream out;
   auto header = [&](const std::string& str) {
-    out << folly::format("+{:-^82}+\n", str);
+    out << folly::format("+{:-^102}+\n", str);
   };
 
   const int32_t frameCells = irgen::resumed(irgs)
     ? 0
     : irgen::curFunc(irgs)->numSlotsInFrame();
-  auto const stackDepth = irgs.irb->syncedSpLevel().offset +
-      safe_cast<int32_t>(irgs.irb->evalStack().size()) -
-      safe_cast<int32_t>(irgs.irb->stackDeficit()) - frameCells;
+  auto const stackDepth = irgs.irb->syncedSpLevel().offset - frameCells;
   assertx(stackDepth >= 0);
   auto spOffset = stackDepth;
   auto elem = [&](const std::string& str) {
-    out << folly::format("| {:<80} |\n",
+    out << folly::format("| {:<100} |\n",
                          folly::format("{:>2}: {}",
                                        stackDepth - spOffset, str));
     assertx(spOffset > 0);
@@ -73,7 +71,7 @@ std::string show(const IRGS& irgs) {
   auto checkFpi = [&]() {
     if (fpi && spOffset + frameCells == fpi->m_fpOff) {
       auto fpushOff = fpi->m_fpushOff;
-      auto after = fpushOff + instrLen((Op*)irgen::curUnit(irgs)->at(fpushOff));
+      auto after = fpushOff + instrLen(irgen::curUnit(irgs)->at(fpushOff));
       std::ostringstream msg;
       msg << "ActRec from ";
       irgen::curUnit(irgs)->prettyPrint(
@@ -95,17 +93,9 @@ std::string show(const IRGS& irgs) {
     return false;
   };
 
-  header(folly::format(" {} stack element(s); m_evalStack: ",
+  header(folly::format(" {} stack element(s): ",
                        stackDepth).str());
-  for (auto i = 0; i < irgs.irb->evalStack().size(); ++i) {
-    while (checkFpi());
-    auto const value = irgen::top(const_cast<IRGS&>(irgs),
-                                  BCSPOffset{i}, DataTypeGeneric);
-    elem(value->inst()->toString());
-  }
-
-  header(" in-memory ");
-  for (auto i = irgs.irb->evalStack().size(); spOffset > 0; ) {
+  for (auto i = 0; spOffset > 0; ) {
     assertx(i < irgen::curFunc(irgs)->maxStackCells());
     if (checkFpi()) {
       i += kNumActRecCells;
@@ -121,15 +111,21 @@ std::string show(const IRGS& irgs) {
       DataTypeGeneric
     );
 
-    std::ostringstream elemStr;
+    std::string elemStr;
     if (stkTy == TStkElem) {
-      elem("unknown");
+      elemStr = "unknown";
     } else if (stkVal) {
-      elem(stkVal->inst()->toString());
+      elemStr = stkVal->inst()->toString();
     } else {
-      elem(stkTy.toString());
+      elemStr = stkTy.toString();
     }
 
+    auto const predicted = irgen::predictedTypeFromStack(irgs, BCSPOffset{i});
+    if (predicted < stkTy) {
+      elemStr += folly::sformat(" (predict: {})", predicted);
+    }
+
+    elem(elemStr);
     ++i;
   }
   header("");
@@ -143,13 +139,17 @@ std::string show(const IRGS& irgs) {
                                     : irgs.irb->localType(i, DataTypeGeneric);
     auto str = localValue ? localValue->inst()->toString()
                           : localTy.toString();
+    auto const predicted = irgs.irb->predictedLocalType(i);
+    if (predicted < localTy) str += folly::sformat(" (predict: {})", predicted);
+
     if (localTy <= TBoxedCell) {
       auto const pred = irgs.irb->predictedInnerType(i);
       if (pred != TBottom) {
         str += folly::sformat(" (predict inner: {})", pred.toString());
       }
     }
-    out << folly::format("| {:<80} |\n",
+
+    out << folly::format("| {:<100} |\n",
                          folly::format("{:>2}: {}", i, str));
   }
   header("");

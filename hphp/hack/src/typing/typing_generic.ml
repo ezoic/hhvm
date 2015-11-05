@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Core
 open Typing_defs
 
 module Env = Typing_env
@@ -28,24 +29,33 @@ end = struct
 
   let rec ty (_, x) = ty_ x
   and ty_ = function
-    | Tabstract (AKdependent (_, _), cstr) -> ty_opt cstr
+    | Tabstract ((AKdependent (_, _) | AKenum _), cstr) -> ty_opt cstr
     | Tabstract (AKgeneric (x, _), _) -> raise (Found x)
     | Tanon _ | Tany | Tmixed | Tprim _ -> ()
-    | Tarray (ty1, ty2) ->
-        ty_opt ty1; ty_opt ty2
+    | Tarraykind akind ->
+      begin match akind with
+        | AKany -> ()
+        | AKempty -> ()
+        | AKvec tv -> ty tv
+        | AKmap (tk, tv) -> ty tk; ty tv
+        | AKshape fdm ->
+            ShapeMap.iter (fun _ (tk, tv) -> ty tk; ty tv) fdm
+        | AKtuple fields ->
+            Utils.IMap.iter (fun _ tv -> ty tv) fields
+      end
     | Tvar _ -> assert false (* Expansion got rid of Tvars ... *)
     | Toption x -> ty x
     | Tfun fty ->
-        List.iter ty (List.map snd fty.ft_params);
+        List.iter (List.map fty.ft_params snd) ty;
         ty fty.ft_ret;
         (match fty.ft_arity with
           | Fvariadic (_min, (_name, var_ty)) -> ty var_ty
           | _ -> ())
     | Tabstract (AKnewtype (_, tyl), x) ->
-        List.iter ty tyl; ty_opt x
-    | Ttuple tyl -> List.iter ty tyl
+        List.iter tyl ty; ty_opt x
+    | Ttuple tyl -> List.iter tyl ty
     | Tclass (_, tyl)
-    | Tunresolved tyl -> List.iter ty tyl
+    | Tunresolved tyl -> List.iter tyl ty
     | Tobject -> ()
     | Tshape (_, fdm) ->
         ShapeMap.iter (fun _ v -> ty v) fdm

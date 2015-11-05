@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,7 +39,6 @@
 #include "hphp/util/mutex.h"
 #include "hphp/util/functional.h"
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -63,6 +62,7 @@
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/func-inline.h"
 #include "hphp/runtime/vm/hh-utils.h"
+#include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/instance-bits.h"
 #include "hphp/runtime/vm/named-entity.h"
@@ -521,7 +521,7 @@ void Unit::loadFunc(const Func *func) {
     Debug::DebugInfo::recordDataMap(
       (char*)(intptr_t)ne->m_cachedFunc.handle(),
       (char*)(intptr_t)ne->m_cachedFunc.handle() + sizeof(void*),
-      folly::format("rds+Func-{}", func->name()->data()).str());
+      folly::format("rds+Func-{}", func->name()).str());
   }
 }
 
@@ -683,11 +683,11 @@ Class* Unit::defClass(const PreClass* preClass,
     if (RuntimeOption::EvalPerfDataMap) {
       Debug::DebugInfo::recordDataMap(
         newClass.get(), newClass.get() + 1,
-        folly::format("Class-{}", preClass->name()->data()).str());
+        folly::format("Class-{}", preClass->name()).str());
       Debug::DebugInfo::recordDataMap(
         (char*)(intptr_t)nameList->m_cachedClass.handle(),
         (char*)(intptr_t)nameList->m_cachedClass.handle() + sizeof(void*),
-        folly::format("rds+Class-{}", preClass->name()->data()).str());
+        folly::format("rds+Class-{}", preClass->name()).str());
     }
     /*
      * call setCached after adding to the class list, otherwise the
@@ -882,6 +882,7 @@ TypeAliasReq typeAliasFromClass(const TypeAlias* thisType, Class *klass) {
     req.type = AnnotType::Object;
     req.klass = klass;
   }
+  req.typeStructure = Array(thisType->typeStructure);
   return req;
 }
 
@@ -943,6 +944,22 @@ TypeAliasReq resolveTypeAlias(const TypeAlias* thisType) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+}
+
+const TypeAliasReq* Unit::loadTypeAlias(const StringData* name) {
+  auto ne = NamedEntity::get(name);
+  if (auto target = ne->getCachedTypeAlias()) {
+    return target;
+  }
+  if (AutoloadHandler::s_instance->autoloadClassOrType(
+        StrNR(const_cast<StringData*>(name))
+      )) {
+    if (auto target = ne->getCachedTypeAlias()) {
+      return target;
+    }
+  }
+
+  return nullptr;
 }
 
 void Unit::defTypeAlias(Id id) {
@@ -1027,7 +1044,7 @@ void Unit::initialMerge() {
 
   if (RuntimeOption::EvalPerfDataMap) {
     Debug::DebugInfo::recordDataMap(
-      this, this + 1, folly::format("Unit-{}", m_filepath->data()).str());
+      this, this + 1, folly::format("Unit-{}", m_filepath.get()).str());
   }
   int state = 0;
   bool needsCompact = false;
@@ -1107,6 +1124,14 @@ void Unit::initialMerge() {
           case MergeKind::UniqueDefinedClass:
           case MergeKind::Done:
             not_reached();
+          case MergeKind::TypeAlias: {
+            auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
+            if (m_typeAliases[aliasId].attrs & AttrPersistent) {
+              defTypeAlias(aliasId);
+              needsCompact = true;
+            }
+            break;
+          }
           case MergeKind::Class:
             if (static_cast<PreClass*>(obj)->attrs() & AttrUnique) {
               needsCompact = true;
@@ -1184,7 +1209,8 @@ void* Unit::replaceUnit() const {
   return const_cast<Unit*>(this);
 }
 
-static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out) {
+static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
+                               const FixedVector<TypeAlias>& aliasInfo) {
   using MergeKind = Unit::MergeKind;
 
   Func** it = in->funcHoistableBegin();
@@ -1252,6 +1278,15 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out) {
             out->mergeableObj(oix++) = (void*)
               (uintptr_t(cls) | uintptr_t(MergeKind::UniqueDefinedClass));
           }
+        } else if (out) {
+          out->mergeableObj(oix++) = obj;
+        }
+        break;
+      }
+      case MergeKind::TypeAlias: {
+        auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
+        if (aliasInfo[aliasId].attrs & AttrPersistent) {
+          delta++;
         } else if (out) {
           out->mergeableObj(oix++) = obj;
         }
@@ -1518,6 +1553,16 @@ void Unit::mergeImpl(void* tcbase, MergeInfo* mi) {
           k = MergeKind(uintptr_t(obj) & 7);
         } while (k == MergeKind::ReqDoc);
         continue;
+      case MergeKind::TypeAlias:
+        do {
+          Stats::inc(Stats::UnitMerge_mergeable);
+          Stats::inc(Stats::UnitMerge_mergeable_typealias);
+          auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
+          defTypeAlias(aliasId);
+          obj = mi->mergeableObj(++ix);
+          k = MergeKind(uintptr_t(obj) & 7);
+        } while (k == MergeKind::TypeAlias);
+        continue;
       case MergeKind::Done:
         Stats::inc(Stats::UnitMerge_mergeable, -1);
         assert((unsigned)ix == mi->m_mergeablesSize);
@@ -1535,7 +1580,7 @@ void Unit::mergeImpl(void* tcbase, MergeInfo* mi) {
              * We can also remove any Persistent Class/Func*'s,
              * and any requires of modules that are (now) empty
              */
-            size_t delta = compactMergeInfo(mi, nullptr);
+            size_t delta = compactMergeInfo(mi, nullptr, m_typeAliases);
             MergeInfo* newMi = mi;
             if (delta) {
               newMi = MergeInfo::alloc(mi->m_mergeablesSize - delta);
@@ -1547,7 +1592,7 @@ void Unit::mergeImpl(void* tcbase, MergeInfo* mi) {
              * readers. But thats ok, because it doesnt matter
              * whether they see the old contents or the new.
              */
-            compactMergeInfo(mi, newMi);
+            compactMergeInfo(mi, newMi, m_typeAliases);
             if (newMi != mi) {
               this->m_mergeInfo = newMi;
               Treadmill::deferredFree(mi);
@@ -1682,9 +1727,9 @@ void Unit::prettyPrint(std::ostream& out, PrintOpts opts) const {
 
     out << std::string(opts.indentSize, ' ')
         << std::setw(4) << (it - m_bc) << ": "
-        << instrToString((Op*)it, this)
+        << instrToString(it, this)
         << std::endl;
-    it += instrLen((Op*)it);
+    it += instrLen(it);
   }
 }
 
@@ -1705,21 +1750,20 @@ std::string Unit::toString() const {
 // Other methods.
 
 bool Unit::compileTimeFatal(const StringData*& msg, int& line) const {
-  auto entry = reinterpret_cast<const Op*>(getMain()->getEntry());
+  auto entry = getMain()->getEntry();
   auto pc = entry;
   // String <id>; Fatal;
   // ^^^^^^
-  if (*pc != Op::String) {
+  if (decode_op(pc) != Op::String) {
     return false;
   }
-  pc++;
   // String <id>; Fatal;
   //        ^^^^
   Id id = *(Id*)pc;
   pc += sizeof(Id);
   // String <id>; Fatal;
   //              ^^^^^
-  if (*pc != Op::Fatal) {
+  if (decode_op(pc) != Op::Fatal) {
     return false;
   }
   msg = lookupLitstrId(id);
@@ -1734,9 +1778,12 @@ bool Unit::parseFatal(const StringData*& msg, int& line) const {
 
   auto pc = getMain()->getEntry();
 
-  // two opcodes + String's ID
-  pc += sizeof(Id) + 2;
+  // String <id>
+  decode_op(pc);
+  pc += sizeof(Id);
 
+  // Fatal <kind>
+  decode_op(pc);
   auto kind_char = *pc;
   return kind_char == static_cast<uint8_t>(FatalOp::Parse);
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,7 +24,7 @@
 #include <proxygen/lib/http/session/HTTPSessionAcceptor.h>
 #include <proxygen/lib/services/WorkerThread.h>
 #include <proxygen/lib/ssl/SSLContextConfig.h>
-#include <thrift/lib/cpp/async/TNotificationQueue.h>
+#include <folly/io/async/NotificationQueue.h>
 
 #include <algorithm>
 #include <folly/io/async/EventBaseManager.h>
@@ -71,7 +71,7 @@ class HPHPSessionAcceptor : public proxygen::HTTPSessionAcceptor {
   ProxygenServer *m_server;
 };
 
-typedef apache::thrift::async::TNotificationQueue<ResponseMessage>
+typedef folly::NotificationQueue<ResponseMessage>
   ResponseMessageQueue;
 
 class HPHPWorkerThread : public proxygen::WorkerThread {
@@ -85,7 +85,7 @@ class HPHPWorkerThread : public proxygen::WorkerThread {
 
 class ProxygenServer : public Server,
                        public ResponseMessageQueue::Consumer,
-                       public apache::thrift::async::TAsyncTimeout,
+                       public folly::AsyncTimeout,
                        public TakeoverAgent::Callback {
  public:
   explicit ProxygenServer(const ServerOptions& options);

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -45,7 +45,7 @@ struct c_ExternalThreadEventWaitHandle final : c_WaitableWaitHandle {
   static void ti_setonfailcallback(const Variant& callback);
 
  public:
-  static SmartPtr<c_ExternalThreadEventWaitHandle>
+  static req::ptr<c_ExternalThreadEventWaitHandle>
     Create(AsioExternalThreadEvent* event, ObjectData* priv_data);
 
   c_ExternalThreadEventWaitHandle* getNextToProcess() {

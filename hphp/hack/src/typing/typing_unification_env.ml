@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -27,6 +27,11 @@ type uenv = {
    * infinitely recursive. TODO implement this as part of the aforementioned
    * "apply" function. *)
   seen_tvars: ISet.t;
+
+  (* The list of expression dependent types we have visited thus far. This is
+   * used in Typing_subtype to properly handle the 'this' type for inheritance.
+   *)
+  dep_tys: (Typing_reason.t * Typing_defs.dependent_type) list;
 }
 
-let empty = { non_null = false; seen_tvars = ISet.empty }
+let empty = { non_null = false; seen_tvars = ISet.empty; dep_tys = []; }

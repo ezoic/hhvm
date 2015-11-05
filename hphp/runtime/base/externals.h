@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,7 +25,6 @@
  * runtime/base .cpp files.
  */
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/vm/globals-array.h"
 
@@ -84,10 +83,6 @@ struct EnvConstants {
   Variant stgv_Variant[1];
 };
 extern EnvConstants* get_env_constants();
-extern String k_PHP_BINARY;
-extern String k_PHP_BINDIR;
-extern String k_PHP_OS;
-extern String k_PHP_SAPI;
 
 ///////////////////////////////////////////////////////////////////////////////
 }

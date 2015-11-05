@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -37,7 +37,7 @@ val init: config -> unit
  *)
 (*****************************************************************************)
 
-val collect: unit -> unit
+val collect: [ `gentle | `aggressive ] -> unit
 
 (*****************************************************************************)
 (* Must be called after the initialization of the hack server is over.
@@ -52,10 +52,14 @@ val init_done: unit -> unit
 (*****************************************************************************)
 val save: string -> unit
 
+val save_dep_table: string -> unit
+
 (*****************************************************************************)
 (* Loads the shared memory by reading from a file *)
 (*****************************************************************************)
 val load: string -> unit
+
+val load_dep_table: string -> unit
 
 (*****************************************************************************)
 (* The size of the dynamically allocated shared memory section *)

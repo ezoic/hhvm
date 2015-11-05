@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/sort-flags.h"
+#include "hphp/runtime/base/header-kind.h"
 
 namespace HPHP {
 
@@ -84,11 +85,12 @@ struct PackedArray {
   static ssize_t IterRewind(const ArrayData*, ssize_t pos);
   static constexpr auto ValidMArrayIter = &ArrayCommon::ValidMArrayIter;
   static bool AdvanceMArrayIter(ArrayData*, MArrayIter& fp);
-  static void CopyPackedHelper(const ArrayData* adIn, ArrayData* ad);
+  static void CopyPackedHelper(const ArrayData* adIn, ArrayData* ad,
+                               RefCount initial_count);
   static ArrayData* Copy(const ArrayData* ad);
   static ArrayData* CopyWithStrongIterators(const ArrayData*);
-  static ArrayData* NonSmartCopy(const ArrayData*);
-  static ArrayData* NonSmartCopyHelper(const ArrayData*);
+  static ArrayData* CopyStatic(const ArrayData*);
+  static ArrayData* CopyStaticHelper(const ArrayData*);
   static ArrayData* EscalateForSort(ArrayData*, SortFunction);
   static void Ksort(ArrayData*, int, bool);
   static void Sort(ArrayData*, int, bool);
@@ -119,10 +121,10 @@ struct PackedArray {
 
   /*
    * Accepts any array of any kind satisfying isVectorData() and makes a
-   * non-smart packed copy, like NonSmartCopy().
+   * static packed copy, like CopyStatic().
    */
-  static ArrayData* NonSmartConvert(const ArrayData*);
-  static ArrayData* NonSmartConvertHelper(const ArrayData*);
+  static ArrayData* ConvertStatic(const ArrayData*);
+  static ArrayData* ConvertStaticHelper(const ArrayData*);
 
   static ptrdiff_t entriesOffset();
   static uint32_t getMaxCapInPlaceFast(uint32_t cap);

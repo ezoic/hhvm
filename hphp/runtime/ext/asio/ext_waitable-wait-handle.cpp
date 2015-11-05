@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -133,7 +133,7 @@ void
 c_WaitableWaitHandle::throwCycleException(c_WaitableWaitHandle* child) const {
   assert(isDescendantOf(child));
 
-  smart::vector<std::string> exception_msg_items;
+  req::vector<std::string> exception_msg_items;
   exception_msg_items.push_back("Encountered dependency cycle.\n");
   exception_msg_items.push_back("Existing stack:\n");
 
@@ -164,7 +164,7 @@ Array c_WaitableWaitHandle::t_getdependencystack() {
   auto wait_handle = this;
   auto session = AsioSession::Get();
   while (wait_handle != nullptr) {
-    result.append(wait_handle);
+    result.append(Variant{wait_handle});
     visited.insert(wait_handle->t_getid());
     auto context_idx = wait_handle->getContextIdx();
 

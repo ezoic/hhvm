@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,10 +16,14 @@
 #ifndef incl_HPHP_ALIAS_CLASS_H_
 #define incl_HPHP_ALIAS_CLASS_H_
 
-#include <string>
-#include <cstdint>
+#include "hphp/runtime/vm/jit/alias-id-set.h"
+#include "hphp/runtime/vm/minstr-state.h"
 
 #include <folly/Optional.h>
+
+#include <bitset>
+#include <string>
+#include <cstdint>
 
 namespace HPHP { struct StringData; }
 namespace HPHP { namespace jit {
@@ -61,9 +65,12 @@ struct SSATmp;
  *      |         |            |             |         |        |
  *   FrameAny  StackAny     ElemAny       PropAny   RefAny  MIStateAny
  *      |         |          /    \          |         |        |
- *     ...       ...   ElemIAny  ElemSAny   ...       ...      ...
- *                        |         |
- *                       ...       ...
+ *     ...       ...   ElemIAny  ElemSAny   ...       ...       |
+ *                        |         |                           |
+ *                       ...       ...          ----------------+-------------
+ *                                              |         |        |         |
+ *                                         MITempBase  MITvRef  MITvRef2  MIBase
+ *
  *
  *   (*) AHeapAny contains some things other than ElemAny, PropAny and RefAny
  *       that don't have explicit nodes in the lattice yet.  (Like the
@@ -75,10 +82,9 @@ struct AliasClass;
 //////////////////////////////////////////////////////////////////////
 
 /*
- * Special data for locations known to be exactly a specific local on the frame
- * `fp'.
+ * Special data for locations known to be a set of locals on the frame `fp'.
  */
-struct AFrame { SSATmp* fp; uint32_t id; };
+struct AFrame { SSATmp* fp; AliasIdSet ids; };
 
 /*
  * A specific php iterator's position value (m_pos).
@@ -149,11 +155,6 @@ struct AStack {
 };
 
 /*
- * One of the MInstrState TypedValues, at a particular offset in bytes.
- */
-struct AMIState { int32_t offset; };
-
-/*
  * A RefData referenced by a BoxedCell.
  */
 struct ARef { SSATmp* boxed; };
@@ -172,13 +173,20 @@ struct AliasClass {
     BElemI    = 1 << 4,
     BElemS    = 1 << 5,
     BStack    = 1 << 6,
-    BMIState  = 1 << 7,
-    BRef      = 1 << 8,
+    BRef      = 1 << 7,
 
-    BElem     = BElemI | BElemS,
-    BHeap     = BElem | BProp | BRef,
+    // Have no specialization, put them last.
+    BMITempBase = 1 << 8,
+    BMITvRef    = 1 << 9,
+    BMITvRef2   = 1 << 10,
+    BMIBase     = 1 << 11,
 
-    BUnknownTV = ~(BIterPos | BIterBase),
+    BElem      = BElemI | BElemS,
+    BHeap      = BElem | BProp | BRef,
+    BMIStateTV = BMITempBase | BMITvRef | BMITvRef2,
+    BMIState   = BMIStateTV | BMIBase,
+
+    BUnknownTV = ~(BIterPos | BIterBase | BMIBase),
 
     BUnknown   = static_cast<uint32_t>(-1),
   };
@@ -205,7 +213,6 @@ struct AliasClass {
   /* implicit */ AliasClass(AElemI);
   /* implicit */ AliasClass(AElemS);
   /* implicit */ AliasClass(AStack);
-  /* implicit */ AliasClass(AMIState);
   /* implicit */ AliasClass(ARef);
 
   /*
@@ -248,6 +255,11 @@ struct AliasClass {
   bool maybe(AliasClass) const;
 
   /*
+   * Returns whether the alias class contains a single location.
+   */
+  bool isSingleLocation() const;
+
+  /*
    * Conditionally access specific known information of various kinds.
    *
    * Returns folly::none if this alias class has no specialization in that way.
@@ -259,7 +271,6 @@ struct AliasClass {
   folly::Optional<AElemI>    elemI() const;
   folly::Optional<AElemS>    elemS() const;
   folly::Optional<AStack>    stack() const;
-  folly::Optional<AMIState>  mis() const;
   folly::Optional<ARef>      ref() const;
 
   /*
@@ -277,8 +288,14 @@ struct AliasClass {
   folly::Optional<AElemI>    is_elemI() const;
   folly::Optional<AElemS>    is_elemS() const;
   folly::Optional<AStack>    is_stack() const;
-  folly::Optional<AMIState>  is_mis() const;
   folly::Optional<ARef>      is_ref() const;
+
+  /*
+   * Like the other foo() and is_foo() methods, but since we don't have an
+   * AMIState anymore, these return AliasClass instead.
+   */
+  folly::Optional<AliasClass> mis() const;
+  folly::Optional<AliasClass> is_mis() const;
 
 private:
   enum class STag {
@@ -290,7 +307,6 @@ private:
     ElemI,
     ElemS,
     Stack,
-    MIState,
     Ref,
 
     IterBoth,  // A union of base and pos for the same iter.
@@ -300,6 +316,7 @@ private:
 private:
   friend std::string show(AliasClass);
   friend AliasClass canonicalize(AliasClass);
+
   bool checkInvariants() const;
   bool equivData(AliasClass) const;
   bool subclassData(AliasClass) const;
@@ -324,7 +341,6 @@ private:
     AElemI    m_elemI;
     AElemS    m_elemS;
     AStack    m_stack;
-    AMIState  m_mis;
     ARef      m_ref;
 
     UIterBoth m_iterBoth;
@@ -333,6 +349,7 @@ private:
 
 //////////////////////////////////////////////////////////////////////
 
+/* General alias classes. */
 auto const AEmpty       = AliasClass{AliasClass::BEmpty};
 auto const AFrameAny    = AliasClass{AliasClass::BFrame};
 auto const AIterPosAny  = AliasClass{AliasClass::BIterPos};
@@ -344,11 +361,23 @@ auto const AStackAny    = AliasClass{AliasClass::BStack};
 auto const AElemIAny    = AliasClass{AliasClass::BElemI};
 auto const AElemSAny    = AliasClass{AliasClass::BElemS};
 auto const AElemAny     = AliasClass{AliasClass::BElem};
+auto const AMIStateTV   = AliasClass{AliasClass::BMIStateTV};
 auto const AMIStateAny  = AliasClass{AliasClass::BMIState};
 auto const AUnknownTV   = AliasClass{AliasClass::BUnknownTV};
 auto const AUnknown     = AliasClass{AliasClass::BUnknown};
 
+/* Alias classes for specific MInstrState fields. */
+auto const AMIStateTempBase = AliasClass{AliasClass::BMITempBase};
+auto const AMIStateTvRef    = AliasClass{AliasClass::BMITvRef};
+auto const AMIStateTvRef2   = AliasClass{AliasClass::BMITvRef2};
+auto const AMIStateBase     = AliasClass{AliasClass::BMIBase};
+
 //////////////////////////////////////////////////////////////////////
+
+/*
+ * Creates an AliasClass given an offset into MInstrState.
+ */
+AliasClass mis_from_offset(size_t);
 
 /*
  * Replace any SSATmps in an AliasClass with their canonical name (chasing

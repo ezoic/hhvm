@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -148,6 +148,10 @@ inline bool more(const Variant& v1, const Variant& v2) {
   return tvGreater(*v1.asTypedValue(), *v2.asTypedValue());
 }
 
+inline int64_t compare(const Variant& v1, const Variant& v2) {
+  return tvCompare(*v1.asTypedValue(), *v2.asTypedValue());
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // bool
 
@@ -206,6 +210,8 @@ inline bool more(bool v1, const Resource& v2) {
   return more(v1,v2.toBoolean());
 }
 inline bool more(bool v1, const Variant& v2) { return less(v2,v1); }
+
+inline int64_t compare(bool v1, bool v2) { return v1 - v2; }
 
 ///////////////////////////////////////////////////////////////////////////////
 // int
@@ -266,6 +272,10 @@ inline bool more(int v1, const Object& v2) {
 inline bool more(int v1, const Resource& v2) { return more(v1, v2.toInt64()); }
 inline bool more(int v1, const Variant& v2) { return less(v2, v1); }
 
+inline int64_t compare(int v1, int v2) {
+  return (v1 < v2) ? -1 : ((v1 > v2) ? 1 : 0);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // int64
 
@@ -299,6 +309,10 @@ inline bool equal(int64_t v1, const Variant& v2) {
   return equal(v2, v1);
 }
 
+inline bool nequal(int64_t v1, const StringData* v2) {
+  return !equal(v1, v2);
+}
+
 inline bool less(int64_t v1, bool    v2) { return more(v2, v1); }
 inline bool less(int64_t v1, int     v2) { return more(v2, v1); }
 inline bool less(int64_t v1, int64_t v2) { return v1 < v2; }
@@ -316,6 +330,8 @@ inline bool less(int64_t v1, const Variant& v2) {
   return more(v2, v1);
 }
 
+bool lessEqual(int64_t v1, const StringData* v2);
+
 inline bool more(int64_t v1, bool    v2) { return less(v2, v1); }
 inline bool more(int64_t v1, int     v2) { return less(v2, v1); }
 inline bool more(int64_t v1, int64_t v2) { return v1 > v2; }
@@ -331,6 +347,12 @@ inline bool more(int64_t v1, const Resource& v2) {
   return more(v1, v2.toInt64());
 }
 inline bool more(int64_t v1, const Variant& v2) { return less(v2, v1); }
+
+bool moreEqual(int64_t v1, const StringData* v2);
+
+inline int64_t compare(int64_t v1, int64_t v2) {
+  return (v1 < v2) ? -1 : ((v1 > v2) ? 1 : 0);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // double
@@ -406,6 +428,12 @@ inline bool more(double v1, const Resource& v2) {
 }
 inline bool more(double v1, const Variant& v2) { return less(v2, v1); }
 
+inline int64_t compare(double v1, double v2) {
+  // This ordering is required so that -1 is returned for NaNs (to match PHP7
+  // behavior).
+  return (v1 == v2) ? 0 : ((v1 > v2) ? 1 : -1);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // StringData *
 
@@ -461,6 +489,7 @@ inline bool equal(const StringData *v1, const Object& v2) {
   if (!v2->hasToString()) return false;
   return equal(v1, v2.toString());
 }
+
 inline bool equal(const StringData *v1, const Resource& v2) {
   if (!v1 || !v2) {
     return equal(toBoolean(v1), v2.toBoolean());
@@ -472,6 +501,9 @@ inline bool equal(const StringData *v1, const Variant& v2) {
 }
 
 inline bool nequal(const StringData* v1, const StringData* v2) {
+  return !equal(v1, v2);
+}
+inline bool nequal(const StringData* v1, int64_t v2) {
   return !equal(v1, v2);
 }
 
@@ -517,6 +549,9 @@ inline bool lessEqual(const StringData* v1, const StringData* v2) {
   if (v2 == nullptr) return v1->empty();
   return v1->compare(v2) <= 0;
 }
+inline bool lessEqual(const StringData* v1, int64_t v2) {
+  return moreEqual(v2, v1);
+}
 
 inline bool more(const StringData *v1, bool    v2) { return less(v2, v1); }
 inline bool more(const StringData *v1, int     v2) { return less(v2, v1); }
@@ -557,6 +592,18 @@ inline bool more(const StringData *v1, const Variant& v2) {
 
 inline bool moreEqual(const StringData* v1, const StringData* v2) {
   return lessEqual(v2, v1);
+}
+inline bool moreEqual(const StringData* v1, int64_t v2) {
+  return lessEqual(v2, v1);
+}
+
+int64_t compare(const StringData* v1, int64_t v2);
+inline int64_t compare(const StringData* v1, const StringData* v2) {
+  assert(v1);
+  assert(v2);
+  // Clamp return values to just -1, 0, 1.
+  auto cmp = v1->compare(v2);
+  return (cmp < 0) ? -1 : ((cmp > 0) ? 1 : 0);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -723,6 +770,50 @@ inline bool more(const Array& v1, const Resource& v2) { return true; }
 inline bool more(const Array& v1, const Variant& v2) { return v1.more(v2); }
 
 ///////////////////////////////////////////////////////////////////////////////
+// ArrayData*
+
+inline bool same(const ArrayData* v1, const ArrayData* v2) {
+  assert(v1);
+  return v1->equal(v2, true);
+}
+
+inline bool nsame(const ArrayData* v1, const ArrayData* v2) {
+  return !same(v1, v2);
+}
+
+inline bool equal(const ArrayData* v1, const ArrayData* v2) {
+  assert(v1);
+  return v1->equal(v2, false);
+}
+
+inline bool nequal(const ArrayData* v1, const ArrayData* v2) {
+  return !equal(v1, v2);
+}
+
+inline bool less(const ArrayData* v1, const ArrayData* v2) {
+  assert(v1);
+  return v1->compare(v2) < 0;
+}
+
+inline bool lessEqual(const ArrayData* v1, const ArrayData* v2) {
+  return less(v1, v2) || equal(v1, v2);
+}
+
+inline bool more(const ArrayData* v1, const ArrayData* v2) {
+  assert(v2);
+  return v2->compare(v1) < 0;
+}
+
+inline bool moreEqual(const ArrayData* v1, const ArrayData* v2) {
+  return more(v1, v2) || equal(v1, v2);
+}
+
+inline int64_t compare(const ArrayData* v1, const ArrayData* v2) {
+  assert(v1);
+  return v1->compare(v2);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Object
 
 inline bool same(const Object& v1, bool    v2) { return same(v2, v1); }
@@ -785,6 +876,45 @@ inline bool more(const Object& v1, const Resource& v2) { return false; }
 inline bool more(const Object& v1, const Variant& v2) {
   if (v2.isObject()) return v1.more(v2.toObject());
   return less(v2, v1);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ObjectData*
+
+inline bool equal(const ObjectData* v1, const ObjectData* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->equal(*v2);
+}
+
+inline bool nequal(const ObjectData* v1, const ObjectData* v2) {
+  return !equal(v1, v2);
+}
+
+inline bool less(const ObjectData* v1, const ObjectData* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->less(*v2);
+}
+
+inline bool lessEqual(const ObjectData* v1, const ObjectData* v2) {
+  return less(v1, v2) || equal(v1, v2);
+}
+
+inline bool more(const ObjectData* v1, const ObjectData* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->more(*v2);
+}
+
+inline bool moreEqual(const ObjectData* v1, const ObjectData* v2) {
+  return more(v1, v2) || equal(v1, v2);
+}
+
+inline int64_t compare(const ObjectData* v1, const ObjectData* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->compare(*v2);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -851,6 +981,45 @@ inline bool more(const Resource& v1, const Array& v2) { return false; }
 inline bool more(const Resource& v1, const Object& v2) { return false; }
 inline bool more(const Resource& v1, const Resource& v2) { return v1.more(v2); }
 inline bool more(const Resource& v1, const Variant& v2) { return less(v2, v1); }
+
+///////////////////////////////////////////////////////////////////////////////
+// ResourceHdr*
+
+inline bool equal(const ResourceHdr* v1, const ResourceHdr* v2) {
+  return v1 == v2;
+}
+
+inline bool nequal(const ResourceHdr* v1, const ResourceHdr* v2) {
+  return v1 != v2;
+}
+
+inline bool less(const ResourceHdr* v1, const ResourceHdr* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->data()->o_toInt64() < v2->data()->o_toInt64();
+}
+
+inline bool lessEqual(const ResourceHdr* v1, const ResourceHdr* v2) {
+  return less(v1, v2) || equal(v1, v2);
+}
+
+inline bool more(const ResourceHdr* v1, const ResourceHdr* v2) {
+  assert(v1);
+  assert(v2);
+  return v1->data()->o_toInt64() > v2->data()->o_toInt64();
+}
+
+inline bool moreEqual(const ResourceHdr* v1, const ResourceHdr* v2) {
+  return more(v1, v2) || equal(v1, v2);
+}
+
+inline int64_t compare(const ResourceHdr* v1, const ResourceHdr* v2) {
+  assert(v1);
+  assert(v1);
+  auto id1 = v1->data()->o_toInt64();
+  auto id2 = v2->data()->o_toInt64();
+  return (id1 < id2) ? -1 : ((id1 > id2) ? 1 : 0);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 }

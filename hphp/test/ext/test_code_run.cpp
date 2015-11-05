@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,7 +19,6 @@
 #include "hphp/compiler/builtin_symbols.h"
 #include "hphp/compiler/code_generator.h"
 #include "hphp/compiler/analysis/analysis_result.h"
-#include "hphp/compiler/analysis/type.h"
 #include "hphp/util/process.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/compiler/option.h"
@@ -27,6 +26,8 @@
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include <pcre.h>
 #include <folly/Conv.h>
+
+#include <fstream>
 
 using std::istringstream;
 using std::ostringstream;
@@ -48,7 +49,7 @@ bool TestCodeRun::postTest() {
 }
 
 bool TestCodeRun::CleanUp() {
-  string out, err;
+  std::string out, err;
   const char *argv[] = {"", nullptr};
   Process::Exec("runtime/tmp/cleanup.sh", argv, nullptr, out, &err);
   if (!err.empty()) {
@@ -79,8 +80,8 @@ static bool GenerateMainPHP(const std::string &fullPath,
   return true;
 }
 
-static string escape(const std::string &s) {
-  string ret;
+static std::string escape(const std::string &s) {
+  std::string ret;
   ret.reserve(s.size() + 20);
   for (unsigned int i = 0; i < s.length(); i++) {
     char ch = s[i];
@@ -102,17 +103,17 @@ static bool verify_result(const char *input, const char *output, bool perfMode,
                           const char *subdir = "",
                           bool fastMode = false) {
   // generate main.php
-  string fullPath = "runtime/tmp";
+  std::string fullPath = "runtime/tmp";
   if (subdir && subdir[0]) fullPath = fullPath + "/" + subdir;
   fullPath += "/main.php";
   if (!GenerateMainPHP(fullPath, 0, 0, input)) return false;
 
   // get PHP's output if "output" is NULL
-  string expected;
+  std::string expected;
   if (output) {
     if (fileoutput) {
       String s = HHVM_FN(file_get_contents)(output);
-      expected = string(s.data(), s.size());
+      expected = std::string(s.data(), s.size());
     } else {
       expected = output;
     }
@@ -123,7 +124,7 @@ static bool verify_result(const char *input, const char *output, bool perfMode,
     const char *argv2[] = {"", "-ddisplay_errors=On",
                            "-dapc.enable_cli=1",
                            fullPath.c_str(), nullptr};
-    string err;
+    std::string err;
     Process::Exec(php_path, nowarnings ? argv2 : argv1, nullptr, expected, &err);
     if (!err.empty() && nowarnings) {
       printf("%s:%d\nParsing: [%s]\nFailed to run %s: %s\n",
@@ -134,38 +135,23 @@ static bool verify_result(const char *input, const char *output, bool perfMode,
 
   // run and verify output
   {
-    string actual, err;
-    string dir = "runtime/tmp/";
+    std::string actual, err;
+    std::string dir = "runtime/tmp/";
     if (subdir) dir = dir + subdir + "/";
-    string repoarg = "-vRepo.Central.Path=" + dir + "hhvm.hhbc";
+    std::string repoarg = "-vRepo.Central.Path=" + dir + "hhvm.hhbc";
+    std::string filearg = "--file=" + dir + "main.php";
 
-    if (Option::EnableEval < Option::FullEval) {
-      if (fastMode) {
-        string path = dir + "libtest.so";
-        const char *argv[] = {"", "--file=string", "--config=test/slow/config.hdf",
-                              repoarg.c_str(), path.c_str(), nullptr};
-        Process::Exec("runtime/tmp/run.sh", argv, nullptr, actual, &err);
-      } else {
-        const char *argv[] = {"", "--file=string", "--config=test/slow/config.hdf",
-                              repoarg.c_str(), nullptr};
-        string path = dir + "test";
-        Process::Exec(path.c_str(), argv, nullptr, actual, &err);
-      }
-    } else {
-      string filearg = "--file=" + dir + "main.php";
-
-      string jitarg = string("-vEval.Jit=") +
-        (RuntimeOption::EvalJit ? "true" : "false");
-      const char *argv[] = {"", filearg.c_str(),
-                            "--config=test/slow/config.hdf",
-                            repoarg.c_str(),
-                            jitarg.c_str(),
-                            nullptr};
-      Process::Exec(HHVM_PATH, argv, nullptr, actual, &err);
-    }
+    std::string jitarg = std::string("-vEval.Jit=") +
+      (RuntimeOption::EvalJit ? "true" : "false");
+    const char *argv[] = {"", filearg.c_str(),
+                          "--config=test/slow/config.hdf",
+                          repoarg.c_str(),
+                          jitarg.c_str(),
+                          nullptr};
+    Process::Exec(HHVM_PATH, argv, nullptr, actual, &err);
 
     if (perfMode) {
-      string sinput = input;
+      std::string sinput = input;
       const char *marker = "/* INPUT */";
       int pos1 = sinput.find(marker);
       int pos2 = sinput.find(marker, pos1+1);
@@ -206,8 +192,8 @@ static bool verify_result(const char *input, const char *output, bool perfMode,
     bool out_ok = actual == expected;
     if (!out_ok || (!nowarnings && !err.empty())) {
       if (out_ok &&
-          err.find("symbol lookup error:") != string::npos &&
-          err.find("undefined symbol: ") != string::npos) {
+          err.find("symbol lookup error:") != std::string::npos &&
+          err.find("undefined symbol: ") != std::string::npos) {
         printf("%s: Ignoring loader error: %s\n",
                fullPath.c_str(), err.c_str());
       } else {
@@ -237,8 +223,8 @@ static bool verify_result(const char *input, const char *output, bool perfMode,
 bool TestCodeRun::RecordMulti(const char *input, const char *output,
                               const char *file, int line, bool nowarnings,
                               bool fileoutput) {
-  string fullPath = "runtime/tmp/" + Test::s_suite + "/" + test_name + "/tcr-" +
-    folly::to<string>(m_test++);
+  auto fullPath = "runtime/tmp/" + Test::s_suite + "/" + test_name + "/tcr-" +
+    folly::to<std::string>(m_test++);
 
   if (!GenerateMainPHP(fullPath + "/main.php", file, line, input)) return false;
   if (nowarnings) {
@@ -249,7 +235,7 @@ bool TestCodeRun::RecordMulti(const char *input, const char *output,
     std::ofstream s((fullPath + "/test.result").c_str());
     if (fileoutput) {
       String expected = HHVM_FN(file_get_contents)(output);
-      s << string(expected.data(), expected.size());
+      s << std::string(expected.data(), expected.size());
     } else {
       s << output;
     }

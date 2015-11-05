@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -105,7 +105,7 @@ void emitPushL(IRGS& env, int32_t id) {
 void emitCGetL2(IRGS& env, int32_t id) {
   auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const oldTop = pop(env);
+  auto const oldTop = pop(env, DataTypeGeneric);
   auto const val = ldLocInnerWarn(
     env,
     id,
@@ -117,32 +117,61 @@ void emitCGetL2(IRGS& env, int32_t id) {
   push(env, oldTop);
 }
 
-void emitVGetL(IRGS& env, int32_t id) {
-  auto value = ldLoc(env, id, makeExit(env), DataTypeCountnessInit);
+template<class F>
+SSATmp* boxHelper(IRGS& env, SSATmp* value, F rewrite) {
   auto const t = value->type();
-
   if (t <= TCell) {
-    if (value->isA(TUninit)) {
+    if (t <= TUninit) {
       value = cns(env, TInitNull);
     }
     value = gen(env, Box, value);
-    stLocRaw(env, id, fp(env), value);
+    rewrite(value);
   } else if (t.maybe(TCell)) {
     value = cond(env,
                  [&](Block* taken) {
-                   return gen(env, CheckType, TBoxedCell, taken, value);
+                   auto const ret = gen(env, CheckType, TBoxedInitCell,
+                                        taken, value);
+                   env.irb->constrainValue(ret, DataTypeSpecific);
+                   return ret;
                  },
                  [&](SSATmp* box) { // Next: value is Boxed
-                   return gen(env, AssertType, TBoxedCell, box);
+                   return box;
                  },
                  [&] { // Taken: value is not Boxed
-                   auto const tmpType = t - TBoxedCell;
+                   auto const tmpType = t - TBoxedInitCell;
                    assertx(tmpType <= TCell);
                    auto const tmp = gen(env, AssertType, tmpType, value);
-                   return gen(env, Box, tmp);
+                   auto const ret = gen(env, Box, tmp);
+                   rewrite(ret);
+                   return ret;
                  });
   }
-  pushIncRef(env, value);
+  return value;
+}
+
+void emitVGetL(IRGS& env, int32_t id) {
+  auto const value = ldLoc(env, id, makeExit(env), DataTypeCountnessInit);
+  auto const boxed = boxHelper(
+    env,
+    gen(env, AssertType, TCell | TBoxedInitCell, value),
+    [&] (SSATmp* v) {
+      stLocRaw(env, id, fp(env), v);
+    });
+
+  pushIncRef(env, boxed);
+}
+
+void emitBox(IRGS& env) {
+  push(env, gen(env, Box, pop(env, DataTypeGeneric)));
+}
+
+void emitBoxR(IRGS& env) {
+  auto const value = pop(env, DataTypeGeneric);
+  auto const boxed = boxHelper(
+    env,
+    gen(env, AssertType, TCell | TBoxedInitCell, value),
+    [] (SSATmp* ) {});
+  push(env, boxed);
 }
 
 void emitUnsetL(IRGS& env, int32_t id) {
@@ -375,8 +404,12 @@ void emitNullUninit(IRGS& env) { push(env, cns(env, TUninit)); }
 //////////////////////////////////////////////////////////////////////
 
 void emitNop(IRGS&)                {}
-void emitBoxRNop(IRGS&)            {}
-void emitUnboxRNop(IRGS&)          {}
+void emitBoxRNop(IRGS& env) {
+  assertTypeStack(env, BCSPOffset{0}, TBoxedCell);
+}
+void emitUnboxRNop(IRGS& env) {
+  assertTypeStack(env, BCSPOffset{0}, TCell);
+}
 void emitRGetCNop(IRGS&)           {}
 void emitFPassC(IRGS&, int32_t)    {}
 void emitFPassVNop(IRGS&, int32_t) {}

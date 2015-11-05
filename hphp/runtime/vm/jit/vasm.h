@@ -79,11 +79,6 @@ private:                                                  \
 DECLARE_VNUM(Vlabel, true, "B");
 
 /*
- * Vpoint is a handle to record or retrieve a code address.
- */
-DECLARE_VNUM(Vpoint, false, "P");
-
-/*
  * Vtuple is an index to a tuple in Vunit::tuples.
  */
 DECLARE_VNUM(Vtuple, true, "T");
@@ -114,7 +109,6 @@ void allocateRegisters(Vunit&, const Abi&);
 void fuseBranches(Vunit&);
 void optimizeExits(Vunit&);
 void optimizeJmps(Vunit&);
-void hoistFallbackccs(Vunit&);
 void optimizeCopies(Vunit&, const Abi&);
 void optimizePhis(Vunit&);
 void removeDeadCode(Vunit&);

@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/vm/jit/vasm.h"
 
+#include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-print.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
@@ -113,17 +114,16 @@ bool checkCalls(Vunit& unit, jit::vector<Vlabel>& blocks) {
     bool unwind_valid = false;
     bool nothrow_valid = false;
     bool sync_valid = false;
-    bool hcunwind_valid = false;
-    bool hcsync_valid = false;
-    bool hcnocatch_valid = false;
     for (auto& inst : unit.blocks[b].code) {
       switch (inst.op) {
         case Vinstr::call:
         case Vinstr::callm:
         case Vinstr::callr:
+        case Vinstr::calls:
         case Vinstr::callstub:
-        case Vinstr::mccall:
+        case Vinstr::callarray:
         case Vinstr::contenter:
+        case Vinstr::hostcall:
           sync_valid = unwind_valid = nothrow_valid = true;
           break;
         case Vinstr::syncpoint:
@@ -138,24 +138,8 @@ bool checkCalls(Vunit& unit, jit::vector<Vlabel>& blocks) {
           assertx(nothrow_valid);
           unwind_valid = nothrow_valid = false;
           break;
-        case Vinstr::hostcall:
-          hcsync_valid = hcunwind_valid = hcnocatch_valid = true;
-          break;
-        case Vinstr::hcsync:
-          assertx(hcsync_valid);
-          hcsync_valid = false;
-          break;
-        case Vinstr::hcunwind:
-          assertx(hcunwind_valid);
-          hcunwind_valid = hcnocatch_valid = false;
-          break;
-        case Vinstr::hcnocatch:
-          assertx(hcnocatch_valid);
-          hcunwind_valid = hcnocatch_valid = false;
-          break;
         default:
           unwind_valid = nothrow_valid = sync_valid = false;
-          hcunwind_valid = hcnocatch_valid = hcsync_valid = false;
           break;
       }
     }
@@ -238,7 +222,7 @@ bool checkSF(Vunit& unit, jit::vector<Vlabel>& blocks) {
       auto& inst = *--i;
       RegSet implicit_uses, implicit_across, implicit_defs;
       if (inst.op == Vinstr::vcall || inst.op == Vinstr::vinvoke ||
-          inst.op == Vinstr::vcallstub) {
+          inst.op == Vinstr::vcallarray) {
         // getEffects would assert since these haven't been lowered yet.
         implicit_defs |= RegSF{0};
       } else {

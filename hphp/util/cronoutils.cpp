@@ -70,14 +70,16 @@
  */
 
 #include "hphp/util/cronoutils.h"
+#include "hphp/util/portability.h"
+
+#ifdef _MSC_VER
+#include <direct.h>
+#endif
+
 extern char *tzname[2];
 
 #ifndef DIR_MODE
 #define DIR_MODE        ( S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH )
-#endif
-
-#ifdef _WIN32
-#include <strptime.h>
 #endif
 
 /* Constants for seconds per minute, hour, day and week */
@@ -187,12 +189,8 @@ create_subdirs(char *filename)
 	    else
 	    {
 		CRONO_DEBUG(("Directory \"%s\" does not exist -- creating\n", dirname));
-		if ((mkdir(dirname, DIR_MODE) < 0) && (errno != EEXIST))
-#ifndef _WIN32
-		{
-#else
-                if ((mkdir(dirname) < 0) && (errno != EEXIST))
-#endif
+                if ((mkdir(dirname, DIR_MODE) < 0) && (errno != EEXIST))
+                {
 		    perror(dirname);
 		    return;
 		}
@@ -213,6 +211,7 @@ create_link(const char *pfilename,
 	    const char *linkname, mode_t linktype,
 	    const char *prevlinkname)
 {
+#ifndef _MSC_VER
     struct stat		stat_buf;
 
     if (lstat(prevlinkname, &stat_buf) == 0)
@@ -228,7 +227,6 @@ create_link(const char *pfilename,
 	    unlink(linkname);
 	}
     }
-#ifndef _WIN32
     if (linktype == S_IFLNK)
     {
 	if (symlink(pfilename, linkname) < 0) {
@@ -242,7 +240,8 @@ create_link(const char *pfilename,
         }
     }
 #else
-    fprintf(stderr, "Creating link from %s to %s not supported", pfilename, linkname);
+    fprintf(stderr, "Creating link from %s to %s not supported",
+            pfilename, linkname);
 #endif
 }
 
@@ -733,5 +732,3 @@ timestamp(time_t thetime)
     strftime(retval, 80, "%Y/%m/%d-%H:%M:%S %Z", tm);
     return retval;
 }
-
-

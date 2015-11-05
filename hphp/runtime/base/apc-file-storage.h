@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,10 +18,7 @@
 #define incl_HPHP_APC_FILE_STORAGE_H_
 
 #include <vector>
-
 #include "hphp/util/lock.h"
-
-#include "hphp/runtime/base/types.h"
 
 namespace HPHP {
 
@@ -48,7 +45,7 @@ struct APCFileStorage {
   APCFileStorage(const APCFileStorage&) = delete;
   APCFileStorage& operator=(const APCFileStorage&) = delete;
 
-  void enable(const std::string& prefix, int64_t chunkSize, int64_t maxSize);
+  void enable(const std::string& prefix, int64_t chunkSize);
   char *put(const char *data, int32_t len);
   void seal();
   void adviseOut();
@@ -63,7 +60,6 @@ private:
   std::vector<void*> m_chunks;
   std::string m_prefix;
   int64_t m_chunkSize;
-  int64_t m_maxSize;
   StorageState m_state;
   char *m_current;
   int32_t m_chunkRemain;

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,7 +19,6 @@
 #include "hphp/compiler/expression/scalar_expression.h"
 #include "hphp/compiler/analysis/variable_table.h"
 #include "hphp/compiler/analysis/code_error.h"
-#include "hphp/compiler/code_model_enums.h"
 #include "hphp/compiler/option.h"
 #include "hphp/compiler/expression/static_member_expression.h"
 #include "hphp/compiler/analysis/function_scope.h"
@@ -42,14 +41,12 @@ ArrayElementExpression::ArrayElementExpression
   m_variable->setContext(Expression::AccessContext);
 
   if (m_variable->is(Expression::KindOfSimpleVariable)) {
-    SimpleVariablePtr var =
-      dynamic_pointer_cast<SimpleVariable>(m_variable);
+    auto var = dynamic_pointer_cast<SimpleVariable>(m_variable);
     if (var->getName() == "GLOBALS") {
       m_global = true;
       m_dynamicGlobal = true;
       if (m_offset && m_offset->is(Expression::KindOfScalarExpression)) {
-        ScalarExpressionPtr offset =
-          dynamic_pointer_cast<ScalarExpression>(m_offset);
+        auto offset = dynamic_pointer_cast<ScalarExpression>(m_offset);
 
         if (offset->isLiteralString()) {
           m_globalName = offset->getIdentifier();
@@ -82,8 +79,7 @@ void ArrayElementExpression::setContext(Context context) {
       }
       // special case for $GLOBALS[], we do not need lvalue wrapper
       if (m_variable->is(Expression::KindOfSimpleVariable)) {
-        SimpleVariablePtr var =
-          dynamic_pointer_cast<SimpleVariable>(m_variable);
+        auto var = dynamic_pointer_cast<SimpleVariable>(m_variable);
         if (var->getName() == "GLOBALS") {
           m_context |= Expression::NoLValueWrapper;
         }
@@ -159,11 +155,6 @@ bool ArrayElementExpression::appendClass(ExpressionPtr cls,
 ///////////////////////////////////////////////////////////////////////////////
 // static analysis functions
 
-bool ArrayElementExpression::isTemporary() const {
-  return !m_global &&
-    !(m_context & (AccessContext|LValue|RefValue|UnsetContext));
-}
-
 void ArrayElementExpression::analyzeProgram(AnalysisResultPtr ar) {
   m_variable->analyzeProgram(ar);
   if (m_offset) m_offset->analyzeProgram(ar);
@@ -181,18 +172,6 @@ void ArrayElementExpression::analyzeProgram(AnalysisResultPtr ar) {
           Compiler::Error(Compiler::UseUndeclaredGlobalVariable,
                           shared_from_this());
         }
-      }
-    } else {
-      TypePtr at(m_variable->getActualType());
-      TypePtr et(m_variable->getExpectedType());
-      if (et &&
-          (et->is(Type::KindOfSequence) ||
-           et->is(Type::KindOfAutoSequence)) &&
-          at && at->isExactType()) {
-        // since Sequence maps to Variant in the runtime,
-        // using Sequence for the expected type will
-        // never allow the necessary casts to be generated.
-        m_variable->setExpectedType(at);
       }
     }
   }
@@ -227,10 +206,6 @@ void ArrayElementExpression::setNthKid(int n, ConstructPtr cp) {
       assert(false);
       break;
   }
-}
-
-bool ArrayElementExpression::canonCompare(ExpressionPtr e) const {
-  return m_offset && Expression::canonCompare(e);
 }
 
 ExpressionPtr ArrayElementExpression::preOptimize(AnalysisResultConstPtr ar) {
@@ -279,32 +254,6 @@ ExpressionPtr ArrayElementExpression::unneeded() {
     if (m_offset) return m_offset->unneeded();
   }
   return Expression::unneeded();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ArrayElementExpression::outputCodeModel(CodeGenerator &cg) {
-  if (m_offset) {
-    cg.printObjectHeader("BinaryOpExpression", 4);
-    cg.printPropertyHeader("expression1");
-    m_variable->outputCodeModel(cg);
-    cg.printPropertyHeader("expression2");
-    cg.printExpression(m_offset, false);
-    cg.printPropertyHeader("operation");
-    cg.printValue(PHP_ARRAY_ELEMENT);
-    cg.printPropertyHeader("sourceLocation");
-    cg.printLocation(this);
-    cg.printObjectFooter();
-  } else {
-    cg.printObjectHeader("UnaryOpExpression", 3);
-    cg.printPropertyHeader("expression");
-    m_variable->outputCodeModel(cg);
-    cg.printPropertyHeader("operation");
-    cg.printValue(PHP_ARRAY_APPEND_POINT_OP);
-    cg.printPropertyHeader("sourceLocation");
-    cg.printLocation(this);
-    cg.printObjectFooter();
-  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

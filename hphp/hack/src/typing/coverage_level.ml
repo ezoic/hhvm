@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Typing_defs
 open Utils
 
 module TUtils = Typing_utils
@@ -55,10 +56,11 @@ type 'a trie =
 
 let level_of_type fixme_map (p, ty) =
   let lvl = match ty with
-    | _, Typing_defs.Tany -> Unchecked
+    | _, Tany -> Unchecked
+    | _, Tobject -> Partial
     | ty when TUtils.HasTany.check ty -> Partial
     | _ -> Checked in
-  let line = p.Pos.pos_start.Lexing.pos_lnum in
+  let line = Pos.line p in
   (* If the line has a HH_FIXME, then mark it as (at most) partially checked *)
   match lvl with
   | Checked when IMap.mem line fixme_map ->

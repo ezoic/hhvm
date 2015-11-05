@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -16,9 +16,10 @@
  *)
 (*****************************************************************************)
 
-open Utils
+open Core
 open Nast
 open Typing_defs
+open Utils
 
 module Env = Typing_env
 module Inst = Typing_instantiate
@@ -62,6 +63,11 @@ let is_abstract_method x =
   | _, Tfun x when x.ft_abstract -> true
   | _ ->  false
 
+let should_keep_old_sig sig_ old_sig =
+  (not (is_abstract_method old_sig) && is_abstract_method sig_)
+  || (is_abstract_method old_sig = is_abstract_method sig_
+     && not (old_sig.ce_synthesized) && sig_.ce_synthesized)
+
 let add_method name sig_ methods =
   match (fst sig_.ce_type), sig_.ce_synthesized with
     | Reason.Rdynamic_yield _, true ->
@@ -75,10 +81,7 @@ let add_method name sig_ methods =
             (* The method didn't exist so far, let's add it *)
             SMap.add name sig_ methods
           | Some old_sig ->
-            if ((not (is_abstract_method old_sig) && is_abstract_method sig_)
-                || (is_abstract_method old_sig = is_abstract_method sig_
-                   && not (old_sig.ce_synthesized) && sig_.ce_synthesized))
-
+            if should_keep_old_sig sig_ old_sig
             (* The then-branch of this if is encountered when the method being
              * added shouldn't *actually* be added. When's that?
              * In isolation, we can say that
@@ -102,6 +105,19 @@ let add_method name sig_ methods =
 
 let add_methods methods' acc =
   SMap.fold add_method methods' acc
+
+let add_const name const acc =
+  match SMap.get name acc with
+    | None ->
+      SMap.add name const acc
+    | Some existing_const ->
+      match (snd const.ce_type, snd existing_const.ce_type) with
+        | Tgeneric(_, _), Tgeneric(_, _) ->
+          SMap.add name const acc
+        | Tgeneric(_, _), _ ->
+          acc
+        | _, _ ->
+          SMap.add name const acc
 
 let add_members members acc =
   SMap.fold SMap.add members acc
@@ -159,14 +175,14 @@ let add_typeconst name sig_ typeconsts =
 let add_constructor (cstr, cstr_consist) (acc, acc_consist) =
   let ce = match cstr, acc with
     | None, _ -> acc
-    | Some ce, Some acce when ce.ce_synthesized && not acce.ce_synthesized ->
+    | Some ce, Some acce when should_keep_old_sig ce acce ->
       acc
     | _ -> cstr
   in ce, cstr_consist || acc_consist
 
 let add_inherited inherited acc = {
   ih_cstr     = add_constructor inherited.ih_cstr acc.ih_cstr;
-  ih_consts   = add_members inherited.ih_consts acc.ih_consts;
+  ih_consts   = SMap.fold add_const inherited.ih_consts acc.ih_consts;
   ih_typeconsts =
     SMap.fold add_typeconst inherited.ih_typeconsts acc.ih_typeconsts;
   ih_props    = add_members inherited.ih_props acc.ih_props;
@@ -178,11 +194,6 @@ let add_inherited inherited acc = {
 (*****************************************************************************)
 (* Helpers *)
 (*****************************************************************************)
-
-let desugar_class_hint = function
-  | (_, Happly ((pos, class_name), type_parameters)) ->
-      pos, class_name, type_parameters
-  | _ -> assert false
 
 let check_arity pos class_name class_type class_parameters =
   let arity = List.length class_type.tc_tparams in
@@ -202,7 +213,7 @@ let constructor env subst (cstr, consistent) = match cstr with
 
 let map_inherited f inh =
   {
-    ih_cstr     = (opt_map f (fst inh.ih_cstr)), (snd inh.ih_cstr);
+    ih_cstr     = (Option.map (fst inh.ih_cstr) f), (snd inh.ih_cstr);
     ih_typeconsts = inh.ih_typeconsts;
     ih_consts   = SMap.map f inh.ih_consts;
     ih_props    = SMap.map f inh.ih_props;
@@ -306,7 +317,8 @@ let inherit_hack_xhp_attrs_only env p class_name class_type argl =
 (*****************************************************************************)
 
 let from_class c env hint =
-  let pos, class_name, class_params = desugar_class_hint hint in
+  let pos, class_name, class_params =
+    TUtils.unwrap_class_or_interface_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
   let class_type = Env.get_class_dep env class_name in
   match class_type with
@@ -319,7 +331,8 @@ let from_class c env hint =
 
 (* mostly copy paste of from_class *)
 let from_class_constants_only env hint =
-  let pos, class_name, class_params = desugar_class_hint hint in
+  let pos, class_name, class_params =
+    TUtils.unwrap_class_or_interface_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
   let class_type = Env.get_class_dep env class_name in
   match class_type with
@@ -331,7 +344,8 @@ let from_class_constants_only env hint =
     inherit_hack_class_constants_only env pos class_name class_ class_params
 
 let from_class_xhp_attrs_only env hint =
-  let pos, class_name, class_params = desugar_class_hint hint in
+  let pos, class_name, class_params =
+    TUtils.unwrap_class_or_interface_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
   let class_type = Env.get_class_dep env class_name in
   match class_type with
@@ -354,7 +368,7 @@ let from_parent env c =
       | _ -> c.c_extends
   in
   let env, inherited_l = lfold (from_class c) env extends in
-  env, List.fold_right add_inherited inherited_l empty
+  env, List.fold_right ~f:add_inherited inherited_l ~init:empty
 
 let from_requirements c (env, acc) reqs =
   let env, inherited = from_class c env reqs in
@@ -382,14 +396,15 @@ let from_interface_constants (env, acc) impls =
 let make env c =
   (* members inherited from parent class ... *)
   let acc = from_parent env c in
-  let acc = List.fold_left (from_requirements c) acc c.c_req_extends in
+  let acc = List.fold_left ~f:(from_requirements c) ~init:acc c.c_req_extends in
   (* ... are overridden with those inherited from used traits *)
-  let acc = List.fold_left (from_trait c) acc c.c_uses in
-  let acc = List.fold_left from_xhp_attr_use acc c.c_xhp_attr_uses in
+  let acc = List.fold_left ~f:(from_trait c) ~init:acc c.c_uses in
+  let acc = List.fold_left ~f:from_xhp_attr_use ~init:acc c.c_xhp_attr_uses in
   (* todo: what about the same constant defined in different interfaces
    * we implement? We should forbid and say "constant already defined".
    * to julien: where is the logic that check for duplicated things?
    * todo: improve constant handling, see task #2487051
    *)
-  let acc = List.fold_left from_interface_constants acc c.c_req_implements in
-  List.fold_left from_interface_constants acc c.c_implements
+  let acc =
+    List.fold_left ~f:from_interface_constants ~init:acc c.c_req_implements in
+  List.fold_left ~f:from_interface_constants ~init:acc c.c_implements

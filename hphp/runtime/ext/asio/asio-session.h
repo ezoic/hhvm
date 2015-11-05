@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -22,7 +22,7 @@
 #include "hphp/runtime/base/thread-info.h"
 #include "hphp/runtime/ext/asio/asio-context.h"
 #include "hphp/runtime/ext/asio/asio-external-thread-event-queue.h"
-#include "hphp/runtime/ext/ext_closure.h"
+#include "hphp/runtime/ext/closure/ext_closure.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -40,8 +40,8 @@ struct AsioSession final {
   static void Init();
   static AsioSession* Get() { return s_current.get(); }
 
-  void* operator new(size_t size) { return smart_malloc(size); }
-  void operator delete(void* ptr) { smart_free(ptr); }
+  void* operator new(size_t size) { return req::malloc(size); }
+  void operator delete(void* ptr) { req::free(ptr); }
 
   // context
   void enterContext(ActRec* savedFP);
@@ -172,13 +172,38 @@ struct AsioSession final {
   void onSleepCreate(c_SleepWaitHandle* waitHandle);
   void onSleepSuccess(c_SleepWaitHandle* waitHandle);
 
+  template<class F> void scan(F& mark) const {
+    for (auto cxt : m_contexts) cxt->scan(mark);
+    // TODO: #7930461 add list of externalThreadEvents that not in any context
+    for (auto wh : m_sleepEvents) mark(wh);
+    m_externalThreadEventQueue.scan(mark);
+    mark(m_abruptInterruptException);
+    mark(m_onIOWaitEnter);
+    mark(m_onIOWaitExit);
+    mark(m_onJoin);
+    mark(m_onResumableCreate);
+    mark(m_onResumableAwait);
+    mark(m_onResumableSuccess);
+    mark(m_onResumableFail);
+    mark(m_onAwaitAllCreate);
+    mark(m_onGenArrayCreate);
+    mark(m_onGenMapCreate);
+    mark(m_onGenVectorCreate);
+    mark(m_onConditionCreate);
+    mark(m_onExtThreadEventCreate);
+    mark(m_onExtThreadEventSuccess);
+    mark(m_onExtThreadEventFail);
+    mark(m_onSleepCreate);
+    mark(m_onSleepSuccess);
+  }
+
 private:
   AsioSession();
 
 private:
   static DECLARE_THREAD_LOCAL_PROXY(AsioSession, false, s_current);
-  smart::vector<AsioContext*> m_contexts;
-  smart::vector<c_SleepWaitHandle*> m_sleepEvents;
+  req::vector<AsioContext*> m_contexts;
+  req::vector<c_SleepWaitHandle*> m_sleepEvents;
   AsioExternalThreadEventQueue m_externalThreadEventQueue;
 
   Object m_abruptInterruptException;

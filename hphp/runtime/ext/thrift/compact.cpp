@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -18,7 +18,7 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/request-local.h"
 #include "hphp/runtime/ext/thrift/transport.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/ext/reflection/ext_reflection.h"
 #include "hphp/runtime/ext/thrift/ext_thrift.h"
 #include "hphp/runtime/base/request-event-handler.h"
@@ -43,7 +43,7 @@ enum TError {
   ERR_BAD_VERSION = 4
 };
 
-static void thrift_error(const String& what, TError why) ATTRIBUTE_NORETURN;
+ATTRIBUTE_NORETURN static void thrift_error(const String& what, TError why);
 static void thrift_error(const String& what, TError why) {
   throw create_object(s_TProtocolException, make_packed_array(what, why));
 }
@@ -171,6 +171,8 @@ struct CompactRequestData final : RequestEventHandler {
   void requestShutdown() override {
     clear();
   }
+
+  void vscan(IMarker&) const override {}
 
   uint8_t version;
 };
@@ -363,10 +365,10 @@ class CompactWriter {
         case T_UTF8:
         case T_UTF16:
         case T_STRING: {
-            String s = value.toString();
+            auto s = value.toString();
             auto slice = s.slice();
-            writeVarint(slice.len);
-            transport->write(slice.ptr, slice.len);
+            writeVarint(slice.size());
+            transport->write(slice.data(), slice.size());
             break;
           }
 
@@ -490,8 +492,8 @@ class CompactWriter {
 
     void writeString(const String& s) {
       auto slice = s.slice();
-      writeVarint(slice.len);
-      transport->write(slice.ptr, slice.len);
+      writeVarint(slice.size());
+      transport->write(slice.data(), slice.size());
     }
 
     uint64_t i64ToZigzag(int64_t n) {
@@ -842,7 +844,7 @@ class CompactReader {
       String format = spec.rvalAt(s_format,
         AccessFlags::None).toString();
       if (format.equal(s_collection)) {
-        auto ret(makeSmartPtr<c_Map>(size));
+        auto ret(req::make<c_Map>(size));
         for (uint32_t i = 0; i < size; i++) {
           Variant key = readField(keySpec, keyType);
           Variant value = readField(valueSpec, valueType);
@@ -855,7 +857,7 @@ class CompactReader {
         for (uint32_t i = 0; i < size; i++) {
           Variant key = readField(keySpec, keyType);
           Variant value = readField(valueSpec, valueType);
-          ainit.setKeyUnconverted(key, value);
+          ainit.setUnknownKey(key, value);
         }
         readCollectionEnd();
         return ainit.toVariant();
@@ -872,7 +874,7 @@ class CompactReader {
       String format = spec.rvalAt(s_format,
         AccessFlags::None).toString();
       if (format.equal(s_collection)) {
-        auto const pvec(makeSmartPtr<c_Vector>(size));
+        auto const pvec(req::make<c_Vector>(size));
         for (uint32_t i = 0; i < size; i++) {
           pvec->t_add(readField(valueSpec, valueType));
         }
@@ -898,7 +900,7 @@ class CompactReader {
       String format = spec.rvalAt(s_format,
         AccessFlags::None).toString();
       if (format.equal(s_collection)) {
-        auto set_ret = makeSmartPtr<c_Set>(size);
+        auto set_ret = req::make<c_Set>(size);
         for (uint32_t i = 0; i < size; i++) {
           Variant value = readField(valueSpec, valueType);
           set_ret->t_add(value);
@@ -912,7 +914,7 @@ class CompactReader {
         ArrayInit ainit(size, ArrayInit::Mixed{});
         for (uint32_t i = 0; i < size; i++) {
           Variant value = readField(valueSpec, valueType);
-          ainit.setKeyUnconverted(value, true);
+          ainit.setUnknownKey(value, true);
         }
         readCollectionEnd();
         return ainit.toVariant();

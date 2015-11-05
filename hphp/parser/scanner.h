@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,6 +25,7 @@
 #include <limits.h>
 
 #include "hphp/util/exception.h"
+#include "hphp/util/portability.h"
 #include "hphp/parser/location.h"
 #include "hphp/parser/hphp.tab.hpp"
 
@@ -274,8 +275,10 @@ public:
     incLoc(rawText, rawLeng, type);
   }
   // also used for YY_FATAL_ERROR in hphp.x
-  void error(const char* fmt, ...) ATTRIBUTE_PRINTF(2,3);
-  void warn(const char* fmt, ...) ATTRIBUTE_PRINTF(2,3);
+  void error(ATTRIBUTE_PRINTF_STRING const char* fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
+  void warn(ATTRIBUTE_PRINTF_STRING const char* fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
   std::string escape(const char *str, int len, char quote_type) const;
 
   /**

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -46,13 +46,9 @@ public:
   std::string getOriginalLiteralString() const;
   std::string getLiteralStringImpl(bool original) const;
   bool needsTranslation() const;
-  TypePtr inferenceImpl(AnalysisResultConstPtr ar, TypePtr type,
-                        bool coerce);
   bool getScalarValue(Variant &value) override {
     value = getVariant(); return true;
   }
-  unsigned getCanonHash() const override;
-  bool canonCompare(ExpressionPtr e) const override;
   bool isQuoted() const { return m_quoted; }
 
   int getType() const { return m_type;}

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -33,7 +33,7 @@ struct RequestEventHandler {
 
   virtual void requestInit() = 0;
   virtual void requestShutdown() = 0;
-  virtual void vscan(IMarker&) const {} // TODO #6512343
+  virtual void vscan(IMarker&) const = 0;
   template<class F> void scan(F&) const;
 
   /*

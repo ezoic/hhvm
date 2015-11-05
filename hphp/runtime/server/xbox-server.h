@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -56,8 +56,8 @@ public:
   static Resource TaskStart(const String& msg, const String& reqInitDoc = "",
       ServerTaskEvent<XboxServer, XboxTransport> *event = nullptr);
   static bool TaskStatus(const Resource& task);
-  static int TaskResult(const Resource& task, int timeout_ms, Variant &ret);
-  static int TaskResult(XboxTransport* const job, int timeout_ms, Variant &ret);
+  static int TaskResult(const Resource& task, int timeout_ms, Variant *ret);
+  static int TaskResult(XboxTransport* const job, int timeout_ms, Variant *ret);
 
   /**
    * Gets the ServerInfo and RequestHandler for the current xbox worker thread.
@@ -153,8 +153,6 @@ public:
   }
 
 private:
-  template <typename F> friend void scan(const XboxTransport&, F&);
-
   std::atomic<int> m_refCount;
 
   std::string m_message;

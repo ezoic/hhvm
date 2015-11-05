@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,6 +23,7 @@
 #include "hphp/compiler/expression/assignment_expression.h"
 #include "hphp/compiler/expression/scalar_expression.h"
 #include "hphp/compiler/option.h"
+#include "hphp/compiler/type_annotation.h"
 
 using namespace HPHP;
 
@@ -31,10 +32,17 @@ using namespace HPHP;
 
 ClassConstant::ClassConstant
 (STATEMENT_CONSTRUCTOR_PARAMETERS, std::string typeConstraint,
- ExpressionListPtr exp, bool abstract, bool typeconst)
+ ExpressionListPtr exp, bool abstract,
+ bool typeconst, TypeAnnotationPtr typeAnnot)
   : Statement(STATEMENT_CONSTRUCTOR_PARAMETER_VALUES(ClassConstant)),
     m_typeConstraint(typeConstraint), m_exp(exp), m_abstract(abstract),
     m_typeconst(typeconst) {
+  // for now only store TypeAnnotation info for type constants
+  if (typeconst && typeAnnot) {
+    m_typeStructure = Array(typeAnnot->getScalarArrayRep());
+  } else {
+    m_typeStructure = Array::Create();
+  }
 }
 
 StatementPtr ClassConstant::clone() {
@@ -59,8 +67,7 @@ void ClassConstant::onParseRecur(AnalysisResultConstPtr ar,
 
   if (isAbstract()) {
     for (int i = 0; i < m_exp->getCount(); i++) {
-      ConstantExpressionPtr exp =
-        dynamic_pointer_cast<ConstantExpression>((*m_exp)[i]);
+      auto exp = dynamic_pointer_cast<ConstantExpression>((*m_exp)[i]);
       const std::string &name = exp->getName();
       if (constants->isPresent(name)) {
         exp->parseTimeFatal(fs,
@@ -79,11 +86,10 @@ void ClassConstant::onParseRecur(AnalysisResultConstPtr ar,
     }
   } else {
     for (int i = 0; i < m_exp->getCount(); i++) {
-      AssignmentExpressionPtr assignment =
+      auto assignment =
         dynamic_pointer_cast<AssignmentExpression>((*m_exp)[i]);
-
-      ExpressionPtr var = assignment->getVariable();
-      const std::string &name =
+      auto var = assignment->getVariable();
+      const auto& name =
         dynamic_pointer_cast<ConstantExpression>(var)->getName();
       if (constants->isPresent(name)) {
         assignment->parseTimeFatal(fs,
@@ -143,13 +149,13 @@ void ClassConstant::setNthKid(int n, ConstructPtr cp) {
 StatementPtr ClassConstant::preOptimize(AnalysisResultConstPtr ar) {
   if (!isAbstract() && !isTypeconst()) {
     for (int i = 0; i < m_exp->getCount(); i++) {
-      AssignmentExpressionPtr assignment =
+      auto assignment =
         dynamic_pointer_cast<AssignmentExpression>((*m_exp)[i]);
 
-      ExpressionPtr var = assignment->getVariable();
-      ExpressionPtr val = assignment->getValue();
+      auto var = assignment->getVariable();
+      auto val = assignment->getValue();
 
-      const std::string &name =
+      const auto& name =
         dynamic_pointer_cast<ConstantExpression>(var)->getName();
 
       Symbol *sym = getScope()->getConstants()->getSymbol(name);
@@ -164,22 +170,6 @@ StatementPtr ClassConstant::preOptimize(AnalysisResultConstPtr ar) {
   // abstract constants are not added to the constant table and don't have
   // any values to propagate.
   return StatementPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ClassConstant::outputCodeModel(CodeGenerator &cg) {
-  auto numProps = m_typeConstraint.empty() ? 2 : 3;
-  cg.printObjectHeader("ConstantStatement", numProps);
-  if (!m_typeConstraint.empty()) {
-    cg.printPropertyHeader("typeAnnotation");
-    cg.printTypeExpression(m_typeConstraint);
-  }
-  cg.printPropertyHeader("expressions");
-  cg.printExpressionVector(m_exp);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

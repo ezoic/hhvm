@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -33,7 +33,6 @@
 #include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/type-conversions.h"
 #include "hphp/runtime/server/server-stats.h"
 
@@ -210,7 +209,7 @@ struct ConcurrentTableSharedStore {
    * Returns: false if the key was not in the table, true if the key was in the
    * table **even if it was expired**.
    */
-  bool erase(const String& key);
+  bool eraseKey(const String& key);
 
   /*
    * Clear the entire APC table.
@@ -241,7 +240,7 @@ struct ConcurrentTableSharedStore {
   /*
    * Dump random key and entry size to output stream
    */
-  void dumpRandomKeys(std::ostream &out, uint32_t count);
+  void dumpRandomKeys(std::ostream& out, uint32_t count);
 
   /*
    * Debugging.  Access information about all the entries in this table.
@@ -291,12 +290,12 @@ private:
   template<typename Key, typename T, typename HashCompare>
   class APCMap : public tbb::concurrent_hash_map<Key,T,HashCompare> {
   public:
-    void getRandomAPCEntry(std::ostream &out);
+    void dumpRandomAPCEntry(std::ostream& out);
   };
 
   using Map = APCMap<const char*,StoreValue,CharHashCompare>;
-  using ExpirationPair = std::pair<const char*,time_t>;
-  using ExpMap = tbb::concurrent_hash_map<const char*,int,CharHashCompare>;
+  using ExpirationPair = std::pair<intptr_t,time_t>;
+  using ExpMap = tbb::concurrent_hash_map<intptr_t,int>;
 
   struct ExpirationCompare {
     bool operator()(const ExpirationPair& p1, const ExpirationPair& p2) const {
@@ -305,18 +304,49 @@ private:
   };
 
 private:
-  bool eraseImpl(const String&, bool, int64_t);
+  bool eraseImpl(const char*, bool, int64_t, ExpMap::accessor* expAcc);
   bool storeImpl(const String&, const Variant&, int64_t, bool, bool);
-  void eraseAcc(Map::accessor&);
   void purgeExpired();
-  void addToExpirationQueue(const char*, int64_t);
   bool handlePromoteObj(const String&, APCHandle*, const Variant&);
   APCHandle* unserialize(const String&, StoreValue*);
   void dumpKeyAndValue(std::ostream&);
+  static EntryInfo makeEntryInfo(const char*, StoreValue*, int64_t curr_time);
 
 private:
   Map m_vars;
   ReadWriteMutex m_lock;
+  /*
+   * m_expQueue is a queue of keys to be expired. We purge items from
+   * it every n (configurable) apc_stores.
+   *
+   * We can't (easily) remove items from m_expQueue, so if we add a
+   * new entry every time an item is updated we could end up with a
+   * lot of copies of the same key in the queue. To avoid that, we use
+   * m_expMap, and only add an entry to the queue if there isn't one
+   * already.
+   *
+   * In the current implementation, that means that if an element is
+   * updated before it expires, when its entry in m_expQueue is
+   * processed, it does nothing; and from then on, the item has no
+   * entry in the queue. I think this is intentional, because items
+   * that are updated frequently (or at all) are probably read
+   * frequently; so it will be expired naturally. It also means that
+   * we don't bother updating the queue every time for keys that are
+   * updated frequently.
+   *
+   * This implementation uses the apc key's address as the key into
+   * m_expMap, and as the identifier in ExpirationPair. We ensure that
+   * the m_expMap entry is removed before the apc key is freed, and
+   * guarantee that the key is valid as a char* if it exists in
+   * m_expMap. If the entry subsequently pops off m_expQueue, we check
+   * to see if its in m_expMap, and only try to purge it from apc if
+   * its found.
+   *
+   * Note that its possible that the apc key was freed and
+   * reallocated, and the entry in m_expQueue doesn't correspond to
+   * the new key; but thats fine - if the key really has expired, it
+   * will be purged, and if not, nothing will happen.
+   */
   tbb::concurrent_priority_queue<ExpirationPair,
                                  ExpirationCompare> m_expQueue;
   ExpMap m_expMap;

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -47,7 +47,7 @@ bool Debugger::StartServer() {
 
 DebuggerProxyPtr Debugger::StartClient(const DebuggerClientOptions &options) {
   TRACE(2, "Debugger::StartClient\n");
-  SmartPtr<Socket> localProxy = DebuggerClient::Start(options);
+  req::ptr<Socket> localProxy = DebuggerClient::Start(options);
   if (localProxy.get()) {
     s_clientStarted = true;
     return CreateProxy(localProxy, true);
@@ -80,7 +80,7 @@ void Debugger::UnregisterSandbox(const String& id) {
   s_debugger.unregisterSandbox(id.get());
 }
 
-DebuggerProxyPtr Debugger::CreateProxy(SmartPtr<Socket> socket, bool local) {
+DebuggerProxyPtr Debugger::CreateProxy(req::ptr<Socket> socket, bool local) {
   TRACE(2, "Debugger::CreateProxy\n");
   return s_debugger.createProxy(socket, local);
 }
@@ -141,7 +141,7 @@ void Debugger::DebuggerSession(const DebuggerClientOptions& options,
   } else {
     hphp_invoke_simple(options.extension, false /* warmup only */);
   }
-  DebugHookHandler::attach<DebuggerHookHandler>();
+  DebuggerHook::attach<HphpdHook>();
   if (!restart) {
     DebuggerDummyEnv dde;
     Debugger::InterruptSessionStarted(options.fileName.c_str());
@@ -182,7 +182,7 @@ void Debugger::LogShutdown(ShutdownKind shutdownKind) {
 void Debugger::InterruptSessionStarted(const char *file,
                                        const char *error /* = NULL */) {
   TRACE(2, "Debugger::InterruptSessionStarted\n");
-  DebugHookHandler::attach<DebuggerHookHandler>();
+  DebuggerHook::attach<HphpdHook>();
   s_debugger.registerThread(); // Register this thread as being debugged
   Interrupt(SessionStarted, file, nullptr, error);
 }
@@ -396,7 +396,7 @@ void Debugger::registerSandbox(const DSandboxInfo &sandbox) {
   // Find out whether this sandbox is being debugged.
   auto proxy = findProxy(sid);
   if (proxy) {
-    DebugHookHandler::attach<DebuggerHookHandler>(ti);
+    DebuggerHook::attach<HphpdHook>(ti);
   }
 }
 
@@ -443,9 +443,9 @@ void Debugger::setDebuggerFlag(const StringData* sandboxId, bool flag) {
   TRACE(2, "Debugger::setDebuggerFlag\n");
   FOREACH_SANDBOX_THREAD_BEGIN(sandboxId, ti)
     if (flag) {
-      DebugHookHandler::attach<DebuggerHookHandler>(ti);
+      DebuggerHook::attach<HphpdHook>(ti);
     } else {
-      DebugHookHandler::detach(ti);
+      DebuggerHook::detach(ti);
     }
   FOREACH_SANDBOX_THREAD_END()
 }
@@ -453,7 +453,7 @@ void Debugger::setDebuggerFlag(const StringData* sandboxId, bool flag) {
 #undef FOREACH_SANDBOX_THREAD_BEGIN
 #undef FOREACH_SANDBOX_THREAD_END
 
-DebuggerProxyPtr Debugger::createProxy(SmartPtr<Socket> socket, bool local) {
+DebuggerProxyPtr Debugger::createProxy(req::ptr<Socket> socket, bool local) {
   TRACE(2, "Debugger::createProxy\n");
   // Creates a proxy and threads needed to handle it. At this point, there is
   // not enough information to attach a sandbox.

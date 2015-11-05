@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -32,17 +32,17 @@ const char* formats[] = {
 
 std::string CmdPrint::FormatResult(const char* format, const Variant& ret) {
   if (format == nullptr) {
-    String sret = DebuggerClient::FormatVariable(ret, -1);
+    String sret = DebuggerClient::FormatVariable(ret);
     return std::string(sret.data(), sret.size());
   }
 
   if (strcmp(format, "r") == 0) {
-    String sret = DebuggerClient::FormatVariable(ret, -1, 'r');
+    String sret = DebuggerClient::FormatVariable(ret, 'r');
     return std::string(sret.data(), sret.size());
   }
 
   if (strcmp(format, "v") == 0) {
-    String sret = DebuggerClient::FormatVariable(ret, -1, 'v');
+    String sret = DebuggerClient::FormatVariable(ret, 'v');
     return std::string(sret.data(), sret.size());
   }
 
@@ -94,7 +94,7 @@ std::string CmdPrint::FormatResult(const char* format, const Variant& ret) {
     assert(false);
   }
 
-  String sret = DebuggerClient::FormatVariable(ret, -1);
+  String sret = DebuggerClient::FormatVariable(ret);
   if (strcmp(format, "hex") == 0 || strcmp(format, "x") == 0 ||
       strcmp(format, "oct") == 0) {
     StringBuffer sb;
@@ -117,7 +117,7 @@ std::string CmdPrint::FormatResult(const char* format, const Variant& ret) {
   if (strcmp(format, "time") == 0) {
     DateTime dt;
     int64_t ts = -1;
-    if (dt.fromString(ret.toString(), SmartPtr<TimeZone>())) {
+    if (dt.fromString(ret.toString(), req::ptr<TimeZone>())) {
       bool err;
       ts = dt.toTimeStamp(err);
     }

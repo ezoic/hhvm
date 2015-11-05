@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -32,19 +32,13 @@
 
 namespace HPHP {
 
-static const StaticString s_PAGELET_NOT_READY("PAGELET_NOT_READY");
-static const StaticString s_PAGELET_READY("PAGELET_READY");
-static const StaticString s_PAGELET_DONE("PAGELET_DONE");
-
 static class ServerExtension final : public Extension {
 public:
   ServerExtension() : Extension("server", NO_EXTENSION_VERSION_YET) {}
   void moduleInit() override {
-    Native::registerConstant<KindOfInt64>(s_PAGELET_NOT_READY.get(),
-                                          k_PAGELET_NOT_READY);
-    Native::registerConstant<KindOfInt64>(s_PAGELET_READY.get(),
-                                          k_PAGELET_READY);
-    Native::registerConstant<KindOfInt64>(s_PAGELET_DONE.get(), k_PAGELET_DONE);
+    HHVM_RC_INT_SAME(PAGELET_NOT_READY);
+    HHVM_RC_INT_SAME(PAGELET_READY);
+    HHVM_RC_INT_SAME(PAGELET_DONE);
 
     HHVM_FE(hphp_thread_type);
     HHVM_FE(dangling_server_proxy_old_request);
@@ -116,10 +110,6 @@ bool HHVM_FUNCTION(dangling_server_proxy_old_request) {
 ///////////////////////////////////////////////////////////////////////////////
 // Pagelet Server
 
-const int64_t k_PAGELET_NOT_READY = PAGELET_NOT_READY;
-const int64_t k_PAGELET_READY     = PAGELET_READY;
-const int64_t k_PAGELET_DONE      = PAGELET_DONE;
-
 bool HHVM_FUNCTION(pagelet_server_is_enabled) {
   return PageletServer::Enabled();
 }
@@ -161,8 +151,8 @@ String HHVM_FUNCTION(pagelet_server_task_result,
   int rcode;
   String response = PageletServer::TaskResult(task, rheaders, rcode,
                                               timeout_ms);
-  headers = rheaders;
-  code = rcode;
+  headers.assignIfRef(rheaders);
+  code.assignIfRef(rcode);
   return response;
 }
 
@@ -195,7 +185,7 @@ bool HHVM_FUNCTION(xbox_send_message,
                    const String& host /* = "localhost" */) {
   Array ret;
   auto b = XboxServer::SendMessage(msg, ret, timeout_ms, host);
-  retRef = ret;
+  retRef.assignIfRef(ret);
   return b;
 }
 
@@ -219,7 +209,7 @@ int64_t HHVM_FUNCTION(xbox_task_result,
                       const Resource& task,
                       int64_t timeout_ms,
                       VRefParam ret) {
-  return XboxServer::TaskResult(task, timeout_ms, ret);
+  return XboxServer::TaskResult(task, timeout_ms, ret.getVariantOrNull());
 }
 
 Variant HHVM_FUNCTION(xbox_process_call_message,

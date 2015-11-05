@@ -248,6 +248,37 @@ class Memcached {
   }
 
   /**
+   * Add an item under a new key on a specific server
+   *
+   * @param string $server_key - The key identifying the server to store the value on
+   * or retrieve it from. Instead of hashing on the actual key for the item, we
+   * hash on the server key when deciding which memcached server to talk to.
+   * This allows related items to be grouped together on a single server for
+   * efficiency with multi operations..
+   * @param array $keys - The keys to be deleted.
+   * @param int $time - The amount of time the server will wait to delete
+   *   the items.
+   *
+   * @return array
+   */
+  <<__Native>>
+  public function deleteMultiByKey(string $server_key, array $keys,
+                                   int $time = 0): mixed;
+
+  /**
+   * Add an item under a new key on a specific server
+   *
+   * @param array $keys - The keys to be deleted.
+   * @param int $time - The amount of time the server will wait to delete
+   *   the items.
+   *
+   * @return array
+   */
+  public function deleteMulti(array $keys, int $time = 0): mixed {
+    return $this->deleteMultiByKey('', $keys, $time);
+  }
+
+  /**
    * Delete an item from a specific server
    *
    * @param string $server_key -
@@ -506,6 +537,24 @@ class Memcached {
                                  int $offset = 1,
                                  int $initial_value = 0,
                                  int $expiry = 0): mixed;
+
+  /**
+   * Check if a persitent connection to memcache is being used.
+   *
+   * @return bool - Returns true if Memcache instance uses a persistent
+   * connection, false otherwise.
+   */
+  <<__Native>>
+  public function isPersistent(): bool;
+
+  /**
+   * Check if the instance was recently created
+   *
+   * @return bool - Returns the true if instance is recently created,
+   * false otherwise.
+   */
+  <<__Native>>
+  public function isPristine(): bool;
 
   /**
    * Prepend data to an existing item

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,17 +39,18 @@ namespace HPHP {
 
 APCFileStorage s_apc_file_storage;
 
-void APCFileStorage::enable(const std::string& prefix,
-                            int64_t chunkSize, int64_t maxSize) {
+void APCFileStorage::enable(const std::string& prefix, int64_t chunkSize) {
   Lock lock(m_lock);
   m_prefix = prefix;
   m_chunkSize = chunkSize;
-  m_maxSize = maxSize;
   if (m_state != StorageState::Invalid) {
     return;
   }
   if (!addFile()) {
-    Logger::Error("Failed to open file for apc, fallback to in-memory mode");
+    Logger::Error(
+        "Failed to open initial file for file-backed APC storage, "
+        "falling back to in-memory mode");
+    m_state = StorageState::Full;
     return;
   }
   m_state = StorageState::Open;
@@ -62,6 +63,9 @@ char *APCFileStorage::put(const char *data, int32_t len) {
     return nullptr;
   }
   if (len + PaddingSize > m_chunkRemain && !addFile()) {
+    Logger::Error(
+        "Failed to open additional files for file-backed APC storage, falling "
+        "back to in-memory mode");
     m_state = StorageState::Full;
     return nullptr;
   }
@@ -102,6 +106,7 @@ void APCFileStorage::seal() {
 void APCFileStorage::adviseOut() {
   Lock lock(m_lock);
   Timer timer(Timer::WallTime, "advising out apc prime");
+  Logger::FInfo("Advising out {} APCFileStorage chunks\n", m_chunks.size());
   for (int i = 0; i < (int)m_chunks.size(); i++) {
     if (madvise(m_chunks[i], m_chunkSize, MADV_DONTNEED) < 0) {
       Logger::Error("Failed to madvise chunk %d", i);
@@ -155,10 +160,6 @@ void APCFileStorage::cleanup() {
 }
 
 bool APCFileStorage::addFile() {
-  if ((int64_t)m_chunks.size() * m_chunkSize >= m_maxSize) {
-    m_state = StorageState::Full;
-    return false;
-  }
   char name[PATH_MAX];
   snprintf(name, sizeof(name), "%s.XXXXXX", m_prefix.c_str());
   int fd = mkstemp(name);

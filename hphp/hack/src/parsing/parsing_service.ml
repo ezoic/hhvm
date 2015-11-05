@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,50 +8,7 @@
  *
  *)
 
-(*****************************************************************************)
-(* Dependencies *)
-(*****************************************************************************)
-
-(* Module adding the dependencies related to inheritance.
- * We need a complete accurate graph of dependencies related to inheritance.
- * Because without them, we can't recompute the set of files that must be
- * rechecked when something changes.
- * It is safer for us to add them as soon as possible, that's why we add
- * them just after parsing, because that's as soon as it gets.
- *)
-module AddDeps = struct
-  module Dep = Typing_deps.Dep
-  open Ast
-
-  let rec program defl = List.iter def defl
-
-  and def = function
-    | Class c -> class_ c
-    | Fun _  | Stmt _  | Typedef _ | Constant _ -> ()
-    | Namespace _ | NamespaceUse _ -> assert false
-
-  and class_ c =
-    let name = snd c.c_name in
-    List.iter (hint name) c.c_extends;
-    List.iter (hint name) c.c_implements;
-    List.iter (class_def name) c.c_body
-
-  and class_def root = function
-    | ClassUse h -> hint root h
-    | XhpAttrUse h -> hint root h
-    | ClassTraitRequire (_, h) -> hint root h
-    | Attributes _  | Const _ | AbsConst _ | ClassVars _ | XhpAttr _ | Method _
-    | TypeConst _ -> ()
-
-  and hint root (_, h) =
-    match h with
-    | Happly ((_, parent), _) ->
-        Typing_deps.add_idep (Some (Dep.Class root)) (Dep.Extends parent)
-    | Hoption _ | Hfun _ | Htuple _ | Hshape _ | Haccess _ -> ()
-
-
-end
-
+open Core
 
 (*****************************************************************************)
 (* Helpers *)
@@ -81,7 +38,7 @@ let legacy_php_file_info = ref (fun fn ->
  * errorl is a list of errors
  * error_files is Relative_path.Set.t of files that we failed to parse
  *)
-let parse (acc, errorl, error_files, php_files) fn =
+let really_parse (acc, errorl, error_files, php_files) fn =
   let errorl', {Parser_hack.file_mode; comments; ast} =
     Errors.do_ begin fun () ->
       Parser_hack.from_file fn
@@ -89,7 +46,6 @@ let parse (acc, errorl, error_files, php_files) fn =
   in
   Parsing_hooks.dispatch_file_parsed_hook fn ast;
   if file_mode <> None then begin
-    AddDeps.program ast;
     let funs, classes, typedefs, consts = Ast_utils.get_defs ast in
     Parser_heap.ParserHeap.add fn ast;
     let defs =
@@ -115,6 +71,18 @@ let parse (acc, errorl, error_files, php_files) fn =
     acc, errorl, error_files, php_files
   end
 
+let parse (acc, errorl, error_files, php_files) fn =
+  (* Ugly hack... hack build requires that we keep JS files in our
+   * files_info map, but we don't want to actually read them from disk
+   * because we don't do anything with them. See also
+   * ServerMain.Program.make_next_files *)
+  if FindUtils.is_php (Relative_path.suffix fn) then
+    really_parse (acc, errorl, error_files, php_files) fn
+  else
+    let info = empty_file_info in
+    let acc = Relative_path.Map.add fn info acc in
+    acc, errorl, error_files, php_files
+
 (* Merging the results when the operation is done in parallel *)
 let merge_parse
     (acc1, status1, files1, pfiles1)
@@ -136,7 +104,7 @@ let parse_files acc fnl =
       !Utils.log msg;
       result)
     else parse in
-  List.fold_left parse acc fnl
+  List.fold_left fnl ~init:acc ~f:parse
 
 let parse_parallel workers get_next =
   MultiWorker.call

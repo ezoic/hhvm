@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,6 +38,7 @@ TRACE_SET_MOD(hhir_dce);
 bool canDCE(IRInstruction* inst) {
   switch (inst->op()) {
   case AssertNonNull:
+  case AssertType:
   case AbsDbl:
   case AddInt:
   case SubInt:
@@ -69,35 +70,31 @@ bool canDCE(IRInstruction* inst) {
   case ConvBoolToDbl:
   case ConvIntToDbl:
   case ConvStrToDbl:
+  case ConvResToDbl:
   case ConvArrToInt:
   case ConvBoolToInt:
   case ConvDblToInt:
   case ConvStrToInt:
+  case ConvResToInt:
   case ConvBoolToStr:
   case ConvDblToStr:
   case ConvIntToStr:
   case ConvClsToCctx:
   case NewColFromArray:
-  case Gt:
-  case Gte:
-  case Lt:
-  case Lte:
-  case Eq:
-  case Neq:
-  case Same:
-  case NSame:
   case GtInt:
   case GteInt:
   case LtInt:
   case LteInt:
   case EqInt:
   case NeqInt:
+  case CmpInt:
   case GtDbl:
   case GteDbl:
   case LtDbl:
   case LteDbl:
   case EqDbl:
   case NeqDbl:
+  case CmpDbl:
   case GtStr:
   case GteStr:
   case LtStr:
@@ -106,6 +103,32 @@ bool canDCE(IRInstruction* inst) {
   case NeqStr:
   case SameStr:
   case NSameStr:
+  case CmpStr:
+  case GtStrInt:
+  case GteStrInt:
+  case LtStrInt:
+  case LteStrInt:
+  case EqStrInt:
+  case NeqStrInt:
+  case CmpStrInt:
+  case GtBool:
+  case GteBool:
+  case LtBool:
+  case LteBool:
+  case EqBool:
+  case NeqBool:
+  case CmpBool:
+  case SameObj:
+  case NSameObj:
+  case SameArr:
+  case NSameArr:
+  case GtRes:
+  case GteRes:
+  case LtRes:
+  case LteRes:
+  case EqRes:
+  case NeqRes:
+  case CmpRes:
   case InstanceOf:
   case InstanceOfIface:
   case InstanceOfIfaceVtable:
@@ -116,12 +139,14 @@ bool canDCE(IRInstruction* inst) {
   case InterfaceSupportsStr:
   case InterfaceSupportsInt:
   case InterfaceSupportsDbl:
+  case HasToString:
   case IsType:
   case IsNType:
   case IsTypeMem:
   case IsNTypeMem:
   case IsScalarType:
   case IsWaitHandle:
+  case IsCol:
   case ClsNeq:
   case UnboxPtr:
   case BoxPtr:
@@ -191,7 +216,6 @@ bool canDCE(IRInstruction* inst) {
   case LdWHResult:
   case LdAFWHActRec:
   case LdResumableArObj:
-  case DefMIStateBase:
   case LdMIStateAddr:
   case StringIsset:
   case ColIsEmpty:
@@ -200,6 +224,9 @@ bool canDCE(IRInstruction* inst) {
   case LdColArray:
   case OrdStr:
   case CheckRange:
+  case LdARInvName:
+  case PackMagicArgs:
+  case LdMBase:
     assertx(!inst->isControlFlow());
     return true;
 
@@ -210,7 +237,6 @@ bool canDCE(IRInstruction* inst) {
   case CufIterSpillFrame:
   case CheckType:
   case CheckNullptr:
-  case AssertType:
   case CheckTypeMem:
   case HintLocInner:
   case CheckLoc:
@@ -248,12 +274,20 @@ bool canDCE(IRInstruction* inst) {
   case ConvObjToStr:
   case ConvResToStr:
   case ConvCellToStr:
-  case GtX:
-  case GteX:
-  case LtX:
-  case LteX:
-  case EqX:
-  case NeqX:
+  case GtObj:
+  case GteObj:
+  case LtObj:
+  case LteObj:
+  case EqObj:
+  case NeqObj:
+  case CmpObj:
+  case GtArr:
+  case GteArr:
+  case LtArr:
+  case LteArr:
+  case EqArr:
+  case NeqArr:
+  case CmpArr:
   case JmpZero:
   case JmpNZero:
   case JmpSSwitchDest:
@@ -381,6 +415,7 @@ bool canDCE(IRInstruction* inst) {
   case ContPreNext:
   case ContStartedCheck:
   case ContValid:
+  case ContStarted:
   case ContArIncKey:
   case ContArIncIdx:
   case ContArUpdateIdx:
@@ -401,6 +436,7 @@ bool canDCE(IRInstruction* inst) {
   case DbgAssertRefCount:
   case DbgAssertPtr:
   case DbgAssertType:
+  case DbgAssertFunc:
   case RBTraceEntry:
   case RBTraceMsg:
   case ZeroErrorLevel:
@@ -437,7 +473,9 @@ bool canDCE(IRInstruction* inst) {
   case IssetProp:
   case ElemX:
   case ElemArray:
+  case ElemArrayD:
   case ElemArrayW:
+  case ElemArrayU:
   case ElemDX:
   case ElemUX:
   case ArrayGet:
@@ -481,16 +519,22 @@ bool canDCE(IRInstruction* inst) {
   case DbgTrashStk:
   case DbgTrashFrame:
   case DbgTrashMem:
-  case PredictLoc:
-  case PredictStk:
   case EnterFrame:
   case CheckStackOverflow:
   case InitExtraArgs:
   case InitCtx:
   case CheckSurpriseFlagsEnter:
+  case CheckARMagicFlag:
+  case LdARNumArgsAndFlags:
+  case StARNumArgsAndFlags:
+  case StARInvName:
   case ExitPlaceholder:
   case ThrowOutOfBounds:
+  case ThrowInvalidOperation:
   case MapIdx:
+  case StMBase:
+  case FinishMemberOp:
+  case InlineReturnNoFrame:
     return false;
   }
   not_reached();
@@ -666,8 +710,41 @@ bool findWeakActRecUses(const BlockList& blocks,
         if (frameUses - (weakUses + 1) == 0) {
           ITRACE(1, "killing frame {}\n", *frameInst);
           killedFrames = true;
-          state[inst].setDead();
           state[frameInst].setDead();
+
+          // Ensure that the frame is still dead for the purposes of
+          // memory-effects
+          auto const spInst = frameInst->src(0)->inst();
+          InlineReturnNoFrameData data {
+            // +-------------------+
+            // |                   |
+            // | Outer Frame       |
+            // |                   |  <-- FP    --- ---
+            // +-------------------+             |   |
+            // |                   |             |   |  B: DefSP.offset
+            // | ...               |             |   |     (FPInvOffset, >= 0)
+            // +-------------------+             |   |
+            // |                   |  <-- SP     |  ---
+            // +-------------------+           C |   |
+            // |                   |             |   |
+            // | ...               |             |   |  A: DefInlineFP.spOffset
+            // +-------------------+             |   |     (IRSPRelOffset, <= 0)
+            // |                   |            ---  |
+            // | Callee Frame      |                 |
+            // |                   |                ---
+            // +-------------------+
+            //
+            // What we're trying to compute is C, a FPRelOffset (<0) from the
+            // Outer FP to the top cell in the Callee Frame. From the picture,
+            // we have |C| = |A| + |B| - 2. To get the negative result, A
+            // already has the correct sign, but we need to negate B and the
+            // minus 2 becomes +2, so: C = A - B + 2.
+            FPRelOffset {
+              frameInst->extra<DefInlineFP>()->spOffset.offset -
+              spInst->extra<DefSP>()->offset.offset + 2
+            }
+          };
+          unit.replace(inst, InlineReturnNoFrame, data);
         }
       }
       break;

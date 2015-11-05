@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -23,7 +23,9 @@
 #include "hphp/runtime/base/variable-unserializer.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/zend-functions.h"
+#ifdef ENABLE_EXTENSION_XDEBUG
 #include "hphp/runtime/ext/xdebug/ext_xdebug.h"
+#endif
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/server/http-protocol.h"
 
@@ -41,11 +43,18 @@ const StaticString
   s_string("string"),
   s_object("object"),
   s_array("array"),
+  s_NULL("NULL"),
   s_null("null");
 
 String HHVM_FUNCTION(gettype, const Variant& v) {
   if (v.getType() == KindOfResource && v.toCResRef().isInvalid()) {
     return s_unknown_type;
+  }
+  /* Although getDataTypeString also handles the null type, it returns "null"
+   * (lower case). Unfortunately, PHP returns "NULL" (upper case) for
+   * gettype(). So we make an exception here. */
+  if (v.isNull()) {
+    return s_NULL;
   }
   return getDataTypeString(v.getType());
 }
@@ -71,17 +80,19 @@ String HHVM_FUNCTION(strval, const Variant& v) {
 }
 
 bool HHVM_FUNCTION(settype, VRefParam var, const String& type) {
-  if      (type == s_boolean) var = var.toBoolean();
-  else if (type == s_bool   ) var = var.toBoolean();
-  else if (type == s_integer) var = var.toInt64();
-  else if (type == s_int    ) var = var.toInt64();
-  else if (type == s_float  ) var = var.toDouble();
-  else if (type == s_double ) var = var.toDouble();
-  else if (type == s_string ) var = var.toString();
-  else if (type == s_array  ) var = var.toArray();
-  else if (type == s_object ) var = var.toObject();
-  else if (type == s_null   ) var = uninit_null();
+  Variant val;
+  if      (type == s_boolean) val = var.toBoolean();
+  else if (type == s_bool   ) val = var.toBoolean();
+  else if (type == s_integer) val = var.toInt64();
+  else if (type == s_int    ) val = var.toInt64();
+  else if (type == s_float  ) val = var.toDouble();
+  else if (type == s_double ) val = var.toDouble();
+  else if (type == s_string ) val = var.toString();
+  else if (type == s_array  ) val = var.toArray();
+  else if (type == s_object ) val = var.toObject();
+  else if (type == s_null   ) val = uninit_null();
   else return false;
+  var.assignIfRef(val);
   return true;
 }
 
@@ -174,11 +185,13 @@ static ALWAYS_INLINE void do_var_dump(VariableSerializer vs,
 
 void HHVM_FUNCTION(var_dump, const Variant& expression,
                              const Array& _argv /*=null_array */) {
+#ifdef ENABLE_EXTENSION_XDEBUG
   if (UNLIKELY(XDEBUG_GLOBAL(OverloadVarDump) &&
                XDEBUG_GLOBAL(DefaultEnable))) {
     HHVM_FN(xdebug_var_dump)(expression, _argv);
     return;
   }
+#endif
 
   VariableSerializer vs(VariableSerializer::Type::VarDump, 0, 2);
   do_var_dump(vs, expression);
@@ -246,8 +259,8 @@ String HHVM_FUNCTION(serialize, const Variant& value) {
 }
 
 Variant HHVM_FUNCTION(unserialize, const String& str,
-                                   const Array& class_whitelist /* =[] */) {
-  return unserialize_from_string(str, class_whitelist);
+                                   const Array& options /* =[] */) {
+  return unserialize_from_string(str, options);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -360,33 +373,56 @@ ALWAYS_INLINE static
 int64_t extract_impl(VRefParam vref_array,
                      int extract_type /* = EXTR_OVERWRITE */,
                      const String& prefix /* = "" */) {
-  bool reference = extract_type & EXTR_REFS;
-  extract_type &= ~EXTR_REFS;
-
-  if (!vref_array.wrapped().isArray()) {
+  auto arrByRef = false;
+  auto arr_tv = vref_array.wrapped().asTypedValue();
+  if (arr_tv->m_type == KindOfRef) {
+    arr_tv = arr_tv->m_data.pref->tv();
+    arrByRef = true;
+  }
+  if (arr_tv->m_type != KindOfArray) {
     raise_warning("extract() expects parameter 1 to be array");
     return 0;
   }
+
+  bool reference = extract_type & EXTR_REFS;
+  extract_type &= ~EXTR_REFS;
 
   VMRegAnchor _;
   auto const varEnv = g_context->getOrCreateVarEnv();
   if (!varEnv) return 0;
 
+  auto& arr = tvAsCVarRef(arr_tv).asCArrRef();
   if (UNLIKELY(reference)) {
-    auto& arr = vref_array.wrapped().toArrRef();
-    int count = 0;
-    for (ArrayIter iter(arr); iter; ++iter) {
-      String name = iter.first();
-      if (!modify_extract_name(varEnv, name, extract_type, prefix)) continue;
-      g_context->bindVar(name.get(), arr.lvalAt(name).asTypedValue());
-      ++count;
+    auto extr_refs = [&](Array& arr) {
+      if (arr.size() > 0) {
+        // force arr to escalate (if necessary) by getting an
+        // lvalue to the first element.
+        ArrayData* ad = arr.get();
+        auto const& first_key = ad->getKey(ad->iter_begin());
+        arr.lvalAt(first_key);
+      }
+      int count = 0;
+      for (ArrayIter iter(arr); iter; ++iter) {
+        String name = iter.first();
+        if (!modify_extract_name(varEnv, name, extract_type, prefix)) continue;
+        // the const_cast is safe because we escalated the array
+        // we can't use arr.lvalAt(name), because arr may have been modified
+        // as a side effect of an earlier iteration
+        auto& ref = const_cast<Variant&>(iter.secondRef());
+        g_context->bindVar(name.get(), ref.asTypedValue());
+        ++count;
+      }
+      return count;
+    };
+    if (arrByRef) {
+      return extr_refs(const_cast<Array&>(arr));
     }
-    return count;
+    Array tmp = arr;
+    return extr_refs(tmp);
   }
 
-  auto const var_array = vref_array.wrapped().toArray();
   int count = 0;
-  for (ArrayIter iter(var_array); iter; ++iter) {
+  for (ArrayIter iter(arr); iter; ++iter) {
     String name = iter.first();
     if (!modify_extract_name(varEnv, name, extract_type, prefix)) continue;
     g_context->setVar(name.get(), iter.secondRef().asTypedValue());
@@ -416,7 +452,7 @@ static void parse_str_impl(const String& str, VRefParam arr) {
     HHVM_FN(SystemLib_extract)(result);
     return;
   }
-  arr = result;
+  arr.assignIfRef(result);
 }
 
 void HHVM_FUNCTION(parse_str,

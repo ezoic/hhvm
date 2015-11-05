@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -67,7 +67,7 @@ class type ['a] nast_visitor_type = object
   method on_float : 'a -> pstring -> 'a
   method on_null : 'a -> 'a
   method on_string : 'a -> pstring -> 'a
-  method on_string2 : 'a -> expr list -> string -> 'a
+  method on_string2 : 'a -> expr list -> 'a
   method on_special_func : 'a -> special_func -> 'a
   method on_yield_break : 'a -> 'a
   method on_yield : 'a -> afield -> 'a
@@ -79,7 +79,10 @@ class type ['a] nast_visitor_type = object
   method on_unop : 'a -> Ast.uop -> expr -> 'a
   method on_binop : 'a -> Ast.bop -> expr -> expr -> 'a
   method on_eif : 'a -> expr -> expr option -> expr -> 'a
-  method on_instanceOf : 'a -> expr -> expr -> 'a
+  method on_nullCoalesce : 'a -> expr -> expr -> 'a
+  method on_typename : 'a -> sid -> 'a
+  method on_instanceOf : 'a -> expr -> class_id -> 'a
+  method on_class_id : 'a -> class_id -> 'a
   method on_new : 'a -> class_id -> expr list -> expr list -> 'a
   method on_efun : 'a -> fun_ -> id list -> 'a
   method on_xml : 'a -> sid -> (pstring * expr) list -> expr list -> 'a
@@ -210,7 +213,7 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
    | String s    -> this#on_string acc s
    | This        -> this#on_this acc
    | Id sid      -> this#on_id acc sid
-   | Lplaceholder _sid -> acc
+   | Lplaceholder _pos -> acc
    | Lvar id     -> this#on_lvar acc id
    | Fun_id sid  -> this#on_fun_id acc sid
    | Method_id (expr, pstr) -> this#on_method_id acc expr pstr
@@ -229,13 +232,15 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
    | Class_get   (cid, id)   -> this#on_class_get acc cid id
    | Class_const (cid, id)   -> this#on_class_const acc cid id
    | Call        (ct, e, el, uel) -> this#on_call acc ct e el uel
-   | String2     (el, s)     -> this#on_string2 acc el s
+   | String2     el          -> this#on_string2 acc el
    | Pair        (e1, e2)    -> this#on_pair acc e1 e2
    | Cast        (hint, e)   -> this#on_cast acc hint e
    | Unop        (uop, e)         -> this#on_unop acc uop e
    | Binop       (bop, e1, e2)    -> this#on_binop acc bop e1 e2
    | Eif         (e1, e2, e3)     -> this#on_eif acc e1 e2 e3
+   | NullCoalesce (e1, e2)     -> this#on_nullCoalesce acc e1 e2
    | InstanceOf  (e1, e2)         -> this#on_instanceOf acc e1 e2
+   | Typename n -> this#on_typename acc n
    | New         (cid, el, uel)   -> this#on_new acc cid el uel
    | Efun        (f, idl)         -> this#on_efun acc f idl
    | Xml         (sid, attrl, el) -> this#on_xml acc sid attrl el
@@ -266,6 +271,7 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
   method on_method_id acc _ _ = acc
   method on_smethod_id acc _ _ = acc
   method on_method_caller acc _ _ = acc
+  method on_typename acc _ = acc
 
   method on_obj_get acc e1 e2 =
     let acc = this#on_expr acc e1 in
@@ -281,8 +287,9 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
     in
     acc
 
-  method on_class_get acc _ _ = acc
-  method on_class_const acc _ _ = acc
+  method on_class_get acc cid _ = this#on_class_id acc cid
+
+  method on_class_const acc cid _ = this#on_class_id acc cid
 
   method on_call acc _ e el uel =
     let acc = this#on_expr acc e in
@@ -297,15 +304,14 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
   method on_null acc = acc
   method on_string acc _ = acc
 
-  method on_string2 acc el _ =
+  method on_string2 acc el =
     let acc = List.fold_left this#on_expr acc el in
     acc
 
   method on_special_func acc = function
     | Gena e
     | Gen_array_rec e -> this#on_expr acc e
-    | Genva el
-    | Gen_array_va_rec el -> List.fold_left this#on_expr acc el
+    | Genva el -> List.fold_left this#on_expr acc el
 
   method on_yield_break acc = acc
   method on_yield acc e = this#on_afield acc e
@@ -339,12 +345,22 @@ class virtual ['a] nast_visitor: ['a] nast_visitor_type = object(this)
     let acc = this#on_expr acc e3 in
     acc
 
-  method on_instanceOf acc e1 e2 =
+  method on_nullCoalesce acc e1 e2 =
     let acc = this#on_expr acc e1 in
     let acc = this#on_expr acc e2 in
     acc
 
-  method on_new acc _ el uel =
+  method on_instanceOf acc e1 e2 =
+    let acc = this#on_expr acc e1 in
+    let acc = this#on_class_id acc e2 in
+    acc
+
+  method on_class_id acc = function
+    | CIexpr e -> this#on_expr acc e
+    | _ -> acc
+
+  method on_new acc cid el uel =
+    let acc = this#on_class_id acc cid in
     let acc = List.fold_left this#on_expr acc el in
     let acc = List.fold_left this#on_expr acc uel in
     acc

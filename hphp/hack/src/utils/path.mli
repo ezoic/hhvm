@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -12,6 +12,9 @@
 type t = private string
 
 val dummy_path: t
+val null_path: t
+val temp_dir_name: t
+val expanduser: string -> t
 val make: string -> t
 val to_string: t -> string
 val file_exists: t -> bool

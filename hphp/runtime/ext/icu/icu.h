@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -167,6 +167,7 @@ struct IntlGlobalError final : RequestEventHandler, Intl::IntlError {
   void requestShutdown() override {
     clearError();
   }
+  void vscan(IMarker&) const override {}
 };
 DECLARE_EXTERN_REQUEST_LOCAL(IntlGlobalError, s_intl_error);
 

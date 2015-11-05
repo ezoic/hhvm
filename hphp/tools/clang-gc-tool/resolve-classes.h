@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,7 @@
 #define incl_HPHP_CLANG_GC_TOOL_RESOLVE_CLASSES_H
 
 #include <set>
-#include "clang/AST/RecursiveASTVisitor.h"
+#include <clang/AST/RecursiveASTVisitor.h>
 #include "hphp/tools/clang-gc-tool/plugin-util.h"
 
 namespace HPHP {
@@ -35,10 +35,14 @@ struct ResolveClassesVisitor
     clang::ASTContext& context,
     const std::set<std::string>& needsScanMethod,
     DeclSet& gcClasses,
+    const std::set<std::string>& gcContainerNames,
+    DeclSet& gcContainers,
     const std::set<std::string>& hasScanMethodNames,
     DeclSet& hasScanMethod,
     const std::set<std::string>& badContainerNames,
     DeclSet& badContainers,
+    const std::set<std::string>& ignoredNames,
+    DeclSet& ignoredClasses,
     bool verbose
   );
 
@@ -47,14 +51,21 @@ struct ResolveClassesVisitor
   bool VisitClassTemplateDecl(clang::ClassTemplateDecl* decl);
   bool VisitFieldDecl(clang::FieldDecl* decl);
   bool VisitCXXRecordDecl(clang::CXXRecordDecl* decl);
+  bool VisitClassTemplateSpecializationDecl(
+    clang::ClassTemplateSpecializationDecl* tdecl
+  );
   //bool VisitCallExpr(clang::CallExpr* call);
  private:
   void resolveDecl(const clang::CXXRecordDecl* decl);
 
   std::set<std::string> m_needsScanMethod;
   DeclSet& m_gcClasses;
+  std::set<std::string> m_gcContainerNames;
+  DeclSet& m_gcContainers;
   std::set<std::string> m_hasScanMethodNames;
   DeclSet& m_hasScanMethod;
+  std::set<std::string> m_ignoredNames;
+  DeclSet& m_ignoredClasses;
   std::set<std::string> m_badContainerNames;
   DeclSet& m_badContainers;
   bool m_verbose;

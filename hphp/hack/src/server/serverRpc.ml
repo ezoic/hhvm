@@ -24,8 +24,8 @@ type _ t =
   | FIND_REFS : ServerFindRefs.action -> ServerFindRefs.result t
   | REFACTOR : ServerRefactor.action -> ServerRefactor.patch list t
   | DUMP_SYMBOL_INFO : string list -> SymbolInfoService.result t
+  | DUMP_AI_INFO : string list -> Ai.InfoService.result t
   | ARGUMENT_INFO : string * int * int -> ServerArgumentInfo.result t
-  | PROLOG : string t
   | SEARCH : string * string -> ServerSearch.result t
   | COVERAGE_COUNTS : string -> ServerCoverageMetric.result t
   | LINT : string list -> ServerLint.result t
@@ -33,16 +33,13 @@ type _ t =
   | CREATE_CHECKPOINT : string -> unit t
   | RETRIEVE_CHECKPOINT : string -> string list option t
   | DELETE_CHECKPOINT : string -> bool t
+  | STATS : Stats.t t
   | KILL : unit t
 
 let handle : type a. genv -> env -> a t -> a =
   fun genv env -> function
     | STATUS ->
-        (* Logging can be pretty slow, so do it asynchronously and respond to
-         * the client first *)
-        ServerEnv.async begin fun () ->
-          HackEventLogger.check_response env.errorl;
-        end;
+        HackEventLogger.check_response env.errorl;
         let el = ServerError.sort_errorl env.errorl in
         List.map ~f:Errors.to_absolute el
     | COVERAGE_LEVELS fn -> ServerColorFile.go env fn
@@ -57,13 +54,18 @@ let handle : type a. genv -> env -> a t -> a =
     | METHOD_JUMP (class_, find_children) ->
         MethodJumps.get_inheritance class_ find_children env genv
     | FIND_REFS find_refs_action ->
-        ServerFindRefs.go find_refs_action genv env
+        if ServerArgs.ai_mode genv.options = None then
+          ServerFindRefs.go find_refs_action genv env
+        else
+          Ai.ServerFindRefs.go find_refs_action genv env
     | REFACTOR refactor_action -> ServerRefactor.go refactor_action genv env
     | DUMP_SYMBOL_INFO file_list ->
         SymbolInfoService.go genv.workers file_list env
+    | DUMP_AI_INFO file_list ->
+        Ai.InfoService.go (Typing_check_utils.check_defs) genv.workers
+          file_list (ServerArgs.ai_mode genv.options) env.nenv
     | ARGUMENT_INFO (contents, line, col) ->
         ServerArgumentInfo.go genv env contents line col
-    | PROLOG -> PrologMain.go genv env
     | SEARCH (query, type_) -> ServerSearch.go query type_
     | COVERAGE_COUNTS path -> ServerCoverageMetric.go path genv env
     | LINT fnl -> ServerLint.go genv fnl
@@ -71,4 +73,5 @@ let handle : type a. genv -> env -> a t -> a =
     | CREATE_CHECKPOINT x -> ServerCheckpoint.create_checkpoint x
     | RETRIEVE_CHECKPOINT x -> ServerCheckpoint.retrieve_checkpoint x
     | DELETE_CHECKPOINT x -> ServerCheckpoint.delete_checkpoint x
-    | KILL -> ServerEnv.async (fun () -> ServerUtils.die_nicely genv)
+    | STATS -> Stats.get_stats ()
+    | KILL -> ()

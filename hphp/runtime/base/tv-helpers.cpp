@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -52,19 +52,19 @@ bool cellIsPlausible(const Cell cell) {
         return;
       case KindOfString:
         assertPtr(cell.m_data.pstr);
-        assert(check_refcount(cell.m_data.pstr->getCount()));
+        assert(cell.m_data.pstr->checkCount());
         return;
       case KindOfArray:
         assertPtr(cell.m_data.parr);
-        assert(check_refcount(cell.m_data.parr->getCount()));
+        assert(cell.m_data.parr->checkCount());
         return;
       case KindOfObject:
         assertPtr(cell.m_data.pobj);
-        assert(!cell.m_data.pobj->isStatic());
+        assert(cell.m_data.pobj->checkCount());
         return;
       case KindOfResource:
         assertPtr(cell.m_data.pres);
-        assert(!cell.m_data.pres->isStatic());
+        assert(cell.m_data.pres->checkCount());
         return;
       case KindOfRef:
         assert(!"KindOfRef found in a Cell");
@@ -83,7 +83,7 @@ bool tvIsPlausible(TypedValue tv) {
   if (tv.m_type == KindOfRef) {
     assert(tv.m_data.pref);
     assert(uintptr_t(tv.m_data.pref) % sizeof(void*) == 0);
-    assert(check_refcount(tv.m_data.pref->getRealCount()));
+    assert(tv.m_data.pref->checkCount());
     tv = *tv.m_data.pref->tv();
   }
   return cellIsPlausible(tv);
@@ -95,13 +95,13 @@ bool refIsPlausible(const Ref ref) {
 }
 
 bool tvDecRefWillRelease(TypedValue* tv) {
-  if (!IS_REFCOUNTED_TYPE(tv->m_type)) {
+  if (!isRefcountedType(tv->m_type)) {
     return false;
   }
   if (tv->m_type == KindOfRef) {
     return tv->m_data.pref->getRealCount() <= 1;
   }
-  return !tv->m_data.pstr->hasMultipleRefs();
+  return TV_GENERIC_DISPATCH(*tv, decWillRelease);
 }
 
 void tvCastToBooleanInPlace(TypedValue* tv) {
@@ -147,7 +147,7 @@ void tvCastToBooleanInPlace(TypedValue* tv) {
         continue;
 
       case KindOfResource:
-        b = tv->m_data.pres->o_toBoolean();
+        b = tv->m_data.pres->data()->o_toBoolean();
         tvDecRefRes(tv);
         continue;
 
@@ -203,7 +203,7 @@ void tvCastToDoubleInPlace(TypedValue* tv) {
         continue;
 
       case KindOfResource:
-        d = tv->m_data.pres->o_toDouble();
+        d = tv->m_data.pres->data()->o_toDouble();
         tvDecRefRes(tv);
         continue;
 
@@ -259,7 +259,7 @@ void cellCastToInt64InPlace(Cell* cell) {
         continue;
 
       case KindOfResource:
-        i = cell->m_data.pres->o_toInt64();
+        i = cell->m_data.pres->data()->o_toInt64();
         tvDecRefRes(cell);
         continue;
 
@@ -311,7 +311,7 @@ double tvCastToDouble(TypedValue* tv) {
       return tv->m_data.pobj->toDouble();
 
     case KindOfResource:
-      return tv->m_data.pres->o_toDouble();
+      return tv->m_data.pres->data()->o_toDouble();
 
     case KindOfRef:
     case KindOfClass:
@@ -365,7 +365,7 @@ void tvCastToStringInPlace(TypedValue* tv) {
 
       case KindOfResource:
         // For resources, we fall back on the Variant machinery
-        tvAsVariant(tv) = tv->m_data.pres->o_toString();
+        tvAsVariant(tv) = tv->m_data.pres->data()->o_toString();
         return;
 
       case KindOfRef:
@@ -421,7 +421,7 @@ StringData* tvCastToString(const TypedValue* tv) {
       return tv->m_data.pobj->invokeToString().detach();
 
     case KindOfResource:
-      return tv->m_data.pres->o_toString().detach();
+      return tv->m_data.pres->data()->o_toString().detach();
 
     case KindOfRef:
     case KindOfClass:
@@ -474,9 +474,10 @@ void tvCastToArrayInPlace(TypedValue* tv) {
     not_reached();
   } while (0);
 
+  assert(!a->isRefCounted() || a->hasExactlyOneRef());
+
   tv->m_data.parr = a;
   tv->m_type = KindOfArray;
-  tv->m_data.parr->incRefCount();
 }
 
 void tvCastToObjectInPlace(TypedValue* tv) {
@@ -526,7 +527,7 @@ void tvCastToObjectInPlace(TypedValue* tv) {
 }
 
 void tvCastToNullableObjectInPlace(TypedValue* tv) {
-  if (IS_NULL_TYPE(tv->m_type)) {
+  if (isNullType(tv->m_type)) {
     // XXX(t3879280) This happens immediately before calling an extension
     // function that takes an optional Object argument. We want to end up
     // passing const Object& holding nullptr, so by clearing out m_data.pobj we
@@ -563,8 +564,7 @@ void tvCastToResourceInPlace(TypedValue* tv) {
   } while (0);
 
   tv->m_type = KindOfResource;
-  tv->m_data.pres = newres<DummyResource>();
-  tv->m_data.pres->incRefCount();
+  tv->m_data.pres = req::make<DummyResource>().detach()->hdr();
 }
 
 bool tvCoerceParamToBooleanInPlace(TypedValue* tv) {
@@ -710,7 +710,7 @@ bool tvCoerceParamToObjectInPlace(TypedValue* tv) {
 bool tvCoerceParamToNullableObjectInPlace(TypedValue* tv) {
   assert(tvIsPlausible(*tv));
   tvUnboxIfNeeded(tv);
-  if (IS_NULL_TYPE(tv->m_type)) {
+  if (isNullType(tv->m_type)) {
     // See comment in tvCastToNullableObjectInPlace
     tv->m_data.pobj = nullptr;
     return true;
@@ -756,7 +756,7 @@ TVCoercionException::TVCoercionException(const Func* func,
         folly::format("Unable to coerce param {} to {}() "
                       "from {} to {}",
                       arg_num,
-                      func->name()->data(),
+                      func->name(),
                       actual,
                       expected).str())
 {

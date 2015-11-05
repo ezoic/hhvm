@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,7 @@
 
 #include "hphp/runtime/base/datetime.h"
 #include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/preg.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/resource-data.h"
@@ -155,13 +156,13 @@ void HttpRequestHandler::sendStaticContent(Transport *transport,
     snprintf(age, sizeof(age), "max-age=%d", RuntimeOption::ExpiresDefault);
     transport->addHeader("Cache-Control", age);
     transport->addHeader("Expires",
-      makeSmartPtr<DateTime>(exp, true)->toString(
+      req::make<DateTime>(exp, true)->toString(
         DateTime::DateFormat::HttpHeader).c_str());
   }
 
   if (mtime) {
     transport->addHeader("Last-Modified",
-      makeSmartPtr<DateTime>(mtime, true)->toString(
+      req::make<DateTime>(mtime, true)->toString(
         DateTime::DateFormat::HttpHeader).c_str());
   }
   transport->addHeader("Accept-Ranges", "bytes");
@@ -444,7 +445,7 @@ bool HttpRequestHandler::executePHPRequest(Transport *transport,
   {
     ServerStatsHelper ssh("input");
     HttpProtocol::PrepareSystemVariables(transport, reqURI, sourceRootInfo);
-    ExtensionRegistry::requestInit();
+    InitFiniNode::GlobalsInit();
 
     if (RuntimeOption::EnableDebugger) {
       Eval::DSandboxInfo sInfo = sourceRootInfo.getSandboxInfo();

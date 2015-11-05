@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,6 @@
 
 #include <stdio.h>
 #include <assert.h>
-#include <string.h>
 
 #include <cstdint>
 #include <string>
@@ -26,7 +25,6 @@
 #include <sstream>
 
 #include "hphp/runtime/vm/repo.h"
-#include "hphp/runtime/base/thread-init-fini.h"
 #include "hphp/runtime/base/preg.h"
 #include "hphp/runtime/base/program-functions.h"
 
@@ -82,7 +80,9 @@ void error(const std::string& msg) {
   exit(1);
 }
 
-void warnTooFew(std::string name, uint32_t requested, uint32_t available) {
+void warnTooFew(const std::string& name,
+                uint32_t requested,
+                uint32_t available) {
   fprintf(stderr,
           "Requested top %u %s, but there are only %u available.\n",
           requested,

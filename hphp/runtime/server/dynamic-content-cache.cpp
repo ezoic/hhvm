@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -54,9 +54,9 @@ void DynamicContentCache::store(const std::string &name, const char *data,
 
   auto const f = std::make_shared<ResourceFile>();
   auto const sb = std::make_shared<CstrBuffer>(size);
-  sb->append(StringSlice{data, static_cast<uint32_t>(size)}); // makes a copy
+  sb->append(folly::StringPiece{data, static_cast<uint32_t>(size)});
   f->file = sb;
-  int len = sb->size();
+  auto len = static_cast<int>(sb->size());
   char *compressed = gzencode(sb->data(), len, 9, CODING_GZIP);
   if (compressed) {
     if (unsigned(len) < sb->size()) {
@@ -74,4 +74,3 @@ void DynamicContentCache::store(const std::string &name, const char *data,
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-

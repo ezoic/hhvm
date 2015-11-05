@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,13 +17,21 @@
 #ifndef incl_HPHP_TYPEANNOTATION_H_
 #define incl_HPHP_TYPEANNOTATION_H_
 
-#include "hphp/util/deprecated/base.h"
+#include <cstring>
+#include <string>
 #include <vector>
+
 #include "hphp/runtime/base/datatype.h"
-#include "hphp/compiler/code_generator.h"
+
+#include "hphp/util/deprecated/declare-boost-types.h"
+#include "hphp/runtime/base/type-structure.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+class CodeGenerator;
+
+struct Array;
 
 DECLARE_BOOST_TYPES(TypeAnnotation);
 
@@ -64,6 +72,38 @@ DECLARE_BOOST_TYPES(TypeAnnotation);
  *                                               | m_typeArgs(null) |
  *                                               | m_typeList(null) |
  *                                               |__________________|
+ *
+ * For shapes, we reinterpret the fields of TypeAnnotation so that we
+ * store the full information of a shape type. We use the the typeArgs
+ * to point to its member list; each member (field name => field type
+ * pairs) has its own TypeAnnotation: the field name is stored in
+ * m_name, and the field type is stored in its typeArgs, and we use
+ * typeList to link them together. The m_name remains "array" since we
+ * treat shapes as arrays.
+ *
+ * For example, if we had shape('field1'=>int, 'field2'=>string), the
+ * TypeAnnotation would look like the following:
+ *                                                   ------------------
+ *                                                  | m_name("int")    |
+ *  __________________                              | m_typeArgs(null) |
+ * | m_name("array")  |     __________________   -->| m_typeList(null) |
+ * | m_typeArgs       |--> | m_name("field1") |  |  |__________________|
+ * | m_typeList(null) |    | m_typeArgs       |--|  ___________________
+ * | m_shape(true)    |    | m_typeList       |--> | m_name("field2")  |
+ * |__________________|    |__________________|    | m_typeArgs        |---
+ *                                                 | m_typeList(null)  |  |
+ *                                                 |___________________|  |
+ *                                                                        |
+ *                                                __________________      |
+ *                                               | m_name(string)   |  <--
+ *                                               | m_typeArgs(null) |
+ *                                               | m_typeList(null) |
+ *                                               |__________________|
+ *
+ * Shape fields can be either all string literals or all class
+ * constants. m_clsCnsShapeField indicates whether a field is a class
+ * constants. If so, it is a double colon delimited string in the form
+ * of "clsName::cnsName".
  */
 class TypeAnnotation {
 public:
@@ -76,6 +116,11 @@ public:
   void setXHP() { m_xhp = true; }
   void setTypeVar() { m_typevar = true; }
   void setTypeAccess() { m_typeaccess = true; }
+  void setShape() { m_shape = true; }
+  void setClsCnsShapeField() { m_clsCnsShapeField = true; }
+  void setGenerics(const std::string& generics) { m_generics = generics; }
+
+  const std::string& getGenerics() const { return m_generics; }
 
   bool isNullable() const { return m_nullable; }
   bool isSoft() const { return m_soft; }
@@ -84,6 +129,8 @@ public:
   bool isXHP() const { return m_xhp; }
   bool isTypeVar() const { return m_typevar; }
   bool isTypeAccess() const { return m_typeaccess; }
+  bool isShape() const { return m_shape; }
+  bool isClsCnsShapeField() const { return m_clsCnsShapeField; }
 
   /*
    * Return a shallow copy of this TypeAnnotation, except with
@@ -165,13 +212,14 @@ public:
    */
   MaybeDataType dataType() const;
 
-  /*
-   *  Serializes the type annotation using the given CodeGenerator.
-   */
-  void outputCodeModel(CodeGenerator& cg);
-
   int numTypeArgs() const;
   TypeAnnotationPtr getTypeArg(int n) const;
+
+  TypeStructure::Kind getKind() const;
+
+  /* returns the scalar array representation (the TypeStructure) of
+   * this type annotation. */
+  Array getScalarArrayRep() const;
 
 private:
   void functionTypeName(std::string &name) const;
@@ -179,9 +227,14 @@ private:
   void tupleTypeName(std::string &name) const;
   void genericTypeName(std::string &name) const;
   void accessTypeName(std::string &name) const;
+  void shapeTypeName(std::string& name) const;
+  bool isPrimType(const char* str) const;
+  Array argsListToScalarArray(TypeAnnotationPtr ta) const;
+  void shapeFieldsToScalarArray(Array& rep, TypeAnnotationPtr ta) const;
 
 private:
   std::string m_name;
+  std::string m_generics; // store typevars as comma separated string: Tk,Tv,...
   TypeAnnotationPtr m_typeArgs;
   TypeAnnotationPtr m_typeList;
   unsigned m_nullable : 1;
@@ -191,9 +244,10 @@ private:
   unsigned m_xhp : 1;
   unsigned m_typevar : 1;
   unsigned m_typeaccess : 1;
+  unsigned m_shape : 1;
+  unsigned m_clsCnsShapeField : 1;
 };
 
 }
 
 #endif
-

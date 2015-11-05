@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -31,8 +31,6 @@ class c_Map;
 class c_ImmMap;
 class c_Set;
 class c_ImmSet;
-class VariableSerializer;
-class VariableUnserializer;
 }
 
 namespace HPHP { namespace collections {
@@ -89,23 +87,13 @@ void initMapElem(ObjectData* obj, TypedValue* key, TypedValue* val);
 void initElem(ObjectData* obj, TypedValue* val);
 
 /////////////////////////////////////////////////////////////////////////////
-// Misc
+// Casting and Cloing
 
 bool isType(const Class* cls, CollectionType type);
 template<typename ...Args>
 bool isType(const Class* cls, CollectionType type, Args... args) {
   return isType(cls, type) || isType(cls, args...);
 }
-
-uint32_t sizeOffset(CollectionType type);
-uint32_t dataOffset(CollectionType type);
-
-void unserialize(ObjectData* obj, VariableUnserializer* uns,
-                 int64_t sz, char type);
-void serialize(ObjectData* obj, VariableSerializer* serializer);
-
-/////////////////////////////////////////////////////////////////////////////
-// Casting and Cloing
 
 Array toArray(const ObjectData* obj);
 bool toBool(const ObjectData* obj);
@@ -199,7 +187,7 @@ COLLECTIONS_ALL_TYPES(X)
 
 inline folly::Optional<CollectionType> stringToType(const std::string& s) {
   return stringToType(
-    SmartPtr<StringData>::attach(StringData::Make(s)).get()
+    req::ptr<StringData>::attach(StringData::Make(s)).get()
   );
 }
 

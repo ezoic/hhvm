@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -36,7 +36,6 @@ public:
   ExpressionPtr preOptimize(AnalysisResultConstPtr ar) override;
 
   bool isRefable(bool checkError = false) const override { return true;}
-  bool isTemporary() const override;
 
   ExpressionPtr getVariable() const { return m_variable;}
   ExpressionPtr getOffset() const { return m_offset;}
@@ -54,8 +53,6 @@ public:
    */
   bool appendClass(ExpressionPtr cls,
                    AnalysisResultConstPtr ar, FileScopePtr file);
-
-  bool canonCompare(ExpressionPtr e) const override;
 
 private:
   ExpressionPtr m_variable;

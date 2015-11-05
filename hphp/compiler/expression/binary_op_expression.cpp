@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,7 +21,6 @@
 #include "hphp/parser/hphp.tab.hpp"
 #include "hphp/compiler/expression/scalar_expression.h"
 #include "hphp/compiler/expression/constant_expression.h"
-#include "hphp/compiler/code_model_enums.h"
 #include "hphp/runtime/base/type-conversions.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
@@ -67,8 +66,7 @@ BinaryOpExpression::BinaryOpExpression
     break;
   case T_COLLECTION: {
     std::string s = m_exp1->getLiteralString();
-    ExpressionListPtr el = static_pointer_cast<ExpressionList>(m_exp2);
-    el->setCollectionElems();
+    static_pointer_cast<ExpressionList>(m_exp2)->setCollectionElems();
     break;
   }
   default:
@@ -82,25 +80,6 @@ ExpressionPtr BinaryOpExpression::clone() {
   exp->m_exp1 = Clone(m_exp1);
   exp->m_exp2 = Clone(m_exp2);
   return exp;
-}
-
-bool BinaryOpExpression::isTemporary() const {
-  switch (m_op) {
-  case '+':
-  case '-':
-  case '*':
-  case '/':
-  case T_SL:
-  case T_SR:
-  case T_BOOLEAN_OR:
-  case T_BOOLEAN_AND:
-  case T_LOGICAL_OR:
-  case T_LOGICAL_AND:
-  case T_INSTANCEOF:
-  case T_COLLECTION:
-    return true;
-  }
-  return false;
 }
 
 bool BinaryOpExpression::isRefable(bool checkError /* = false */) const {
@@ -164,7 +143,6 @@ ExpressionPtr BinaryOpExpression::unneededHelper() {
 
   if (shortCircuit) {
     m_exp2 = m_exp2->unneeded();
-    m_exp2->setExpectedType(Type::Boolean);
   }
   return static_pointer_cast<Expression>(shared_from_this());
 }
@@ -240,17 +218,11 @@ void BinaryOpExpression::setNthKid(int n, ConstructPtr cp) {
   }
 }
 
-bool BinaryOpExpression::canonCompare(ExpressionPtr e) const {
-  return Expression::canonCompare(e) &&
-    getOp() == static_cast<BinaryOpExpression*>(e.get())->getOp();
-}
-
 ExpressionPtr BinaryOpExpression::preOptimize(AnalysisResultConstPtr ar) {
   if (!m_exp2->isScalar()) {
     if (!m_exp1->isScalar()) {
       if (m_exp1->is(KindOfBinaryOpExpression)) {
-        BinaryOpExpressionPtr b(
-          dynamic_pointer_cast<BinaryOpExpression>(m_exp1));
+        auto b = dynamic_pointer_cast<BinaryOpExpression>(m_exp1);
         if (b->m_op == m_op && b->m_exp1->isScalar()) {
           return foldRightAssoc(ar);
         }
@@ -283,7 +255,6 @@ static ExpressionPtr makeIsNull(AnalysisResultConstPtr ar,
       exp->getScope(), r, "is_null", false, expList, ExpressionPtr());
 
   call->setValid();
-  call->setActualType(Type::Boolean);
   call->setupScopes(ar);
 
   if (!invert) return call;
@@ -326,7 +297,6 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
               new UnaryOpExpression(
                 getScope(), getRange(),
                 rep, T_BOOL_CAST, true));
-          rep->setActualType(Type::Boolean);
           return replaceValue(rep);
         }
         case '+':
@@ -336,12 +306,11 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
         case '|':
         case '^':
           if (m_exp2->is(KindOfBinaryOpExpression)) {
-            BinaryOpExpressionPtr binOpExp =
-              dynamic_pointer_cast<BinaryOpExpression>(m_exp2);
+            auto binOpExp = dynamic_pointer_cast<BinaryOpExpression>(m_exp2);
             if (binOpExp->m_op == m_op && binOpExp->m_exp1->isScalar()) {
-              ExpressionPtr aExp = m_exp1;
-              ExpressionPtr bExp = binOpExp->m_exp1;
-              ExpressionPtr cExp = binOpExp->m_exp2;
+              auto aExp = m_exp1;
+              auto bExp = binOpExp->m_exp1;
+              auto cExp = binOpExp->m_exp2;
               if (aExp->isArray() || bExp->isArray() || cExp->isArray()) {
                 break;
               }
@@ -349,7 +318,7 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
               m_exp2 = cExp;
               binOpExp->m_exp1 = aExp;
               binOpExp->m_exp2 = bExp;
-              if (ExpressionPtr optExp = binOpExp->foldConst(ar)) {
+              if (auto optExp = binOpExp->foldConst(ar)) {
                 m_exp1 = optExp;
               }
               return static_pointer_cast<Expression>(shared_from_this());
@@ -367,10 +336,8 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
   if (m_exp1->isScalar()) {
     if (!m_exp1->getScalarValue(v1)) return ExpressionPtr();
     try {
-      ScalarExpressionPtr scalar1 =
-        dynamic_pointer_cast<ScalarExpression>(m_exp1);
-      ScalarExpressionPtr scalar2 =
-        dynamic_pointer_cast<ScalarExpression>(m_exp2);
+      auto scalar1 = dynamic_pointer_cast<ScalarExpression>(m_exp1);
+      auto scalar2 = dynamic_pointer_cast<ScalarExpression>(m_exp2);
       // Some data, like the values of __CLASS__ and friends, are not available
       // while we're still in the initial parse phase.
       if (ar->getPhase() == AnalysisResult::ParseAllFiles) {
@@ -379,11 +346,11 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
           return ExpressionPtr();
         }
       }
-      if (!Option::WholeProgram || !Option::ParseTimeOpts) {
+      if ((!Option::WholeProgram || !Option::ParseTimeOpts) && getScope()) {
         // In the VM, don't optimize __CLASS__ if within a trait, since
         // __CLASS__ is not resolved yet.
-        ClassScopeRawPtr clsScope = getOriginalClass();
-        if (clsScope && clsScope->isTrait()) {
+        auto cs = getClassScope();
+        if (cs && cs->isTrait()) {
           if ((scalar1 && scalar1->getType() == T_CLASS_C) ||
               (scalar2 && scalar2->getType() == T_CLASS_C)) {
             return ExpressionPtr();
@@ -438,6 +405,9 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
         case T_IS_GREATER_OR_EQUAL:
           result = cellGreaterOrEqual(*v1.asCell(), *v2.asCell());
           break;
+        case T_SPACESHIP:
+          result = cellCompare(*v1.asCell(), *v2.asCell());
+          break;
         case '+':
           *result.asCell() = add(*v1.asCell(), *v2.asCell());
           break;
@@ -459,12 +429,34 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
           }
           *result.asCell() = cellMod(*v1.asCell(), *v2.asCell());
           break;
-        case T_SL:
-          result = v1.toInt64() << v2.toInt64();
+        case T_SL: {
+          int64_t shift = v2.toInt64();
+          if (!RuntimeOption::PHP7_IntSemantics) {
+            result = v1.toInt64() << (shift & 63);
+          } else if (shift >= 64) {
+            result = 0;
+          } else if (shift < 0) {
+            // This raises an error, and so can't be folded.
+            return ExpressionPtr();
+          } else {
+            result = v1.toInt64() << (shift & 63);
+          }
           break;
-        case T_SR:
-          result = v1.toInt64() >> v2.toInt64();
+        }
+        case T_SR: {
+          int64_t shift = v2.toInt64();
+          if (!RuntimeOption::PHP7_IntSemantics) {
+            result = v1.toInt64() >> (shift & 63);
+          } else if (shift >= 64) {
+            result = v1.toInt64() >= 0 ? 0 : -1;
+          } else if (shift < 0) {
+            // This raises an error, and so can't be folded.
+            return ExpressionPtr();
+          } else {
+            result = v1.toInt64() >> (shift & 63);
+          }
           break;
+        }
         case T_BOOLEAN_OR:
           result = v1.toBoolean() || v2.toBoolean(); break;
         case T_BOOLEAN_AND:
@@ -518,7 +510,6 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
           new UnaryOpExpression(
             getScope(), getRange(),
             rep, T_BOOL_CAST, true));
-        rep->setActualType(Type::Boolean);
         if (!useFirst) {
           ExpressionListPtr l(
             new ExpressionList(
@@ -526,10 +517,8 @@ ExpressionPtr BinaryOpExpression::foldConst(AnalysisResultConstPtr ar) {
               ExpressionList::ListKindComma));
           l->addElement(m_exp1);
           l->addElement(rep);
-          l->setActualType(Type::Boolean);
           rep = l;
         }
-        rep->setExpectedType(getExpectedType());
         return replaceValue(rep);
       }
       case T_LOGICAL_XOR:
@@ -564,8 +553,7 @@ BinaryOpExpression::foldRightAssoc(AnalysisResultConstPtr ar) {
   case '+':
   case '*':
     if (m_exp1->is(Expression::KindOfBinaryOpExpression)) {
-      BinaryOpExpressionPtr binOpExp =
-        dynamic_pointer_cast<BinaryOpExpression>(m_exp1);
+      auto binOpExp = dynamic_pointer_cast<BinaryOpExpression>(m_exp1);
       if (binOpExp->m_op == m_op) {
         // turn a Op b Op c, namely (a Op b) Op c into a Op (b Op c)
         ExpressionPtr aExp = binOpExp->m_exp1;
@@ -586,80 +574,6 @@ BinaryOpExpression::foldRightAssoc(AnalysisResultConstPtr ar) {
     break;
   }
   return ExpressionPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void BinaryOpExpression::outputCodeModel(CodeGenerator &cg) {
-  if (m_op == T_COLLECTION) {
-    cg.printObjectHeader("CollectionInitializerExpression", 3);
-    cg.printPropertyHeader("class");
-    cg.printTypeExpression(m_exp1);
-    cg.printPropertyHeader("arguments");
-    cg.printExpressionVector(static_pointer_cast<ExpressionList>(m_exp2));
-    cg.printPropertyHeader("sourceLocation");
-    cg.printLocation(this);
-    cg.printObjectFooter();
-    return;
-  }
-
-  cg.printObjectHeader("BinaryOpExpression", 4);
-  cg.printPropertyHeader("expression1");
-  m_exp1->outputCodeModel(cg);
-  cg.printPropertyHeader("expression2");
-  if (m_op == T_INSTANCEOF) {
-    cg.printTypeExpression(m_exp2);
-  } else {
-    m_exp2->outputCodeModel(cg);
-  }
-  cg.printPropertyHeader("operation");
-
-  int op = 0;
-  switch (m_op) {
-    case T_PLUS_EQUAL: op = PHP_PLUS_ASSIGN; break;
-    case T_MINUS_EQUAL: op = PHP_MINUS_ASSIGN; break;
-    case T_MUL_EQUAL: op = PHP_MULTIPLY_ASSIGN; break;
-    case T_DIV_EQUAL: op = PHP_DIVIDE_ASSIGN; break;
-    case T_CONCAT_EQUAL: op = PHP_CONCAT_ASSIGN; break;
-    case T_MOD_EQUAL:  op = PHP_MODULUS_ASSIGN;  break;
-    case T_AND_EQUAL: op = PHP_AND_ASSIGN; break;
-    case T_OR_EQUAL: op = PHP_OR_ASSIGN;  break;
-    case T_XOR_EQUAL: op = PHP_XOR_ASSIGN; break;
-    case T_SL_EQUAL: op = PHP_SHIFT_LEFT_ASSIGN; break;
-    case T_SR_EQUAL: op = PHP_SHIFT_RIGHT_ASSIGN; break;
-    case T_BOOLEAN_OR: op = PHP_BOOLEAN_OR;  break;
-    case T_BOOLEAN_AND: op = PHP_BOOLEAN_AND; break;
-    case T_LOGICAL_OR: op = PHP_LOGICAL_OR; break;
-    case T_LOGICAL_AND: op = PHP_LOGICAL_AND;  break;
-    case T_LOGICAL_XOR: op = PHP_LOGICAL_XOR; break;
-    case '|': op = PHP_OR; break;
-    case '&': op = PHP_AND;  break;
-    case '^': op = PHP_XOR; break;
-    case '.': op = PHP_CONCAT; break;
-    case '+': op = PHP_PLUS; break;
-    case '-': op = PHP_MINUS; break;
-    case '*': op = PHP_MULTIPLY; break;
-    case '/': op = PHP_DIVIDE; break;
-    case '%': op = PHP_MODULUS; break;
-    case T_SL: op = PHP_SHIFT_LEFT; break;
-    case T_SR: op = PHP_SHIFT_RIGHT; break;
-    case T_IS_IDENTICAL: op = PHP_IS_IDENTICAL; break;
-    case T_IS_NOT_IDENTICAL: op = PHP_IS_NOT_IDENTICAL; break;
-    case T_IS_EQUAL: op = PHP_IS_EQUAL; break;
-    case T_IS_NOT_EQUAL: op = PHP_IS_NOT_EQUAL; break;
-    case '<': op = PHP_IS_SMALLER; break;
-    case T_IS_SMALLER_OR_EQUAL: op = PHP_IS_SMALLER_OR_EQUAL; break;
-    case '>': op = PHP_IS_GREATER; break;
-    case T_IS_GREATER_OR_EQUAL: op = PHP_IS_GREATER_OR_EQUAL;  break;
-    case T_INSTANCEOF: op = PHP_INSTANCEOF;  break;
-    default:
-      assert(false);
-  }
-
-  cg.printValue(op);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -706,9 +620,10 @@ void BinaryOpExpression::outputPHP(CodeGenerator &cg, AnalysisResultPtr ar) {
   case T_IS_SMALLER_OR_EQUAL: cg_printf(" <= ");         break;
   case '>':                   cg_printf(" > ");          break;
   case T_IS_GREATER_OR_EQUAL: cg_printf(" >= ");         break;
+  case T_SPACESHIP:           cg_printf(" <=> ");        break;
   case T_INSTANCEOF:          cg_printf(" instanceof "); break;
   case T_COLLECTION: {
-    ExpressionListPtr el = static_pointer_cast<ExpressionList>(m_exp2);
+    auto el = static_pointer_cast<ExpressionList>(m_exp2);
     if (el->getCount() == 0) {
       cg_printf(" {}");
     } else {

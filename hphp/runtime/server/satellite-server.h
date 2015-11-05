@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -74,7 +74,8 @@ public:
   static bool checkMainURL(const std::string& path);
 
 public:
-  explicit SatelliteServerInfo(const IniSetting::Map& ini, Hdf hdf);
+  SatelliteServerInfo(const IniSetting::Map& ini, const Hdf& hdf,
+                      const std::string& ini_key = "");
 
   const std::string &getName() const { return m_name;}
   SatelliteServer::Type getType() const { return m_type;}

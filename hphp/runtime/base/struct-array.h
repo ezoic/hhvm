@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -81,8 +81,7 @@ struct StructArray : public ArrayData {
   static bool AdvanceMArrayIter(ArrayData*, MArrayIter& fp);
   static ArrayData* Copy(const ArrayData* ad);
   static ArrayData* CopyWithStrongIterators(const ArrayData*);
-  static ArrayData* NonSmartCopy(const ArrayData*);
-  static ArrayData* NonSmartCopyHelper(const ArrayData*);
+  static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* EscalateForSort(ArrayData*, SortFunction);
   static void Ksort(ArrayData*, int, bool);
   static void Sort(ArrayData*, int, bool);
@@ -111,13 +110,6 @@ struct StructArray : public ArrayData {
   const ArrayData* asArrayData() const { return this; }
   static bool checkInvariants(const ArrayData*);
 
-  /*
-   * Accepts any array of any kind satisfying isRecordData() and makes a
-   * non-smart struct copy, like NonSmartCopy().
-   */
-  static ArrayData* NonSmartConvert(const ArrayData*);
-  static ArrayData* NonSmartConvertHelper(const ArrayData*);
-
   static StructArray* asStructArray(ArrayData*);
   static const StructArray* asStructArray(const ArrayData*);
 
@@ -125,7 +117,7 @@ struct StructArray : public ArrayData {
   static StructArray* createReversedValues(Shape* shape,
     const TypedValue* values, size_t length);
   static StructArray* createNoCopy(Shape*, size_t);
-  static StructArray* createNonSmart(Shape*, size_t);
+  static StructArray* createStatic(Shape*, size_t);
   static StructArray* createUncounted(Shape*, size_t);
   static size_t bytesForCapacity(size_t capacity);
 
@@ -153,9 +145,7 @@ struct StructArray : public ArrayData {
   template<class F> void scan(F&) const;
 
 private:
-  template <typename F> friend void scan(const StructArray&, F&);
-
-  StructArray(uint32_t size, uint32_t pos, uint32_t count, Shape* shape);
+  StructArray(uint32_t size, uint32_t pos, Shape* shape, RefCount = 1);
 
   static MixedArray* ToMixedHeader(size_t);
   static MixedArray* ToMixed(StructArray*);

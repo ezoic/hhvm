@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -49,7 +49,7 @@ folly::Optional<Type> eval_cell(Pred p) {
     SCOPE_EXIT { g_context->setThrowAllErrors(false); };
 
     Cell c = p();
-    if (IS_REFCOUNTED_TYPE(c.m_type)) {
+    if (isRefcountedType(c.m_type)) {
       switch (c.m_type) {
       case KindOfString:
         {
@@ -87,6 +87,8 @@ folly::Optional<Type> eval_cell(Pred p) {
      */
     auto const t = from_cell(c);
     return options.ConstantProp ? t : loosen_statics(t);
+  } catch (const Object&) {
+    return folly::none;
   } catch (const std::exception&) {
     return folly::none;
   } catch (...) {

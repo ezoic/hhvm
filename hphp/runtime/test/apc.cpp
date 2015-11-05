@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -88,7 +88,7 @@ std::unique_ptr<Store> new_store() {
  * Make an APC table with some things primed for tests to use.
  */
 std::unique_ptr<Store> new_primed_store() {
-  s_apc_file_storage.enable("/tmp/apc_unit_test", 1ul << 20, 1ul << 32);
+  s_apc_file_storage.enable("/tmp/apc_unit_test", 1ul << 20);
 
   auto ret = folly::make_unique<Store>();
   ret->prime(primable_ints(*ret));
@@ -115,7 +115,7 @@ TEST(APC, Basic) {
   EXPECT_EQ(store->get(s_key, got), true);
   EXPECT_TRUE(cellSame(*got.asCell(),
     make_tv<KindOfStaticString>(s_value1.get())));
-  EXPECT_EQ(store->erase(s_key), true);
+  EXPECT_EQ(store->eraseKey(s_key), true);
   EXPECT_EQ(store->get(s_key, got), false);
 }
 
@@ -189,7 +189,7 @@ TEST(APC, IncCas) {
   EXPECT_EQ(store->inc(s_key, 1, found), 0);
   EXPECT_FALSE(found);
   EXPECT_FALSE(store->cas(s_key, 1, 2));
-  store->erase(s_key);
+  store->eraseKey(s_key);
   EXPECT_EQ(store->inc(s_key, 1, found), 0);
   EXPECT_FALSE(found);
   EXPECT_FALSE(store->cas(s_key, 1, 2));

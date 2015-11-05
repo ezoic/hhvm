@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,6 +21,9 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
+#ifdef SOCKET_ERROR
+# undef SOCKET_ERROR
+#endif
 #define SOCKET_ERROR(sock, msg, errn)                                 \
   sock->setError(errn);                                               \
   if (errn != EAGAIN && errn != EWOULDBLOCK && errn != EINPROGRESS) { \
@@ -78,7 +81,8 @@ struct Socket : File {
 
   void setError(int err);
   int getError() const { return m_data->m_error;}
-  static int getLastError();
+  static int getLastError() { return s_lastErrno; }
+  static void clearLastError() { s_lastErrno = 0; }
   int getType() const { return m_data->m_type;}
 
   // This is only for updating a local copy of timeouts set by setsockopt()
@@ -113,6 +117,7 @@ protected:
 private:
   void inferStreamType();
   SocketData* m_data;
+  static __thread int s_lastErrno;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

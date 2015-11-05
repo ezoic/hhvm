@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,6 +38,13 @@ struct RequestWrappers final : RequestEventHandler {
   void requestShutdown() override {
     m_disabled.clear();
     m_wrappers.clear();
+  }
+  void vscan(IMarker& mark) const override {
+    for (auto& s : m_disabled) mark(s);
+    for (auto& p : m_wrappers) {
+      mark(p.first);
+      if (p.second) p.second->vscan(mark);
+    }
   }
 
   std::set<String> m_disabled;
@@ -162,7 +169,7 @@ Wrapper* getWrapper(const String& scheme, bool warn /*= false */) {
    * 1. requestShutdown has already been called
    * 2. dereferencing s_request_wrappers will call requestInit, and register
    *    a request shutdown event handler
-   * 3. the list of request event handlers is a smart::vector, so it gets lost
+   * 3. the list of request event handlers is a req::vector, so it gets lost
    *    at the end of the request.
    *
    * The result of this is that s_request_wrappers is no longer request-local -

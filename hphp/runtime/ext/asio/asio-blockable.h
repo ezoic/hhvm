@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -85,6 +85,12 @@ struct AsioBlockableChain final {
   void exitContext(context_idx_t ctx_idx);
   Array toArray();
   c_WaitableWaitHandle* firstInContext(context_idx_t ctx_idx);
+
+  template<class F> void scan(F& mark) const {
+    for (auto p = m_firstParent; p; p = p->getNextParent()) {
+      mark(p->getWaitHandle());
+    }
+  }
 
 private:
   AsioBlockable* m_firstParent;

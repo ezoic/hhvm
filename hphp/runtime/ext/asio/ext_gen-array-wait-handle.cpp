@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -17,13 +17,13 @@
 
 #include "hphp/runtime/ext/asio/ext_gen-array-wait-handle.h"
 
-#include "hphp/runtime/ext/ext_closure.h"
+#include "hphp/runtime/ext/closure/ext_closure.h"
 #include "hphp/runtime/ext/asio/asio-blockable.h"
 #include "hphp/runtime/ext/asio/asio-context.h"
 #include "hphp/runtime/ext/asio/asio-session.h"
 #include <hphp/runtime/ext/asio/ext_static-wait-handle.h>
 #include "hphp/system/systemlib.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
 
@@ -38,7 +38,7 @@ namespace {
     assert(new_exception->instanceof(SystemLib::s_ExceptionClass));
 
     if (exception_field.isNull()) {
-      exception_field = new_exception;
+      exception_field.reset(new_exception);
     }
   }
 }
@@ -47,14 +47,14 @@ void c_GenArrayWaitHandle::ti_setoncreatecallback(const Variant& callback) {
   AsioSession::Get()->setOnGenArrayCreate(callback);
 }
 
-NEVER_INLINE __attribute__((__noreturn__))
+NEVER_INLINE ATTRIBUTE_NORETURN
 static void fail() {
   SystemLib::throwInvalidArgumentExceptionObject(
     "Expected dependencies to be an array of WaitHandle instances");
 }
 
 Object c_GenArrayWaitHandle::ti_create(const Array& inputDependencies) {
-  Array depCopy(inputDependencies->copy());
+  auto depCopy = inputDependencies.copy();
   if (UNLIKELY(depCopy->kind() > ArrayData::kEmptyKind)) {
     // The only array kind that can return a non-k{Packed,Mixed,Empty}Kind
     // from ->copy() is GlobalsArray, which returns itself.
@@ -78,7 +78,7 @@ Object c_GenArrayWaitHandle::ti_create(const Array& inputDependencies) {
     if (UNLIKELY(current->m_type == KindOfRef)) {
       tvUnbox(current);
     }
-    if (IS_NULL_TYPE(current->m_type)) continue;
+    if (isNullType(current->m_type)) continue;
 
     auto const child = c_WaitHandle::fromCell(current);
     if (UNLIKELY(!child)) fail();
@@ -108,7 +108,7 @@ Object c_GenArrayWaitHandle::ti_create(const Array& inputDependencies) {
       if (UNLIKELY(future->m_type == KindOfRef)) {
         tvUnbox(future);
       }
-      if (IS_NULL_TYPE(future->m_type)) continue;
+      if (isNullType(future->m_type)) continue;
       auto const future_wh = c_WaitHandle::fromCell(future);
       if (UNLIKELY(!future_wh)) fail();
       if (!future_wh->isFinished()) {
@@ -119,7 +119,7 @@ Object c_GenArrayWaitHandle::ti_create(const Array& inputDependencies) {
       }
     }
 
-    auto my_wh = makeSmartPtr<c_GenArrayWaitHandle>();
+    auto my_wh = req::make<c_GenArrayWaitHandle>();
     my_wh->initialize(exception, depCopy, current_pos, ctx_idx, child_wh);
 
     auto const session = AsioSession::Get();
@@ -166,7 +166,7 @@ void c_GenArrayWaitHandle::onUnblocked() {
   for (; !arrIter.empty(); arrIter.advance()) {
     auto const current = tvAssertCell(arrIter.current());
 
-    if (IS_NULL_TYPE(current->m_type)) continue;
+    if (isNullType(current->m_type)) continue;
     assert(current->m_type == KindOfObject);
     assert(current->m_data.pobj->instanceof(c_WaitHandle::classof()));
 
@@ -200,8 +200,7 @@ void c_GenArrayWaitHandle::onUnblocked() {
     cellDup(make_tv<KindOfArray>(m_deps.get()), m_resultOrException);
   } else {
     setState(STATE_FAILED);
-    tvWriteObject(m_exception.get(), &m_resultOrException);
-    m_exception = nullptr;
+    tvMoveObject(m_exception.detach(), &m_resultOrException);
   }
 
   m_deps = nullptr;

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -16,6 +16,7 @@
  * work to do. We need calculate what must be re-checked.
  *)
 (*****************************************************************************)
+open Core
 open Typing_deps
 open Utils
 
@@ -61,8 +62,7 @@ let on_the_fly_decl_file nenv all_classes (errors, failed) fn =
       Typing_decl.make_env nenv all_classes fn
     end
   in
-  List.fold_left
-    begin fun (errors, failed) error ->
+  List.fold_left decl_errors ~f:begin fun (errors, failed) error ->
     (* It is important to add the file that is the cause of the failure.
      * What can happen is that during a declaration phase, we realize
      * that a parent class is outdated. When this happens, we redeclare
@@ -75,7 +75,7 @@ let on_the_fly_decl_file nenv all_classes (errors, failed) fn =
       let failed = Relative_path.Set.add file_with_error failed in
       let failed = Relative_path.Set.add fn failed in
       error :: errors, failed
-    end (errors, failed) decl_errors
+    end ~init:(errors, failed)
 
 (*****************************************************************************)
 (* Given a set of classes, compare the old and the new type and deduce
@@ -136,10 +136,9 @@ let compute_gconsts_deps old_gconsts (to_redecl, to_recheck) gconsts =
 (*****************************************************************************)
 
 let redeclare_files nenv all_classes filel =
-  List.fold_left
-    (on_the_fly_decl_file nenv all_classes)
-    ([], Relative_path.Set.empty)
-    filel
+  List.fold_left filel
+    ~f:(on_the_fly_decl_file nenv all_classes)
+    ~init:([], Relative_path.Set.empty)
 
 let otf_decl_files nenv all_classes filel =
   SharedMem.invalidate_caches();
@@ -148,8 +147,10 @@ let otf_decl_files nenv all_classes filel =
   errors, failed
 
 let compute_deps fast filel =
-  let infol = List.map (fun fn -> Relative_path.Map.find_unsafe fn fast) filel in
-  let names = List.fold_left FileInfo.merge_names FileInfo.empty_names infol in
+  let infol =
+    List.map filel (fun fn -> Relative_path.Map.find_unsafe fn fast) in
+  let names =
+    List.fold_left infol ~f:FileInfo.merge_names ~init:FileInfo.empty_names in
   let { FileInfo.n_classes; n_funs; n_types; n_consts } = names in
   let acc = DepSet.empty, DepSet.empty in
   (* Fetching everything at once is faster *)
@@ -205,7 +206,7 @@ let merge_compute_deps (to_redecl1, to_recheck1) (to_redecl2, to_recheck2) =
 (* The parallel worker *)
 (*****************************************************************************)
 
-let parallel_otf_decl workers nenv all_classes fast fnl =
+let parallel_otf_decl workers bucket_size nenv all_classes fast fnl =
   OnTheFlyStore.store (nenv, all_classes, fast);
   let errors, failed =
     MultiWorker.call
@@ -213,7 +214,7 @@ let parallel_otf_decl workers nenv all_classes fast fnl =
       ~job:load_and_otf_decl_files
       ~neutral:otf_neutral
       ~merge:merge_on_the_fly
-      ~next:(Bucket.make fnl)
+      ~next:(Bucket.make ~max_size:bucket_size fnl)
   in
   let to_redecl, to_recheck =
     MultiWorker.call
@@ -221,7 +222,7 @@ let parallel_otf_decl workers nenv all_classes fast fnl =
       ~job:load_and_compute_deps
       ~neutral:compute_deps_neutral
       ~merge:merge_compute_deps
-      ~next:(Bucket.make fnl)
+      ~next:(Bucket.make ~max_size:bucket_size fnl)
   in
   OnTheFlyStore.clear();
   errors, failed, to_redecl, to_recheck
@@ -236,11 +237,10 @@ let invalidate_heap { FileInfo.n_funs; n_classes; n_types; n_consts } =
   Typing_env.Typedefs.oldify_batch n_types;
   Typing_env.GConsts.oldify_batch n_consts;
   Naming_heap.FunHeap.remove_batch n_funs;
-  Typing_decl.remove_classes n_classes;
   Naming_heap.ClassHeap.remove_batch n_classes;
   Naming_heap.TypedefHeap.remove_batch n_types;
   Naming_heap.ConstHeap.remove_batch n_consts;
-  SharedMem.collect();
+  SharedMem.collect `gentle;
   ()
 
 let remove_old_defs { FileInfo.n_funs; n_classes; n_types; n_consts } =
@@ -248,7 +248,7 @@ let remove_old_defs { FileInfo.n_funs; n_classes; n_types; n_consts } =
   Typing_env.Classes.remove_old_batch n_classes;
   Typing_env.Typedefs.remove_old_batch n_types;
   Typing_env.GConsts.remove_old_batch n_consts;
-  SharedMem.collect();
+  SharedMem.collect `gentle;
   ()
 
 let get_defs fast =
@@ -260,7 +260,7 @@ let get_defs fast =
 (* The main entry point *)
 (*****************************************************************************)
 
-let redo_type_decl workers nenv fast =
+let redo_type_decl workers ~bucket_size nenv fast =
   let fnl = Relative_path.Map.keys fast in
   let all_classes = Typing_decl_service.get_classes fast in
   let defs = get_defs fast in
@@ -272,7 +272,7 @@ let redo_type_decl workers nenv fast =
       let errors, failed = otf_decl_files nenv all_classes fnl in
       let to_redecl, to_recheck = compute_deps fast fnl in
       errors, failed, to_redecl, to_recheck
-    else parallel_otf_decl workers nenv all_classes fast fnl
+    else parallel_otf_decl workers bucket_size nenv all_classes fast fnl
   in
   remove_old_defs defs;
   result

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,7 @@
 #define incl_HPHP_ARRAY_H_
 
 #include "hphp/runtime/base/array-data.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/types.h"
 
 #include <algorithm>
@@ -29,6 +29,9 @@ namespace HPHP {
 
 // forward declaration
 class ArrayIter;
+class VariableUnserializer;
+
+#define ACCESSPARAMS_DECL AccessFlags::Type flags = AccessFlags::None
 
 /*
  * Array type wrapping around ArrayData to implement reference
@@ -40,10 +43,11 @@ class ArrayIter;
  * escalation.
  */
 class Array {
-  SmartPtr<ArrayData> m_arr;
+  using Ptr = req::ptr<ArrayData>;
+  using NoIncRef = Ptr::NoIncRef;
+  using NonNull = Ptr::NonNull;
 
-  typedef SmartPtr<ArrayData>::NoIncRef NoIncRef;
-  typedef SmartPtr<ArrayData>::NonNull NonNull;
+  Ptr m_arr;
 
   Array(ArrayData* ad, NoIncRef) : m_arr(ad, NoIncRef{}) {}
 
@@ -53,11 +57,11 @@ public:
    * different than those copying constructors that also take one value.
    */
   static Array Create() {
-    return Array(ArrayData::Create());
+    return Array(ArrayData::Create(), NoIncRef{});
   }
 
   static Array Create(const Variant& value) {
-    return Array(ArrayData::Create(value));
+    return Array(ArrayData::Create(value), NoIncRef{});
   }
 
   static Array Create(const Variant& key, const Variant& value);
@@ -75,13 +79,24 @@ public:
   ArrayData* detach() { return m_arr.detach(); }
 
   ArrayData* get() const { return m_arr.get(); }
-  void reset() { m_arr.reset(); }
+  void reset(ArrayData* arr = nullptr) { m_arr.reset(arr); }
 
   // Deliberately doesn't throw_null_pointer_exception as a perf
   // optimization.
   ArrayData* operator->() const { return m_arr.get(); }
 
   void escalate();
+
+  // Make a copy of this array. Like the underlying ArrayData::copy operation,
+  // the returned Array may point to the same underlying array as the original,
+  // or a new one.
+  Array copy() const {
+    if (!m_arr)
+      return Array{};
+    auto new_arr = m_arr->copy();
+    return (new_arr != m_arr) ?
+      Array{new_arr, NoIncRef{}} : Array{*this};
+  }
 
   /*
    * Constructors. Those that take "arr" or "var" are copy constructors, taking
@@ -92,12 +107,12 @@ public:
   /* implicit */ Array(const Array& arr) : m_arr(arr.m_arr) { }
 
   /*
-   * Special constructor for use from ArrayInit that creates an Array
-   * without a null check.
+   * Special constructor for use from ArrayInit that creates an Array without a
+   * null check and without an inc-ref.
    */
   enum class ArrayInitCtor { Tag };
   explicit Array(ArrayData* ad, ArrayInitCtor)
-    : m_arr(ad, NonNull{})
+    : m_arr(ad, NoIncRef{})
   {}
 
   // Move ctor
@@ -275,6 +290,7 @@ public:
   bool more (const Array& v2, bool flip = true) const;
   bool more (const Object& v2) const;
   bool more (const Variant& v2) const;
+  int compare (const Array& v2, bool flip = false) const;
 
   /*
    * Offset
@@ -396,11 +412,6 @@ public:
   Variant dequeue();
   void prepend(const Variant& v);
 
-  /*
-   * Input/Output
-   */
-  void serialize(VariableSerializer* serializer, bool isObject = false) const;
-  void unserialize(VariableUnserializer* uns);
   void setEvalScalar() const;
 
  private:
@@ -423,17 +434,17 @@ public:
   template<typename T>
   void removeImpl(const T& key) {
     if (m_arr) {
-      ArrayData* escalated = m_arr->remove(key, (m_arr->hasMultipleRefs()));
-      if (escalated != m_arr) m_arr = escalated;
+      ArrayData* escalated = m_arr->remove(key, m_arr->cowCheck());
+      if (escalated != m_arr) m_arr = Ptr::attach(escalated);
     }
   }
 
   template<typename T>
   Variant& lvalAtImpl(const T& key, ACCESSPARAMS_DECL) {
-    if (!m_arr) m_arr = ArrayData::Create();
+    if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
     Variant* ret = nullptr;
-    ArrayData* escalated = m_arr->lval(key, ret, m_arr->hasMultipleRefs());
-    if (escalated != m_arr) m_arr = escalated;
+    ArrayData* escalated = m_arr->lval(key, ret, m_arr->cowCheck());
+    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
     assert(ret);
     return *ret;
   }
@@ -509,5 +520,7 @@ ALWAYS_INLINE Array empty_array() {
 
 ///////////////////////////////////////////////////////////////////////////////
 }
+// nobody else needs this outside the Array decl
+#undef ACCESSPARAMS_DECL
 
 #endif // incl_HPHP_ARRAY_H_

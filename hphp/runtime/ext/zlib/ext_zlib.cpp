@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -47,10 +47,10 @@ namespace {
 
 static class ZlibStreamWrapper : public Stream::Wrapper {
  public:
-  virtual SmartPtr<File> open(const String& filename,
+  virtual req::ptr<File> open(const String& filename,
                               const String& mode,
                               int options,
-                              const SmartPtr<StreamContext>& context) {
+                              const req::ptr<StreamContext>& context) {
     String fname;
     static const char cz[] = "compress.zlib://";
 
@@ -73,7 +73,7 @@ static class ZlibStreamWrapper : public Stream::Wrapper {
       translated = fname;
     }
 
-    auto file = makeSmartPtr<ZipFile>();
+    auto file = req::make<ZipFile>();
     bool ret = file->open(translated, mode);
     if (!ret) {
       raise_warning("%s", file->getLastError().c_str());
@@ -130,11 +130,11 @@ inline size_t hhvm_zlib_buffer_size_guess(size_t inlen) {
 }
 
 static voidpf hhvm_zlib_alloc(voidpf opaque, uInt items, uInt size) {
-  return (voidpf)smart_malloc(items * size);
+  return (voidpf)req::malloc(items * size);
 }
 
 static void hhvm_zlib_free(voidpf opaque, voidpf address) {
-  smart_free((void*)address);
+  req::free((void*)address);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -227,11 +227,11 @@ static String hhvm_zlib_inflate_rounds(z_stream *Z, int64_t maxlen,
     }
 
     auto const ms = ret.reserve(retsize + 1);
-    char *retbuf = ms.ptr;
-    Z->avail_out = ms.len - retused;
+    auto retbuf = ms.data();
+    Z->avail_out = ms.size() - retused;
     Z->next_out = (Bytef *) (retbuf + retused);
     status = inflate(Z, Z_NO_FLUSH);
-    retused = ms.len - Z->avail_out;
+    retused = ms.size() - Z->avail_out;
     ret.setSize(retused);
 
     retsize += (retsize >> 3) + 1;
@@ -313,7 +313,7 @@ String HHVM_FUNCTION(zlib_get_coding_type) {
 
 Variant HHVM_FUNCTION(gzopen, const String& filename, const String& mode,
                               int64_t use_include_path /* = 0 */) {
-  auto file = makeSmartPtr<ZipFile>();
+  auto file = req::make<ZipFile>();
   bool ret = file->open(File::TranslatePath(filename), mode);
   if (!ret) {
     return false;
@@ -404,7 +404,7 @@ typedef struct nzlib_format_s {
 } nzlib_format_t;
 
 Variant HHVM_FUNCTION(nzcompress, const String& uncompressed) {
-  size_t len = compressBound(uncompressed.size());
+  uLong len = compressBound(uncompressed.size());
   String str(sizeof(nzlib_format_t) + len, ReserveString);
   nzlib_format_t* format = (nzlib_format_t*)str.mutableData();
 
@@ -430,7 +430,7 @@ Variant HHVM_FUNCTION(nzuncompress, const String& compressed) {
     return false;
   }
 
-  size_t len = ntohl(format->uncompressed_sz);
+  uLong len = ntohl(format->uncompressed_sz);
   if (len == 0) {
     return empty_string_variant();
   }
@@ -655,15 +655,12 @@ class ZlibExtension final : public Extension {
     s_zlib_stream_wrapper.registerAs("compress.zlib");
   }
   void moduleInit() override {
-#define X(cns) \
-    Native::registerConstant<KindOfInt64>(makeStaticString(#cns), k_##cns);
-    X(ZLIB_ENCODING_RAW);
-    X(ZLIB_ENCODING_GZIP);
-    X(ZLIB_ENCODING_DEFLATE);
-    X(ZLIB_ENCODING_ANY);
-    X(FORCE_GZIP);
-    X(FORCE_DEFLATE);
-#undef X
+    HHVM_RC_INT(ZLIB_ENCODING_RAW, k_ZLIB_ENCODING_RAW);
+    HHVM_RC_INT(ZLIB_ENCODING_GZIP, k_ZLIB_ENCODING_GZIP);
+    HHVM_RC_INT(ZLIB_ENCODING_DEFLATE, k_ZLIB_ENCODING_DEFLATE);
+    HHVM_RC_INT(ZLIB_ENCODING_ANY, k_ZLIB_ENCODING_ANY);
+    HHVM_RC_INT(FORCE_GZIP, k_FORCE_GZIP);
+    HHVM_RC_INT(FORCE_DEFLATE, k_FORCE_DEFLATE);
 
     HHVM_FE(zlib_encode);
     HHVM_FE(gzdeflate);

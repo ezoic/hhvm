@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -19,7 +19,7 @@
 #define incl_HPHP_EXT_STREAM_USER_FILTERS_H_
 
 #include "hphp/runtime/ext/extension.h"
-#include "hphp/runtime/base/smart-containers.h"
+#include "hphp/runtime/base/req-containers.h"
 
 namespace HPHP {
 
@@ -36,8 +36,9 @@ class BucketBrigade : public ResourceData {
 public:
   DECLARE_RESOURCE_ALLOCATION_NO_SWEEP(BucketBrigade);
   CLASSNAME_IS("bucket brigade");
-  // overriding ResourceData
-  virtual const String& o_getClassNameHook() const { return classnameof(); }
+  const String& o_getClassNameHook() const override {
+    return classnameof();
+  }
 
   BucketBrigade() { };
   explicit BucketBrigade(const String& data);
@@ -48,7 +49,7 @@ public:
 
   String createString();
 private:
-  smart::list<Object> m_buckets;
+  req::list<Object> m_buckets;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -57,20 +58,21 @@ class StreamFilter : public ResourceData {
 public:
   DECLARE_RESOURCE_ALLOCATION_NO_SWEEP(StreamFilter);
   CLASSNAME_IS("stream filter");
-  // overriding ResourceData
-  virtual const String& o_getClassNameHook() const { return classnameof(); }
+  const String& o_getClassNameHook() const override {
+    return classnameof();
+  }
 
-  explicit StreamFilter(const Object& filter, const SmartPtr<File>& stream):
+  explicit StreamFilter(const Object& filter, const req::ptr<File>& stream):
       m_filter(filter), m_stream(stream) { }
 
-  int64_t invokeFilter(const SmartPtr<BucketBrigade>& in,
-                       const SmartPtr<BucketBrigade>& out,
+  int64_t invokeFilter(const req::ptr<BucketBrigade>& in,
+                       const req::ptr<BucketBrigade>& out,
                        bool closing);
   void invokeOnClose();
   bool remove();
 private:
   Object m_filter;
-  SmartPtr<File> m_stream;
+  req::ptr<File> m_stream;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

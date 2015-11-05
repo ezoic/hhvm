@@ -5,6 +5,8 @@ Helpers for collecting and printing frame data.
 # @lint-avoid-pyflakes3
 # @lint-avoid-pyflakes2
 
+from compatibility import *
+
 import os
 import gdb
 import bisect
@@ -12,7 +14,7 @@ import sqlite3
 import struct
 
 from gdbutils import *
-import idx
+import idx as idxs
 from nameof import nameof
 import repo
 
@@ -80,10 +82,10 @@ def php_line_number(func, pc):
     unit = func['m_unit']
 
     line_info = V('HPHP::(anonymous namespace)::s_lineInfo')
-    line_map = idx.tbb_chm_at(line_info, unit)
+    line_map = idxs.tbb_chm_at(line_info, unit)
 
     if line_map is not None:
-        line = idx.boost_flat_map_at(line_map, pc)
+        line = idxs.boost_flat_map_at(line_map, pc)
         if line is not None:
             return line
 
@@ -93,7 +95,7 @@ def php_line_number(func, pc):
 #------------------------------------------------------------------------------
 # Frame builders.
 
-def create_native(idx, sp, rip, native_frame=None):
+def create_native(idx, fp, rip, native_frame=None):
     # Try to get the function name.
     if native_frame is None:
         func_name = '<unknown>'
@@ -106,7 +108,7 @@ def create_native(idx, sp, rip, native_frame=None):
 
     frame = {
         'idx':  idx,
-        'sp':   str(sp),
+        'fp':   str(fp),
         'rip':  _format_rip(rip),
         'func': func_name,
     }
@@ -151,12 +153,14 @@ def create_php(idx, ar, rip='0x????????', pc=None):
 
     frame = {
         'idx':  idx,
-        'sp':   str(ar),
+        'fp':   str(ar),
         'rip':  _format_rip(rip),
         'func': '[PHP] %s()' % func_name,
     }
 
-    if func['m_attrs'] & V('HPHP::AttrBuiltin'):
+    attrs = idxs.atomic_get(func['m_attrs']['m_attrs'])
+
+    if attrs & V('HPHP::AttrBuiltin'):
         # Builtins don't have source files.
         return frame
 
@@ -203,11 +207,11 @@ def gen_php(fp):
 #------------------------------------------------------------------------------
 # Frame stringifiers.
 
-def stringify(frame, sp_len=0):
+def stringify(frame, fp_len=0):
     """Stringify a single frame."""
 
-    fmt = '#{idx:<2d} {sp:<{sp_len}s} @ {rip}: {func}'
-    out = fmt.format(sp_len=sp_len, **frame)
+    fmt = '#{idx:<2d} {fp:<{fp_len}s} @ {rip}: {func}'
+    out = fmt.format(fp_len=fp_len, **frame)
 
     filename = frame.get('file')
     line = frame.get('line')
@@ -225,9 +229,9 @@ def stringify_stacktrace(stacktrace):
 
     Applies mild-mannered formatting magic on top of mapping stringify().
     """
-    sp_len = reduce(lambda l, frm: max(l, len(frm['sp'])), stacktrace, 0)
+    fp_len = reduce(lambda l, frm: max(l, len(frm['fp'])), stacktrace, 0)
 
-    return [stringify(frame, sp_len) for frame in stacktrace]
+    return [stringify(frame, fp_len) for frame in stacktrace]
 
 
 #------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,8 +8,9 @@
  *
  *)
 
-open Utils
+open Core
 open Typing_defs
+open Utils
 
 module TUtils = Typing_utils
 module N = Nast
@@ -46,7 +47,7 @@ let make tparams tyl =
   in
   let subst = ref SMap.empty in
   let tyl = ref tyl in
-  List.iter (make_subst_tparam subst tyl) tparams;
+  List.iter tparams (make_subst_tparam subst tyl);
   !subst
 
 let check_constraint env ck cstr_ty ty =
@@ -59,7 +60,7 @@ let check_constraint env ck cstr_ty ty =
        *)
       env
   | Tany, _ -> fst (TUtils.unify env cstr_ty ty)
-  | (Tmixed | Tarray (_, _) | Tprim _ | Toption _ | Tvar _
+  | (Tmixed | Tarraykind _ | Tprim _ | Toption _ | Tvar _
     | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _) | Tfun _
     | Tunresolved _ | Tobject | Tshape _
     ), _ -> begin

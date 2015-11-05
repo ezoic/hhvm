@@ -290,5 +290,19 @@ class ReflectionTypeConstant implements Reflector {
   public function getName(): string;
   public function isAbstract(): bool;
   public function getDeclaringClass(): ReflectionClass;
+  public function getClass(): ReflectionClass;
   public function getAssignedTypeText(): ?string;
+}
+
+class ReflectionTypeAlias implements Reflector {
+
+  private $name = '';
+
+  final private function __clone();
+  final public function __construct(string $name);
+  public function __toString(): string;
+  public function getTypeStructure(): array;
+  public function getResolvedTypeStructure(): array;
+  public function getAssignedTypeText(): string;
+  public function getName(): string;
 }

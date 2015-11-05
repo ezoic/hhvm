@@ -21,7 +21,8 @@ $excluded = array(
   'util/cronoutils.h',
   'util/cronoutils.cpp',
   'vixl/',
-  'parser/hphp.tab.cpp',
+  'parser/hphp.5.tab.cpp',
+  'parser/hphp.7.tab.cpp',
   'runtime/base/ini-parser/zend-ini.tab.cpp',
   'runtime/ext/gd/libgd/',
   'runtime/ext/zlib/quicklz.h',
@@ -33,7 +34,7 @@ $excluded = array(
   // non-PHP licenses
   'runtime/base/zend-strtod.cpp',
   'runtime/ext/json/JSON_parser.cpp',
-  'runtime/ext/php_unicode.h',
+  'runtime/ext/mbstring/php_unicode.h',
   'runtime/base/zend-ini.tab.cpp',
   'util/safesort.h',
   'zend/crypt-blowfish.h',

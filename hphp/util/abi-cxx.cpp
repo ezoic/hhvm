@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,11 +24,14 @@
 #include <string>
 #include <unordered_map>
 
-#include <cxxabi.h>
-#if (defined(__CYGWIN__) || defined(__MINGW__) || defined(__MSC_VER))
+#if (defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER))
 # include <windows.h>
 # include <dbghelp.h>
+# ifndef _MSC_VER
+#  include <cxxabi.h>
+# endif
 #else
+# include <cxxabi.h>
 # include <execinfo.h>
 #endif
 
@@ -59,7 +62,7 @@ std::string getNativeFunctionName(void* codeAddr) {
   }
   std::string functionName;
 
-#if defined(__CYGWIN__) || defined(__MINGW__) || defined(__MSC_VER)
+#if defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER)
   HANDLE process = GetCurrentProcess();
   SYMBOL_INFO *symbol;
   DWORD64 addr_disp = 0;
@@ -75,8 +78,13 @@ std::string getNativeFunctionName(void* codeAddr) {
     functionName.assign(symbol->Name);
 
     int status;
+#ifdef _MSC_VER
+    char* demangledName = (char*)calloc(1024, sizeof(char));
+    status = !(int)UnDecorateSymbolName(symbol->Name, demangledName, 1023, UNDNAME_COMPLETE);
+#else
     char* demangledName = abi::__cxa_demangle(functionName.c_str(),
                                               0, 0, &status);
+#endif
     SCOPE_EXIT { free(demangledName); };
     if (status == 0) functionName.assign(demangledName);
 

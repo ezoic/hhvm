@@ -33,7 +33,6 @@ endif()
 if (APPLE)
   set(ENABLE_FASTCGI 1)
   set(HHVM_ANCHOR_SYMS
-    -Wl,-u,_register_fastcgi_server
     -Wl,-pagezero_size,0x00001000
     # Set the .text.keep section to be executable.
     -Wl,-segprot,.text,rx,rx)
@@ -50,10 +49,12 @@ elseif(CYGWIN)
   set(ENABLE_FASTCGI 0)
   set(HHVM_ANCHOR_SYMS
   -Wl,--whole-archive ${HHVM_WHOLE_ARCHIVE_LIBRARIES} -Wl,--no-whole-archive)
+elseif (MSVC)
+  set(ENABLE_FASTCGI 1)
+  set(HHVM_ANCHOR_SYMS ${HHVM_WHOLE_ARCHIVE_LIBRARIES})
 else()
   set(ENABLE_FASTCGI 1)
   set(HHVM_ANCHOR_SYMS
-    -Wl,-uregister_libevent_server,-uregister_fastcgi_server
     -Wl,--whole-archive ${HHVM_WHOLE_ARCHIVE_LIBRARIES} -Wl,--no-whole-archive)
 endif()
 
@@ -74,6 +75,7 @@ set(HHVM_LINK_LIBRARIES
   hphp_util
   hphp_hhbbc
   jit_sort
+  ppc64-asm
   vixl neo)
 
 if(ENABLE_FASTCGI)
@@ -89,7 +91,7 @@ if(ENABLE_FASTCGI)
   endif()
 endif()
 
-if(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release")
   message(STATUS "Build type not specified: cmake build type Release.")
 endif()
@@ -161,11 +163,27 @@ if(CYGWIN)
 endif()
 
 if(MSVC OR CYGWIN OR MINGW)
-  add_definitions(-DNOUSER=1 -DGLOG_NO_ABBREVIATED_SEVERITIES)
+  add_definitions(-DGLOG_NO_ABBREVIATED_SEVERITIES)
   add_definitions(-DWIN32_LEAN_AND_MEAN)
 endif()
 
-if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
+if(CMAKE_CONFIGURATION_TYPES)
+  if(NOT MSVC)
+    message(FATAL_ERROR "Adding the appropriate defines for multi-config targets using anything other than MSVC is not yet supported!")
+  endif()
+  if (MSVC_NO_ASSERT_IN_DEBUG)
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /D RELEASE=1 /D NDEBUG")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D RELEASE=1 /D NDEBUG")
+  else()
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /D DEBUG")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D DEBUG")
+  endif()
+  foreach(flag_var
+      CMAKE_C_FLAGS_RELEASE CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO
+      CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+    set(${flag_var} "${${flag_var}} /D RELEASE=1 /D NDEBUG")
+  endforeach()
+elseif(${CMAKE_BUILD_TYPE} MATCHES "Debug")
   add_definitions(-DDEBUG)
   message("Generating DEBUG build")
 else()
@@ -234,6 +252,8 @@ add_definitions(-DHPHP_OSS=1)
 # later versions of binutils don't play well without automake
 add_definitions(-DPACKAGE=hhvm -DPACKAGE_VERSION=Release)
 
+add_definitions(-DDEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR}")
+
 if (NOT LIBSQLITE3_INCLUDE_DIR)
   include_directories("${TP_DIR}/libsqlite3")
 endif()
@@ -248,10 +268,12 @@ endif()
 
 if (NOT LIBZIP_INCLUDE_DIR_ZIP)
   include_directories("${TP_DIR}/libzip")
+  add_definitions("-DZIP_EXTERN=")
 endif()
 
 if (NOT PCRE_LIBRARY)
   include_directories("${TP_DIR}/pcre")
+  add_definitions("-DPCRE_STATIC=1")
 endif()
 
 if (NOT FASTLZ_LIBRARY)
@@ -260,16 +282,20 @@ endif()
 
 include_directories("${TP_DIR}/timelib")
 include_directories("${TP_DIR}/libafdt/src")
+add_definitions("-DMBFL_STATIC")
 include_directories("${TP_DIR}/libmbfl")
 include_directories("${TP_DIR}/libmbfl/mbfl")
-include_directories("${TP_DIR}/libmbfl/filter")
+include_directories("${TP_DIR}/libmbfl/filters")
+include_directories("${TP_DIR}/proxygen/src")
 if (ENABLE_MCROUTER)
-  include_directories("${TP_DIR}/mcrouter")
+  include_directories("${TP_DIR}/mcrouter/src")
 endif()
 
 add_definitions(-DNO_LIB_GFLAGS)
 include_directories("${TP_DIR}/folly")
-include_directories("${TP_DIR}/thrift")
+include_directories("${TP_DIR}/folly/src")
+include_directories("${TP_DIR}/thrift/src")
+include_directories("${TP_DIR}/wangle/src")
 include_directories(${TP_DIR})
 
 include_directories(${HPHP_HOME}/hphp)

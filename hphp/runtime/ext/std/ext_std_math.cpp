@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -398,15 +398,48 @@ int64_t HHVM_FUNCTION(getrandmax) { return RAND_MAX;}
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// Note that MSVC's rand is actually thread-safe to begin with
+// so no changes are actually needed to make it so.
+#ifdef __APPLE__
 static bool s_rand_is_seeded = false;
+#elif defined(_MSC_VER)
+static __thread bool s_rand_is_seeded = false;
+#else
+struct RandomBuf {
+  random_data data;
+  char        buf[128];
+  enum {
+    Uninit = 0, ThreadInit, RequestInit
+  }           state;
+};
+
+static __thread RandomBuf s_state;
+#endif
+
+static void randinit(uint32_t seed) {
+#ifdef __APPLE__
+  s_rand_is_seeded = true;
+  srandom(seed);
+#elif defined(_MSC_VER)
+  s_rand_is_seeded = true;
+  srand(seed);
+#else
+  if (s_state.state == RandomBuf::Uninit) {
+    initstate_r(seed, s_state.buf, sizeof s_state.buf, &s_state.data);
+  } else {
+    srandom_r(seed, &s_state.data);
+  }
+  s_state.state = RandomBuf::RequestInit;
+#endif
+}
 
 void HHVM_FUNCTION(srand, const Variant& seed /* = null_variant */) {
-  s_rand_is_seeded = true;
   if (seed.isNull()) {
-    return srand(math_generate_seed());
+    randinit(math_generate_seed());
+    return;
   }
   if (seed.isNumeric(true)) {
-    srand(seed.toInt32());
+    randinit(seed.toInt32());
   } else {
     raise_warning("srand() expects parameter 1 to be long");
   }
@@ -415,12 +448,24 @@ void HHVM_FUNCTION(srand, const Variant& seed /* = null_variant */) {
 int64_t HHVM_FUNCTION(rand,
                       int64_t min /* = 0 */,
                       const Variant& max /* = null_variant */) {
+#if defined(__APPLE__) || defined(_MSC_VER)
   if (!s_rand_is_seeded) {
-    s_rand_is_seeded = true;
-    srand(math_generate_seed());
+#else
+  if (s_state.state != RandomBuf::RequestInit) {
+#endif
+    randinit(math_generate_seed());
   }
 
-  int64_t number = rand();
+  int64_t number;
+#ifdef __APPLE__
+  number = random();
+#elif defined(_MSC_VER)
+  number = rand();
+#else
+  int32_t numberIn;
+  random_r(&s_state.data, &numberIn);
+  number = numberIn;
+#endif
   int64_t int_max = max.isNull() ? RAND_MAX : max.toInt64();
   if (min != 0 || int_max != RAND_MAX) {
     RAND_RANGE(number, min, int_max, RAND_MAX);
@@ -450,6 +495,21 @@ int64_t HHVM_FUNCTION(mt_rand,
 
 double HHVM_FUNCTION(lcg_value) { return math_combined_lcg();}
 
+Variant HHVM_FUNCTION(intdiv, int64_t numerator, int64_t divisor) {
+  if (divisor == 0) {
+    // TODO(https://github.com/facebook/hhvm/issues/6012)
+    // This should throw a DivisionByZeroError.
+    SystemLib::throwInvalidOperationExceptionObject(Strings::DIVISION_BY_ZERO);
+  } else if (divisor == -1 &&
+             numerator == std::numeric_limits<int64_t>::min()) {
+    // TODO(https://github.com/facebook/hhvm/issues/6012)
+    // This should throw an ArithmeticError.
+    SystemLib::throwInvalidOperationExceptionObject(
+      "Division of PHP_INT_MIN by -1 is not an integer");
+  }
+  return numerator/divisor;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 const StaticString s_PHP_ROUND_HALF_UP("PHP_ROUND_HALF_UP");
@@ -462,6 +522,14 @@ const StaticString s_PHP_ROUND_HALF_ODD("PHP_ROUND_HALF_ODD");
 
 #define DCONST(nm)                                                             \
   Native::registerConstant<KindOfDouble>(makeStaticString("M_"#nm), k_M_##nm)  \
+
+void StandardExtension::requestInit() {
+#if !defined(__APPLE__) && !defined(_MSC_VER)
+  if (s_state.state == RandomBuf::RequestInit) {
+    s_state.state = RandomBuf::ThreadInit;
+  }
+#endif
+}
 
 void StandardExtension::initMath() {
   ICONST(PHP_ROUND_HALF_UP);
@@ -534,6 +602,7 @@ void StandardExtension::initMath() {
   HHVM_FE(mt_srand);
   HHVM_FE(mt_rand);
   HHVM_FE(lcg_value);
+  HHVM_FE(intdiv);
 
   loadSystemlib("std_math");
 }

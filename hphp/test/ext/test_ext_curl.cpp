@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,14 +16,16 @@
 
 #include "hphp/test/ext/test_ext_curl.h"
 
-#include <folly/Conv.h>
-
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/ext/curl/ext_curl.h"
 #include "hphp/runtime/ext/std/ext_std_output.h"
 #include "hphp/runtime/ext/zlib/ext_zlib.h"
-#include "hphp/runtime/server/libevent-server.h"
+#include "hphp/runtime/server/proxygen/proxygen-server.h"
+
+#include <folly/Conv.h>
+
+#include <string>
 
 #define PORT_MIN 7100
 #define PORT_MAX 7120
@@ -35,6 +37,7 @@ public:
   explicit TestCurlRequestHandler(int timeout) : RequestHandler(timeout) {}
   // implementing RequestHandler
   virtual void handleRequest(Transport *transport) {
+    g_context.getCheck();
     transport->addHeader("ECHOED", transport->getHeader("ECHO").c_str());
 
     if (transport->getMethod() == Transport::Method::POST) {
@@ -46,6 +49,7 @@ public:
     } else {
       transport->sendString("OK");
     }
+    hphp_memory_cleanup();
   }
   virtual void abortRequest(Transport *transport) {
     transport->sendString("Aborted");
@@ -55,14 +59,15 @@ public:
 static int s_server_port = 0;
 
 static std::string get_request_uri() {
-  return "http://localhost:" + folly::to<string>(s_server_port) + "/request";
+  return "http://localhost:" + folly::to<std::string>(s_server_port) +
+    "/request";
 }
 
 static ServerPtr runServer() {
   for (s_server_port = PORT_MIN; s_server_port <= PORT_MAX; s_server_port++) {
     try {
-      ServerPtr server = folly::make_unique<LibEventServer>(
-          "127.0.0.1", s_server_port, 4);
+      ServerPtr server = folly::make_unique<ProxygenServer>(
+        ServerOptions("127.0.0.1", s_server_port, 4));
       server->setRequestHandlerFactory<TestCurlRequestHandler>(0);
       server->start();
       return std::move(server);
@@ -124,9 +129,9 @@ const StaticString s_OK("OK");
 
 bool TestExtCurl::test_curl_copy_handle() {
   Variant c = HHVM_FN(curl_init)();
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_URL,
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_URL,
                        String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   Variant cpy = HHVM_FN(curl_copy_handle)(c.toResource());
   HHVM_FN(curl_close)(c.toResource()); // to test cpy is still working fine
   Variant res = HHVM_FN(curl_exec)(cpy.toResource());
@@ -153,9 +158,9 @@ bool TestExtCurl::test_curl_version() {
 
 bool TestExtCurl::test_curl_setopt() {
   Variant c = HHVM_FN(curl_init)();
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_URL,
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_URL,
                        String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   Variant res = HHVM_FN(curl_exec)(c.toResource());
   VS(res, "OK");
   return Count(true);
@@ -165,8 +170,8 @@ bool TestExtCurl::test_curl_setopt_array() {
   Variant c = HHVM_FN(curl_init)();
   HHVM_FN(curl_setopt_array)
     (c.toResource(),
-     make_map_array(k_CURLOPT_URL, String(get_request_uri()),
-                    k_CURLOPT_RETURNTRANSFER, true));
+     make_map_array(CURLOPT_URL, String(get_request_uri()),
+                    CURLOPT_RETURNTRANSFER, true));
   Variant res = HHVM_FN(curl_exec)(c.toResource());
   VS(res, "OK");
   return Count(true);
@@ -175,13 +180,13 @@ bool TestExtCurl::test_curl_setopt_array() {
 bool TestExtCurl::test_curl_exec() {
   {
     Variant c = HHVM_FN(curl_init)(String(get_request_uri()));
-    HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+    HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
     Variant res = HHVM_FN(curl_exec)(c.toResource());
     VS(res, "OK");
   }
   {
     Variant c = HHVM_FN(curl_init)(String(get_request_uri()));
-    HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_WRITEFUNCTION,
+    HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_WRITEFUNCTION,
                          "curl_write_func");
     HHVM_FN(ob_start)();
     HHVM_FN(curl_exec)(c.toResource());
@@ -194,27 +199,27 @@ bool TestExtCurl::test_curl_exec() {
 
 bool TestExtCurl::test_curl_getinfo() {
   Variant c = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_exec)(c.toResource());
   Variant ret = HHVM_FN(curl_getinfo)(c.toResource());
   VS(ret.toArray()[s_url], String(get_request_uri()));
-  ret = HHVM_FN(curl_getinfo)(c.toResource(), k_CURLINFO_EFFECTIVE_URL);
+  ret = HHVM_FN(curl_getinfo)(c.toResource(), CURLINFO_EFFECTIVE_URL);
   VS(ret, String(get_request_uri()));
   return Count(true);
 }
 
 bool TestExtCurl::test_curl_errno() {
   Variant c = HHVM_FN(curl_init)("http://www.thereisnosuchanurl");
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_exec)(c.toResource());
   Variant err = HHVM_FN(curl_errno)(c.toResource());
-  VS(err, k_CURLE_COULDNT_RESOLVE_HOST);
+  VS(err, CURLE_COULDNT_RESOLVE_HOST);
   return Count(true);
 }
 
 bool TestExtCurl::test_curl_error() {
   Variant c = HHVM_FN(curl_init)("http://www.thereisnosuchanurl");
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_exec)(c.toResource());
   Variant err = HHVM_FN(curl_error)(c.toResource());
   VERIFY(equal(err, String("Couldn't resolve host 'www.thereisnosuchanurl'")) ||
@@ -227,7 +232,7 @@ bool TestExtCurl::test_curl_error() {
 
 bool TestExtCurl::test_curl_close() {
   Variant c = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_exec)(c.toResource());
   HHVM_FN(curl_close)(c.toResource());
   return Count(true);
@@ -261,8 +266,8 @@ bool TestExtCurl::test_curl_multi_exec() {
   Resource mh = HHVM_FN(curl_multi_init)();
   Variant c1 = HHVM_FN(curl_init)(String(get_request_uri()));
   Variant c2 = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c1.toResource(), k_CURLOPT_RETURNTRANSFER, true);
-  HHVM_FN(curl_setopt)(c2.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c1.toResource(), CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c2.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_multi_add_handle)(mh, c1.toResource());
   HHVM_FN(curl_multi_add_handle)(mh, c2.toResource());
 
@@ -288,8 +293,8 @@ bool TestExtCurl::test_curl_multi_getcontent() {
   Resource mh = HHVM_FN(curl_multi_init)();
   Variant c1 = HHVM_FN(curl_init)(String(get_request_uri()));
   Variant c2 = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c1.toResource(), k_CURLOPT_RETURNTRANSFER, true);
-  HHVM_FN(curl_setopt)(c2.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c1.toResource(), CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c2.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_multi_add_handle)(mh, c1.toResource());
   HHVM_FN(curl_multi_add_handle)(mh, c2.toResource());
 
@@ -309,8 +314,8 @@ bool TestExtCurl::test_curl_multi_info_read() {
   Resource mh = HHVM_FN(curl_multi_init)();
   Variant c1 = HHVM_FN(curl_init)(String(get_request_uri()));
   Variant c2 = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c1.toResource(), k_CURLOPT_RETURNTRANSFER, true);
-  HHVM_FN(curl_setopt)(c2.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c1.toResource(), CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c2.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_multi_add_handle)(mh, c1.toResource());
   HHVM_FN(curl_multi_add_handle)(mh, c2.toResource());
 
@@ -328,8 +333,8 @@ bool TestExtCurl::test_curl_multi_close() {
   Resource mh = HHVM_FN(curl_multi_init)();
   Variant c1 = HHVM_FN(curl_init)(String(get_request_uri()));
   Variant c2 = HHVM_FN(curl_init)(String(get_request_uri()));
-  HHVM_FN(curl_setopt)(c1.toResource(), k_CURLOPT_RETURNTRANSFER, true);
-  HHVM_FN(curl_setopt)(c2.toResource(), k_CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c1.toResource(), CURLOPT_RETURNTRANSFER, true);
+  HHVM_FN(curl_setopt)(c2.toResource(), CURLOPT_RETURNTRANSFER, true);
   HHVM_FN(curl_multi_add_handle)(mh, c1.toResource());
   HHVM_FN(curl_multi_add_handle)(mh, c2.toResource());
 

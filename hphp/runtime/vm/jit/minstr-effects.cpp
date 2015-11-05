@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,7 +15,6 @@
 */
 #include "hphp/runtime/vm/jit/minstr-effects.h"
 
-#include "hphp/runtime/vm/jit/local-effects.h"
 #include "hphp/runtime/vm/jit/frame-state.h"
 
 namespace HPHP { namespace jit {
@@ -102,47 +101,12 @@ bool MInstrEffects::supported(const IRInstruction* inst) {
   return supported(inst->op());
 }
 
-void MInstrEffects::get(const IRInstruction* inst,
-                        const FrameStateMgr& frame,
-                        LocalStateHook& hook) {
-  // If the base for this instruction is a local address, the helper call might
-  // have side effects on the local's value
-  auto const base = inst->src(minstrBaseIdx(inst->op()));
-  auto const locInstr = base->inst();
-
-  // Right now we require that the address of any affected local is the
-  // immediate source of the base tmp.  This isn't actually specified in the ir
-  // spec right now but will intend to make it more general soon.  There is an
-  // analagous problem in frame-state.cpp for LdStkAddr.
-  if (locInstr->op() != LdLocAddr) return;
-
-  auto const locId = locInstr->extra<LdLocAddr>()->locId;
-  auto const baseType = frame.localType(locId);
-
-  MInstrEffects effects(inst->op(), baseType.ptr(Ptr::Frame));
-  if (effects.baseTypeChanged || effects.baseValChanged) {
-    auto const ty = effects.baseType.derefIfPtr();
-    if (ty <= TBoxedCell) {
-      hook.setLocalType(locId, TBoxedInitCell);
-      hook.setBoxedLocalPrediction(locId, ty);
-    } else {
-      hook.setLocalType(locId, ty);
-    }
-  }
-
-}
-
 MInstrEffects::MInstrEffects(const Opcode rawOp, const Type origBase) {
   // Note: MInstrEffects wants to manipulate pointer types in some situations
   // for historical reasons.  We'll eventually change that.
   bool const is_ptr = origBase <= TPtrToGen;
   auto const basePtr = is_ptr ? origBase.ptrKind() : Ptr::Unk;
   baseType = origBase.derefIfPtr();
-
-  // Only certain types of bases are supported now but this list may expand in
-  // the future.
-  assert_not_implemented(
-      is_ptr || baseType.subtypeOfAny(TObj, TArr));
 
   baseTypeChanged = baseValChanged = false;
 

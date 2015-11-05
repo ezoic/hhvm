@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -381,7 +381,7 @@ static Variant HHVM_METHOD(IntlDateFormatter, localtime,
   }
   ret.set(s_tm_isdst, isDST ? 1 : 0);
 
-  position = (int64_t)parse_pos;
+  position.assignIfRef((int64_t)parse_pos);
   return ret;
 }
 
@@ -404,7 +404,7 @@ static Variant HHVM_METHOD(IntlDateFormatter, parse,
   UDate timestamp = udat_parse(data->datefmt(),
                                str.getBuffer(), str.length(),
                                &pos, &error);
-  position = (int64_t)pos;
+  position.assignIfRef((int64_t)pos);
   if (U_FAILURE(error)) {
     data->setError(error, "Date parsing failed");
     return false;
@@ -456,22 +456,15 @@ static bool HHVM_METHOD(IntlDateFormatter, setTimeZone, const Variant& zone) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-#define UDAT_CONST(nm) Native::registerClassConstant<KindOfInt64>( \
-                       s_IntlDateFormatter.get(), \
-                       makeStaticString(#nm), UDAT_##nm);
-#define UCAL_CONST(nm) Native::registerClassConstant<KindOfInt64>( \
-                       s_IntlDateFormatter.get(), \
-                       makeStaticString(#nm), UCAL_##nm);
-
 void IntlExtension::initDateFormatter() {
-  UDAT_CONST(FULL);
-  UDAT_CONST(LONG);
-  UDAT_CONST(MEDIUM);
-  UDAT_CONST(SHORT);
-  UDAT_CONST(NONE);
+  HHVM_RCC_INT(IntlDateFormatter, FULL, UDAT_FULL);
+  HHVM_RCC_INT(IntlDateFormatter, LONG, UDAT_LONG);
+  HHVM_RCC_INT(IntlDateFormatter, MEDIUM, UDAT_MEDIUM);
+  HHVM_RCC_INT(IntlDateFormatter, SHORT, UDAT_SHORT);
+  HHVM_RCC_INT(IntlDateFormatter, NONE, UDAT_NONE);
 
-  UCAL_CONST(GREGORIAN);
-  UCAL_CONST(TRADITIONAL);
+  HHVM_RCC_INT(IntlDateFormatter, GREGORIAN, UCAL_GREGORIAN);
+  HHVM_RCC_INT(IntlDateFormatter, TRADITIONAL, UCAL_TRADITIONAL);
 
   HHVM_ME(IntlDateFormatter, __construct);
   HHVM_ME(IntlDateFormatter, format);

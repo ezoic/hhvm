@@ -17,7 +17,6 @@
 #ifndef incl_HPHP_IR_INSTRUCTION_H_
 #define incl_HPHP_IR_INSTRUCTION_H_
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/vm/jit/bc-marker.h"
 #include "hphp/runtime/vm/jit/extra-data.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
@@ -226,9 +225,10 @@ struct IRInstruction {
   folly::Range<SSATmp**> dsts();
 
   /*
-   * Set the ith src.
+   * Set a single src or all srcs.
    */
   void setSrc(uint32_t i, SSATmp* newSrc);
+  void setSrcs(uint32_t numSrcs, SSATmp** newSrcs);
 
   /*
    * Set the dsts, either as a single dst, or as `numDsts' dsts (if the

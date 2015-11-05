@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -75,6 +75,7 @@ namespace Stats {
   STAT(UnitMerge_mergeable_global) \
   STAT(UnitMerge_mergeable_class) \
   STAT(UnitMerge_mergeable_require) \
+  STAT(UnitMerge_mergeable_typealias) \
   STAT(UnitMerge_redo_hoistable) \
   /* stub reuse stats */ \
   STAT(Astub_New) \
@@ -135,18 +136,9 @@ inline void inc(StatCounter stat, int n = 1) {
 static_assert(static_cast<uint64_t>(OpLowInvalid) == 0,
               "stats.h assumes OpLowInvalid == 0");
 
-inline StatCounter opcodeToStatCounter(Op opc) {
-  return StatCounter(Instr_InterpBBLowInvalid +
-                     STATS_PER_OPCODE * uint8_t(opc));
-}
-
-inline void incOp(Op opc) {
-  inc(opcodeToStatCounter(opc));
-}
-
-inline StatCounter opcodeToTranslStatCounter(Op opc) {
+inline StatCounter opToTranslStat(Op opc) {
   return StatCounter(Instr_TranslLowInvalid +
-                     STATS_PER_OPCODE * uint8_t(opc));
+                     STATS_PER_OPCODE * size_t(opc));
 }
 
 extern void init();

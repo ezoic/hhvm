@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -32,11 +32,11 @@ static String mpzToString(mpz_t gmpData, const int64_t base) {
     ++charLength;
   }
 
-  char *charStr = (char*)smart_malloc(charLength);
+  char *charStr = (char*)req::malloc(charLength);
   mpz_get_str(charStr, base, gmpData);
 
   String returnValue(charStr);
-  smart_free(charStr);
+  req::free(charStr);
 
   return returnValue;
 }
@@ -1427,21 +1427,11 @@ class GMPExtension final : public Extension {
 public:
   GMPExtension() : Extension("gmp", "2.0.0-hhvm") { };
   void moduleInit() override {
-    Native::registerConstant<KindOfInt64>(
-      s_GMP_MAX_BASE.get(), GMP_MAX_BASE
-    );
-    Native::registerConstant<KindOfInt64>(
-      s_GMP_ROUND_ZERO.get(), GMP_ROUND_ZERO
-    );
-    Native::registerConstant<KindOfInt64>(
-      s_GMP_ROUND_PLUSINF.get(), GMP_ROUND_PLUSINF
-    );
-    Native::registerConstant<KindOfInt64>(
-      s_GMP_ROUND_MINUSINF.get(), GMP_ROUND_MINUSINF
-    );
-    Native::registerConstant<KindOfStaticString>(
-      s_GMP_VERSION.get(), k_GMP_VERSION.get()
-    );
+    HHVM_RC_INT_SAME(GMP_MAX_BASE);
+    HHVM_RC_INT_SAME(GMP_ROUND_ZERO);
+    HHVM_RC_INT_SAME(GMP_ROUND_PLUSINF);
+    HHVM_RC_INT_SAME(GMP_ROUND_MINUSINF);
+    HHVM_RC_STR(GMP_VERSION, gmp_version);
 
     HHVM_FE(gmp_abs);
     HHVM_FE(gmp_add);

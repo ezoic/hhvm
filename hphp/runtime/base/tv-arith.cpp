@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -67,7 +67,7 @@ TypedNum numericConvHelper(Cell cell) {
       return make_int(cell.m_data.pobj->toInt64());
 
     case KindOfResource:
-      return make_int(cell.m_data.pres->o_toInt64());
+      return make_int(cell.m_data.pres->data()->o_toInt64());
 
     case KindOfInt64:
     case KindOfDouble:
@@ -170,7 +170,12 @@ struct Div {
   Cell operator()(int64_t t, int64_t u) const {
     if (UNLIKELY(u == 0)) {
       raise_warning(Strings::DIVISION_BY_ZERO);
-      return make_tv<KindOfBoolean>(false);
+      if (RuntimeOption::PHP7_IntSemantics) {
+        // PHP7 uses the IEEE definition (+/- INF and NAN).
+        return make_dbl(t / 0.0);
+      } else {
+        return make_tv<KindOfBoolean>(false);
+      }
     }
 
     // Avoid SIGFPE when dividing the miniumum respresentable integer
@@ -190,7 +195,12 @@ struct Div {
   >::type operator()(T t, U u) const {
     if (UNLIKELY(u == 0)) {
       raise_warning(Strings::DIVISION_BY_ZERO);
-      return make_tv<KindOfBoolean>(false);
+      if (RuntimeOption::PHP7_IntSemantics) {
+        // PHP7 uses the IEEE definition (+/- INF and NAN).
+        return make_dbl(t / u);
+      } else {
+        return make_tv<KindOfBoolean>(false);
+      }
     }
     return make_dbl(t / u);
   }
@@ -311,7 +321,7 @@ Cell cellBitOp(StrLenOp strLenOp, Cell c1, Cell c2) {
   assert(cellIsPlausible(c1));
   assert(cellIsPlausible(c2));
 
-  if (IS_STRING_TYPE(c1.m_type) && IS_STRING_TYPE(c2.m_type)) {
+  if (isStringType(c1.m_type) && isStringType(c2.m_type)) {
     return make_tv<KindOfString>(
       stringBitOp(
         BitOp<char>(),
@@ -337,7 +347,7 @@ void cellBitOpEq(Op op, Cell& c1, Cell c2) {
 // Op must implement the interface described for cellIncDecOp.
 template<class Op>
 void stringIncDecOp(Op op, Cell& cell) {
-  assert(IS_STRING_TYPE(cell.m_type));
+  assert(isStringType(cell.m_type));
 
   auto const sd = cell.m_data.pstr;
   if (sd->empty()) {
@@ -523,8 +533,14 @@ Cell cellMod(Cell c1, Cell c2) {
   auto const i1 = cellToInt(c1);
   auto const i2 = cellToInt(c2);
   if (UNLIKELY(i2 == 0)) {
-    raise_warning(Strings::DIVISION_BY_ZERO);
-    return make_tv<KindOfBoolean>(false);
+    if (RuntimeOption::PHP7_IntSemantics) {
+      // TODO(https://github.com/facebook/hhvm/issues/6012)
+      // This should throw a DivisionByZeroError.
+      SystemLib::throwInvalidOperationExceptionObject(Strings::MODULO_BY_ZERO);
+    } else {
+      raise_warning(Strings::DIVISION_BY_ZERO);
+      return make_tv<KindOfBoolean>(false);
+    }
   }
 
   // This is to avoid SIGFPE in the case of INT64_MIN % -1.
@@ -553,11 +569,41 @@ Cell cellBitXor(Cell c1, Cell c2) {
 }
 
 Cell cellShl(Cell c1, Cell c2) {
-  return make_int(cellToInt(c1) << cellToInt(c2));
+  int64_t lhs = cellToInt(c1);
+  int64_t shift = cellToInt(c2);
+
+  if (RuntimeOption::PHP7_IntSemantics) {
+    if (UNLIKELY(shift >= 64)) {
+      return make_int(0);
+    }
+
+    if (UNLIKELY(shift < 0)) {
+      // TODO(https://github.com/facebook/hhvm/issues/6012)
+      // This should throw an ArithmeticError.
+      SystemLib::throwInvalidOperationExceptionObject(Strings::NEGATIVE_SHIFT);
+    }
+  }
+
+  return make_int(lhs << (shift & 63));
 }
 
 Cell cellShr(Cell c1, Cell c2) {
-  return make_int(cellToInt(c1) >> cellToInt(c2));
+  int64_t lhs = cellToInt(c1);
+  int64_t shift = cellToInt(c2);
+
+  if (RuntimeOption::PHP7_IntSemantics) {
+    if (UNLIKELY(shift >= 64)) {
+      return make_int(lhs >= 0 ? 0 : -1);
+    }
+
+    if (UNLIKELY(shift < 0)) {
+      // TODO(https://github.com/facebook/hhvm/issues/6012)
+      // This should throw an ArithmeticError.
+      SystemLib::throwInvalidOperationExceptionObject(Strings::NEGATIVE_SHIFT);
+    }
+  }
+
+  return make_int(lhs >> (shift & 63));
 }
 
 void cellAddEq(Cell& c1, Cell c2) {
@@ -572,9 +618,9 @@ void cellMulEq(Cell& c1, Cell c2) {
   cellOpEq(MulEq(), c1, c2);
 }
 
-void cellAddEqO(Cell& c1, Cell c2) { cellCopy(cellAddO(c1, c2), c1); }
-void cellSubEqO(Cell& c1, Cell c2) { cellCopy(cellSubO(c1, c2), c1); }
-void cellMulEqO(Cell& c1, Cell c2) { cellCopy(cellMulO(c1, c2), c1); }
+void cellAddEqO(Cell& c1, Cell c2) { cellSet(cellAddO(c1, c2), c1); }
+void cellSubEqO(Cell& c1, Cell c2) { cellSet(cellSubO(c1, c2), c1); }
+void cellMulEqO(Cell& c1, Cell c2) { cellSet(cellMulO(c1, c2), c1); }
 
 void cellDivEq(Cell& c1, Cell c2) {
   assert(cellIsPlausible(c1));
@@ -605,8 +651,8 @@ void cellBitXorEq(Cell& c1, Cell c2) {
   cellBitOpEq(cellBitXor, c1, c2);
 }
 
-void cellShlEq(Cell& c1, Cell c2) { cellCopy(cellShl(c1, c2), c1); }
-void cellShrEq(Cell& c1, Cell c2) { cellCopy(cellShr(c1, c2), c1); }
+void cellShlEq(Cell& c1, Cell c2) { cellSet(cellShl(c1, c2), c1); }
+void cellShrEq(Cell& c1, Cell c2) { cellSet(cellShr(c1, c2), c1); }
 
 void cellInc(Cell& cell) { cellIncDecOp(Inc(), cell); }
 void cellIncO(Cell& cell) { cellIncDecOp(IncO(), cell); }
@@ -627,7 +673,7 @@ void cellBitNot(Cell& cell) {
       break;
 
     case KindOfString:
-      if (cell.m_data.pstr->hasMultipleRefs()) {
+      if (cell.m_data.pstr->cowCheck()) {
     case KindOfStaticString:
         auto const newSd = StringData::Make(
           cell.m_data.pstr->slice(),

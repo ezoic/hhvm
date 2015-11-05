@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -114,6 +114,13 @@ public:
       return MixedArray::isTombstone(data.m_type);
     }
 
+    template<class F> void scan(F& mark) const {
+      if (!isTombstone()) {
+        if (hasStrKey()) mark(skey);
+        mark(data);
+      }
+    }
+
     static constexpr size_t dataOff() {
       return offsetof(Elm, data);
     }
@@ -206,6 +213,7 @@ public:
   using ArrayData::decRefCount;
   using ArrayData::hasMultipleRefs;
   using ArrayData::hasExactlyOneRef;
+  using ArrayData::decWillRelease;
   using ArrayData::incRefCount;
 
   /*
@@ -271,7 +279,7 @@ public:
   static ArrayData* RemoveStr(ArrayData*, const StringData* k, bool copy);
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyWithStrongIterators(const ArrayData*);
-  static ArrayData* NonSmartCopy(const ArrayData*);
+  static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, const Variant& v, bool copy);
   static ArrayData* AppendRef(ArrayData*, Variant& v, bool copy);
   static ArrayData* AppendWithRef(ArrayData*, const Variant& v, bool copy);
@@ -307,7 +315,7 @@ private:
 public:
   // Elm's data.m_type == kInvalidDataType for deleted slots.
   static bool isTombstone(DataType t) {
-    assert(IS_REAL_TYPE(t) || t == kInvalidDataType);
+    assert(isRealType(t) || t == kInvalidDataType);
     return t < KindOfUninit;
     static_assert(KindOfUninit == 0 && kInvalidDataType < 0, "");
   }
@@ -364,7 +372,6 @@ private:
   friend class c_Set;
   friend class c_ImmSet;
   friend class c_AwaitAllWaitHandle;
-  template <typename F> friend void scan(const MixedArray& this_, F& mark);
   enum class ClonePacked {};
   enum class CloneMixed {};
 
@@ -379,7 +386,7 @@ private:
   static void getElmKey(const Elm& e, TypedValue* out);
 
 private:
-  enum class AllocMode : bool { Smart, NonSmart };
+  enum class AllocMode : bool { Request, Static };
 
   static MixedArray* CopyMixed(const MixedArray& other, AllocMode);
   static MixedArray* CopyReserve(const MixedArray* src, size_t expectedSize);
@@ -464,7 +471,7 @@ private:
   int32_t* findForNewInsert(size_t h0) const;
   int32_t* findForNewInsert(int32_t* table, size_t mask, size_t h0) const;
   int32_t* findForNewInsertCheckUnbalanced(int32_t* table,
-                                           size_t mask, size_t h0) const;
+                                           size_t mask, size_t h0);
 
   bool nextInsert(const Variant& data);
   ArrayData* nextInsertRef(Variant& data);
@@ -551,7 +558,6 @@ private:
    */
   MixedArray* resize();
   MixedArray* resizeIfNeeded();
-  MixedArray* resizePackedIfNeeded();
 
   Elm* data() const {
     return const_cast<Elm*>(reinterpret_cast<Elm const*>(this + 1));

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -24,7 +24,7 @@ namespace HPHP {
 
 
 // Rules for ICU's RuleBasedBreakIterator class.
-const char* strRules = "\n\
+const char* strRules = u8"\n\
 !!chain;\n\
 $CR           = [\\p{Word_Break = CR}];\n\
 $LF           = [\\p{Word_Break = LF}];\n\

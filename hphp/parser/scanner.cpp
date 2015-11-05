@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -91,12 +91,27 @@ Scanner::Scanner(const std::string& filename, int type, bool md5 /* = false */)
       m_state(Start), m_type(type), m_yyscanner(nullptr), m_token(nullptr),
       m_loc(nullptr), m_lastToken(-1), m_isHHFile(0), m_lookaheadLtDepth(0),
       m_listener(nullptr) {
+#ifdef _MSC_VER
+  // I really don't know why this doesn't work properly with MSVC,
+  // but I know this fixes the problem, so use it instead.
+  std::ifstream ifs =
+    std::ifstream(m_filename, std::ifstream::in | std::ifstream::binary);
+  if (ifs.fail()) {
+    throw FileOpenException(m_filename);
+  }
+
+  std::stringstream ss;
+  ss << ifs.rdbuf();
+  m_stream = new std::istringstream(ss.str());
+  m_streamOwner = true;
+#else
   m_stream = new std::ifstream(m_filename);
   m_streamOwner = true;
   if (m_stream->fail()) {
     delete m_stream; m_stream = nullptr;
     throw FileOpenException(m_filename);
   }
+#endif
   if (md5) computeMd5();
   init();
 }
@@ -132,11 +147,11 @@ Scanner::Scanner(const char *source, int len, int type,
 }
 
 void Scanner::computeMd5() {
-  auto startpos = m_stream->tellg();
+  size_t startpos = m_stream->tellg();
   always_assert(startpos != -1 &&
                 startpos <= std::numeric_limits<int32_t>::max());
   m_stream->seekg(0, std::ios::end);
-  auto length = m_stream->tellg();
+  size_t length = m_stream->tellg();
   always_assert(length != -1 &&
                 length <= std::numeric_limits<int32_t>::max());
   m_stream->seekg(0, std::ios::beg);
@@ -231,11 +246,21 @@ bool Scanner::nextIfToken(TokenStore::iterator& pos, int tok) {
 }
 
 bool Scanner::tryParseTypeList(TokenStore::iterator& pos) {
-  for (;;) {
+  for (int parsed = 0;; parsed++) {
     if (pos->t == '+' || pos->t == '-') {
       nextLookahead(pos);
     }
-    if (!tryParseNSType(pos)) return false;
+    auto cpPos = pos;
+    if (!tryParseNSType(cpPos)) {
+      if (parsed > 0) {
+        pos = cpPos;
+        return true;
+      } else {
+        return false;
+      }
+    }
+    pos = cpPos;
+
     if (pos->t == T_AS || pos->t == T_SUPER) {
       nextLookahead(pos);
       if (!tryParseNSType(pos)) {
@@ -364,12 +389,21 @@ void Scanner::parseApproxParamDefVal(TokenStore::iterator& pos) {
 }
 
 bool Scanner::tryParseFuncTypeList(TokenStore::iterator& pos) {
-  for (;;) {
+  for (int parsed = 0;;parsed++) {
     if (pos->t == T_ELLIPSIS) {
       nextLookahead(pos);
       return true;
     }
-    if (!tryParseNSType(pos)) return false;
+    auto cpPos = pos;
+    if (!tryParseNSType(cpPos)) {
+      if (parsed > 0) {
+        pos = cpPos;
+        return true;
+      } else {
+        return false;
+      }
+    }
+    pos = cpPos;
     if (pos->t != ',') return true;
     nextLookahead(pos);
   }
@@ -508,6 +542,81 @@ static bool isUnresolved(int tokid) {
          tokid == T_UNRESOLVED_OP;
 }
 
+static bool isValidClassConstantName(int tokid) {
+  switch (tokid) {
+  case T_STRING:
+  case T_SUPER:
+  case T_XHP_ATTRIBUTE:
+  case T_XHP_CATEGORY:
+  case T_XHP_CHILDREN:
+  case T_XHP_REQUIRED:
+  case T_ENUM:
+  case T_CALLABLE:
+  case T_TRAIT:
+  case T_EXTENDS:
+  case T_IMPLEMENTS:
+  case T_STATIC:
+  case T_ABSTRACT:
+  case T_FINAL:
+  case T_PRIVATE:
+  case T_PROTECTED:
+  case T_PUBLIC:
+  case T_CONST:
+  case T_ENDDECLARE:
+  case T_ENDFOR:
+  case T_ENDFOREACH:
+  case T_ENDIF:
+  case T_ENDWHILE:
+  case T_LOGICAL_AND:
+  case T_GLOBAL:
+  case T_GOTO:
+  case T_INSTANCEOF:
+  case T_INSTEADOF:
+  case T_INTERFACE:
+  case T_NAMESPACE:
+  case T_NEW:
+  case T_LOGICAL_OR:
+  case T_LOGICAL_XOR:
+  case T_TRY:
+  case T_USE:
+  case T_VAR:
+  case T_EXIT:
+  case T_LIST:
+  case T_CLONE:
+  case T_INCLUDE:
+  case T_INCLUDE_ONCE:
+  case T_THROW:
+  case T_ARRAY:
+  case T_PRINT:
+  case T_ECHO:
+  case T_REQUIRE:
+  case T_REQUIRE_ONCE:
+  case T_RETURN:
+  case T_ELSE:
+  case T_ELSEIF:
+  case T_DEFAULT:
+  case T_BREAK:
+  case T_CONTINUE:
+  case T_SWITCH:
+  case T_YIELD:
+  case T_FUNCTION:
+  case T_IF:
+  case T_ENDSWITCH:
+  case T_FINALLY:
+  case T_FOR:
+  case T_FOREACH:
+  case T_DECLARE:
+  case T_CASE:
+  case T_DO:
+  case T_WHILE:
+  case T_AS:
+  case T_CATCH:
+    return true;
+  default:
+    return false;
+  }
+}
+
 int Scanner::getNextToken(ScannerToken &t, Location &l) {
   int tokid;
   bool la = !m_lookahead.empty();
@@ -537,7 +646,7 @@ int Scanner::getNextToken(ScannerToken &t, Location &l) {
     auto pos = m_lookahead.begin();
     auto typePos = pos;
     nextLookahead(pos);
-    if (pos->t == T_STRING) {
+    if (isValidClassConstantName(pos->t)) {
       typePos->t = tokid == T_UNRESOLVED_TYPE ? T_TYPE : T_NEWTYPE;
     } else {
       typePos->t = T_STRING;

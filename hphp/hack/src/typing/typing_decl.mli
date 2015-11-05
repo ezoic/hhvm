@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,8 +8,6 @@
  *
  *)
 open Utils
-
-val remove_classes: SSet.t -> unit
 
 (*
  * This function works by side effects. It is adding in the

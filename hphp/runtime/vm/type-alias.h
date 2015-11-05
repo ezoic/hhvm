@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,16 +17,21 @@
 #ifndef incl_HPHP_TYPE_ALIAS_H_
 #define incl_HPHP_TYPE_ALIAS_H_
 
-#include "hphp/runtime/base/types.h"
+#include "hphp/runtime/base/annot-type.h"
+#include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/datatype.h"
-#include "hphp/runtime/base/annot-type.h"
+#include "hphp/runtime/base/type-array.h"
+#include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/base/types.h"
+#include "hphp/runtime/base/user-attributes.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct Class;
 struct StringData;
+struct ArrayData;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -43,18 +48,43 @@ struct StringData;
 struct TypeAlias {
   LowStringPtr name;
   LowStringPtr value;
-  Attr         attrs;
-  AnnotType    type;
-  bool         nullable;  // null is allowed; for ?Foo aliases
+  Attr attrs;
+  AnnotType type;
+  bool nullable;  // null is allowed; for ?Foo aliases
+  UserAttributeMap userAttrs;
+  Array typeStructure{Array::Create()};
 
-  template<class SerDe> void serde(SerDe& sd) {
+  template<class SerDe>
+  typename std::enable_if<!SerDe::deserializing>::type
+  serde(SerDe& sd) {
     sd(name)
       (value)
       (type)
       (nullable)
+      (userAttrs)
       (attrs)
       ;
+    TypedValue tv = make_tv<KindOfArray>(typeStructure.get());
+    sd(tv);
   }
+
+  template<class SerDe>
+  typename std::enable_if<SerDe::deserializing>::type
+  serde(SerDe& sd) {
+    sd(name)
+      (value)
+      (type)
+      (nullable)
+      (userAttrs)
+      (attrs)
+      ;
+
+    TypedValue tv;
+    sd(tv);
+    assert(tv.m_type == KindOfArray);
+    typeStructure = tv.m_data.parr;
+  }
+
 };
 
 
@@ -95,6 +125,8 @@ struct TypeAliasReq {
   LowPtr<Class> klass{nullptr};
   // Needed for error messages; nullptr if not defined.
   LowStringPtr name{nullptr};
+  Array typeStructure{Array::Create()};
+  UserAttributeMap userAttrs;
 };
 
 bool operator==(const TypeAliasReq& l, const TypeAliasReq& r);

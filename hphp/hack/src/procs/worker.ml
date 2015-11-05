@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,6 +7,8 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
+
+open Core
 
 external hh_worker_init: unit -> unit = "hh_worker_init"
 
@@ -118,9 +120,9 @@ type ('a, 'b) worker_list = ('a, 'b) real_t list
 
 let select: ('a, 'b) worker_list -> ('a, 'b) worker_list =
 fun tl ->
-  let fdl = List.map (fun x -> x.descr_recv) tl in
+  let fdl = List.map tl (fun x -> x.descr_recv) in
   let readyl, _, _ = Unix.select fdl [] [] (-1.0) in
-  let res = List.filter (fun x -> List.mem x.descr_recv readyl) tl in
+  let res = List.filter tl (fun x -> List.mem readyl x.descr_recv) in
   res
 
 (*****************************************************************************)
@@ -213,7 +215,7 @@ module MakeWorker = struct
      * are duplicated. To avoid this, we need to close the pipes
      * of the previously created workers.
      *)
-    List.iter (fun w -> Unix.close w.descr_recv; Unix.close w.descr_send) acc;
+    List.iter acc (fun w -> Unix.close w.descr_recv; Unix.close w.descr_send);
     ()
 
   and start_worker: Unix.file_descr -> (unit -> 'a) -> ('b -> unit) -> 'c =

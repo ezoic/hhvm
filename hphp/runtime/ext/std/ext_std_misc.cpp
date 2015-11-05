@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -28,6 +28,7 @@
 #include "hphp/runtime/base/strings.h"
 #include "hphp/runtime/base/zend-pack.h"
 #include "hphp/runtime/ext/std/ext_std_math.h"
+#include "hphp/runtime/ext/std/ext_std_options.h"
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
@@ -36,8 +37,11 @@
 #include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/runtime/vm/type-profile.h"
 #include "hphp/system/constants.h"
+#include "hphp/util/current-executable.h"
 #include "hphp/util/logger.h"
+#ifndef _MSC_VER
 #include <sys/param.h> // MAXPATHLEN is here
+#endif
 #include "hphp/runtime/base/comparisons.h"
 
 namespace HPHP {
@@ -54,11 +58,11 @@ const double k_INF = std::numeric_limits<double>::infinity();
 const double k_NAN = std::numeric_limits<double>::quiet_NaN();
 
 static String HHVM_FUNCTION(server_warmup_status) {
-  // Fail if we jitted more than 25kb of code.
+  // Fail if we jitted more than 5 KB of code.
   size_t begin, end;
   jit::mcg->codeEmittedThisRequest(begin, end);
   auto const diff = end - begin;
-  auto constexpr kMaxTCBytes = 25 << 10;
+  auto constexpr kMaxTCBytes = 5 << 10;
   if (diff > kMaxTCBytes) {
     return folly::format("Translation cache grew by {} bytes to {} bytes.",
                          diff, begin).str();
@@ -140,6 +144,15 @@ static void bindTokenConstants();
 static int get_user_token_id(int internal_id);
 const StaticString s_T_PAAMAYIM_NEKUDOTAYIM("T_PAAMAYIM_NEKUDOTAYIM");
 
+#define PHP_MAJOR_VERSION 5
+#define PHP_MINOR_VERSION 6
+#define PHP_RELEASE_VERSION 99
+#define PHP_EXTRA_VERSION "hhvm"
+#define PHP_VERSION "5.6.99-hhvm"
+#define PHP_VERSION_ID 50699
+
+const StaticString k_PHP_VERSION(PHP_VERSION);
+
 void StandardExtension::initMisc() {
     HHVM_FALIAS(HH\\server_warmup_status, server_warmup_status);
     HHVM_FE(connection_aborted);
@@ -176,6 +189,62 @@ void StandardExtension::initMisc() {
     bindTokenConstants();
     Native::registerConstant<KindOfInt64>(s_T_PAAMAYIM_NEKUDOTAYIM.get(),
                                           get_user_token_id(T_DOUBLE_COLON));
+
+    HHVM_RC_INT(UPLOAD_ERR_OK,         0);
+    HHVM_RC_INT(UPLOAD_ERR_INI_SIZE,   1);
+    HHVM_RC_INT(UPLOAD_ERR_FORM_SIZE,  2);
+    HHVM_RC_INT(UPLOAD_ERR_PARTIAL,    3);
+    HHVM_RC_INT(UPLOAD_ERR_NO_FILE,    4);
+    HHVM_RC_INT(UPLOAD_ERR_NO_TMP_DIR, 6);
+    HHVM_RC_INT(UPLOAD_ERR_CANT_WRITE, 7);
+    HHVM_RC_INT(UPLOAD_ERR_EXTENSION,  8);
+
+    HHVM_RC_INT(CREDITS_GROUP,    1 << 0);
+    HHVM_RC_INT(CREDITS_GENERAL,  1 << 1);
+    HHVM_RC_INT(CREDITS_SAPI,     1 << 2);
+    HHVM_RC_INT(CREDITS_MODULES,  1 << 3);
+    HHVM_RC_INT(CREDITS_DOCS,     1 << 4);
+    HHVM_RC_INT(CREDITS_FULLPAGE, 1 << 5);
+    HHVM_RC_INT(CREDITS_QA,       1 << 6);
+    HHVM_RC_INT(CREDITS_ALL, 0xFFFFFFFF);
+
+    HHVM_RC_INT(INI_SYSTEM, IniSetting::PHP_INI_SYSTEM);
+    HHVM_RC_INT(INI_PERDIR, IniSetting::PHP_INI_PERDIR);
+    HHVM_RC_INT(INI_USER,   IniSetting::PHP_INI_USER);
+    HHVM_RC_INT(INI_ALL,    IniSetting::PHP_INI_SYSTEM |
+                            IniSetting::PHP_INI_PERDIR |
+                            IniSetting::PHP_INI_USER);
+
+    HHVM_RC_STR(PHP_BINARY, current_executable_path());
+    HHVM_RC_STR(PHP_BINDIR, current_executable_directory());
+    HHVM_RC_STR(PHP_OS, HHVM_FN(php_uname)("s").toString().toCppString());
+    HHVM_RC_STR(PHP_SAPI, RuntimeOption::ExecutionMode);
+
+    HHVM_RC_INT(PHP_INT_SIZE, sizeof(int64_t));
+    HHVM_RC_INT(PHP_INT_MIN, k_PHP_INT_MIN);
+    HHVM_RC_INT(PHP_INT_MAX, k_PHP_INT_MAX);
+
+    HHVM_RC_INT_SAME(PHP_MAJOR_VERSION);
+    HHVM_RC_INT_SAME(PHP_MINOR_VERSION);
+    HHVM_RC_INT_SAME(PHP_RELEASE_VERSION);
+    HHVM_RC_STR_SAME(PHP_EXTRA_VERSION);
+    HHVM_RC_STR_SAME(PHP_VERSION);
+    HHVM_RC_INT_SAME(PHP_VERSION_ID);
+
+    // FIXME: These values are hardcoded from their previous IDL values
+    // Grab their correct values from the system as appropriate
+    HHVM_RC_STR(PHP_EOL, "\n");
+    HHVM_RC_STR(PHP_CONFIG_FILE_PATH, "");
+    HHVM_RC_STR(PHP_CONFIG_FILE_SCAN_DIR, "");
+    HHVM_RC_STR(PHP_DATADIR, "");
+    HHVM_RC_STR(PHP_EXTENSION_DIR, "");
+    HHVM_RC_STR(PHP_LIBDIR, "");
+    HHVM_RC_STR(PHP_LOCALSTATEDIR, "");
+    HHVM_RC_STR(PHP_PREFIX, "");
+    HHVM_RC_STR(PHP_SHLIB_SUFFIX, "so");
+    HHVM_RC_STR(PHP_SYSCONFDIR, "");
+    HHVM_RC_STR(PEAR_EXTENSION_DIR, "");
+    HHVM_RC_STR(PEAR_INSTALL_DIR, "");
 
     loadSystemlib("std_misc");
   }
@@ -251,12 +320,12 @@ Variant HHVM_FUNCTION(constant, const String& name) {
         return cellAsCVarRef(cns);
       }
     }
-    raise_warning("Couldn't find constant %s", data);
   } else {
     auto const cns = Unit::loadCns(name.get());
     if (cns) return tvAsCVarRef(cns);
   }
 
+  raise_warning("constant(): Couldn't find constant %s", data);
   return init_null();
 }
 
@@ -294,19 +363,9 @@ int64_t HHVM_FUNCTION(ignore_user_abort, bool setting /* = false */) {
   return 0;
 }
 
-TypedValue* HHVM_FUNCTION(pack, ActRec* ar) {
-  int num = ar->numArgs();
-  String format(getArg<KindOfString>(ar,0));
-  Array extra = Array::Create();
-  for (int i = 1; i<num; i++) {
-    extra.append(getArgVariant(ar,i));
-  }
-  Variant result = ZendPack().pack(format, extra);
-  // pack() returns false if there was an error
-  if (!result.isBoolean()) {
-    tvCastToStringInPlace(result.asTypedValue());
-  }
-  return arReturn(ar, std::move(result));
+Variant HHVM_FUNCTION(pack, const String& format, const Array& argv) {
+  // pack() returns false if there was an error, String otherwise
+  return ZendPack().pack(format, argv);
 }
 
 int64_t HHVM_FUNCTION(sleep, int seconds) {
@@ -620,20 +679,6 @@ const int UserTokenId_T_UNRESOLVED_NEWTYPE = 406;
 const int UserTokenId_T_COMPILER_HALT_OFFSET = 407;
 const int UserTokenId_T_AWAIT = 408;
 const int UserTokenId_T_ASYNC = 409;
-const int UserTokenId_T_FROM = 411;
-const int UserTokenId_T_WHERE = 412;
-const int UserTokenId_T_JOIN = 413;
-const int UserTokenId_T_IN = 414;
-const int UserTokenId_T_ON = 415;
-const int UserTokenId_T_EQUALS = 416;
-const int UserTokenId_T_INTO = 417;
-const int UserTokenId_T_LET = 418;
-const int UserTokenId_T_ORDERBY = 419;
-const int UserTokenId_T_ASCENDING = 420;
-const int UserTokenId_T_DESCENDING = 421;
-const int UserTokenId_T_SELECT = 422;
-const int UserTokenId_T_GROUP = 423;
-const int UserTokenId_T_BY = 424;
 const int UserTokenId_T_LAMBDA_ARROW = 425;
 const int UserTokenId_T_DOUBLE_COLON = 426;
 const int UserTokenId_T_LAMBDA_OP = 427;
@@ -646,7 +691,8 @@ const int UserTokenId_T_POW_EQUAL = 433;
 const int UserTokenId_T_NULLSAFE_OBJECT_OPERATOR = 434;
 const int UserTokenId_T_HASHBANG = 435;
 const int UserTokenId_T_SUPER = 436;
-const int MaxUserTokenId = 437; // Marker, not a real user token ID
+const int UserTokenId_T_SPACESHIP = 437;
+const int MaxUserTokenId = 438; // Marker, not a real user token ID
 
 #undef YYTOKENTYPE
 #undef YYTOKEN_MAP

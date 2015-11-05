@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,27 +24,26 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-const Resource Resource::s_nullResource = Resource();
+extern const Resource null_resource = Resource();
 
 Resource::~Resource() {
   // force it out of line
 }
 
 String Resource::toString() const {
-  return m_res ? m_res->o_toString() : String();
+  return m_res ? m_res->data()->o_toString() : String();
 }
 
 Array Resource::toArray() const {
-  return m_res ? m_res->o_toArray() : Array();
+  return m_res ? m_res->data()->o_toArray() : Array();
 }
 
 const char* Resource::classname_cstr() const {
-  return m_res->o_getClassName().c_str();
+  return m_res->data()->o_getClassName().c_str();
 }
 
 void Resource::compileTimeAssertions() {
-  static_assert(
-    sizeof(Resource) == sizeof(SmartPtr<ResourceData>), "Fix this.");
+  static_assert(sizeof(Resource) == sizeof(req::ptr<ResourceHdr>), "");
 }
 
 ///////////////////////////////////////////////////////////////////////////////

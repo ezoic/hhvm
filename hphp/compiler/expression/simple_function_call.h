@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -104,7 +104,7 @@ protected:
     ClassAlias,
   };
 
-  static std::map<std::string,FunType> FunctionTypeMap;
+  static std::map<std::string,FunType,stdltistr> FunctionTypeMap;
   FunType m_type;
   unsigned m_dynamicConstant : 1;
   unsigned m_builtinFunction : 1;
@@ -119,7 +119,6 @@ protected:
 
   ExpressionPtr optimize(AnalysisResultConstPtr ar);
 private:
-  int checkObjCall(AnalysisResultPtr ar);
   FunctionScopePtr
   getFuncScopeFromParams(AnalysisResultPtr ar,
                          BlockScopeRawPtr scope,

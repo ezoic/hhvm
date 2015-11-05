@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -12,16 +12,29 @@
 let unix_socket sock_name =
   try
     Sys_utils.with_umask 0o111 begin fun () ->
+      Sys_utils.mkdir_no_fail (Filename.dirname sock_name);
       if Sys.file_exists sock_name then Sys.remove sock_name;
-      let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      let domain, addr =
+        if Sys.win32 then
+          Unix.(PF_INET, Unix.ADDR_INET (inet_addr_loopback, 0))
+        else
+          Unix.(PF_UNIX, Unix.ADDR_UNIX sock_name) in
+      let sock = Unix.socket domain Unix.SOCK_STREAM 0 in
       let _ = Unix.setsockopt sock Unix.SO_REUSEADDR true in
-      let _ = Unix.bind sock (Unix.ADDR_UNIX sock_name) in
+      let _ = Unix.bind sock addr in
       let _ = Unix.listen sock 10 in
+      let () =
+        match Unix.getsockname sock with
+        | Unix.ADDR_UNIX _ -> ()
+        | Unix.ADDR_INET (_, port) ->
+            let oc = open_out_bin sock_name in
+            output_binary_int oc port;
+            close_out oc in
       sock
     end
   with Unix.Unix_error (err, _, _) ->
-    Printf.fprintf stderr "%s\n" (Unix.error_message err);
-    exit 1
+    Printf.eprintf "%s\n" (Unix.error_message err);
+    Exit_status.(exit Socket_error)
 
 (* So the sockaddr_un structure puts a strict limit on the length of a socket
   * address. This appears to be 104 chars on mac os x and 108 chars on my
@@ -29,23 +42,27 @@ let unix_socket sock_name =
 let max_addr_length = 103
 let min_name_length = 17
 
-let get_path root =
-  let tmp_dir = Tmp.get_dir () in
-  (* Appened a "/" if necessary *)
-  let tmp_dir = if tmp_dir.[String.length tmp_dir - 1] <> '/'
-    then tmp_dir ^ "/"
-    else tmp_dir in
-  (* It's possible that the tmp_dir path is too long. If so, let's give up and
+let get_path path =
+  (* Path will resolve the realpath, in case two processes are referring to the
+   * same socket using different paths (like with symlinks *)
+  let path = path |> Path.make |> Path.to_string in
+  let dir = (Filename.dirname path)^"/" in
+  let filename = Filename.basename path in
+  let root_part = Filename.chop_extension filename in
+  let root_length = String.length root_part in
+  let extension_length = String.length filename - root_length in
+  let extension = String.sub filename root_length extension_length in
+
+  (* It's possible that the directory path is too long. If so, let's give up and
    * use /tmp/ *)
-  let tmp_dir = if String.length tmp_dir > max_addr_length - min_name_length
-  then "/tmp/"
-  else tmp_dir in
-  let root_part = (Path.slash_escaped_string_of_path root) in
-  let extension = ".sock" in
+  let dir =
+    if String.length dir > max_addr_length - min_name_length
+    then Filename.get_temp_dir_name ()
+    else dir in
   let max_root_part_length =
-    max_addr_length - (String.length tmp_dir) - (String.length extension) in
+    max_addr_length - (String.length dir) - extension_length in
   let root_part =
-    if String.length root_part > max_root_part_length
+    if root_length > max_root_part_length
     then begin
       let len = String.length root_part in
       let prefix = String.sub root_part 0 5 in
@@ -58,7 +75,7 @@ let get_path root =
         else digest in
       prefix ^ "." ^ digest_part ^ "." ^ suffix
     end else root_part in
-  Printf.sprintf "%s%s%s" tmp_dir root_part extension
+  Filename.concat dir (Printf.sprintf "%s%s" root_part extension)
 
 let init_unix_socket www_root_path =
   unix_socket (get_path www_root_path)

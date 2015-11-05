@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -34,7 +35,6 @@
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/process.h"
 #include "hphp/runtime/server/satellite-server.h"
-#include "hphp/system/constants.h"
 
 #include <folly/ScopeGuard.h>
 
@@ -240,6 +240,7 @@ bool RPCRequestHandler::executePHPFunction(Transport *transport,
     auto env = php_global(s__ENV);
     env.toArrRef().set(s_HPHP_RPC, 1);
     php_global_set(s__ENV, std::move(env));
+    InitFiniNode::GlobalsInit();
   }
 
   bool isFile = rpcFunc.rfind('.') != std::string::npos;

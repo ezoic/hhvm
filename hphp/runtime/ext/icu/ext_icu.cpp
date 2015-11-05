@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -47,11 +47,8 @@ static Variant HHVM_FUNCTION(icu_match, const String& pattern,
                                         int64_t flags /* = 0 */) {
   UErrorCode status = U_ZERO_ERROR;
 
-  Array matchesArr;
-  if (matches.isReferenced()) {
-    matchesArr = Array::Create();
-  }
-  SCOPE_EXIT { if (matches.isReferenced()) matches = matchesArr; };
+  Array matchesArr = Array::Create();
+  SCOPE_EXIT { matches.assignIfRef(matchesArr); };
 
   // Create hash map key by concatenating pattern and flags.
   StringBuffer bpattern;
@@ -136,7 +133,7 @@ static Variant HHVM_FUNCTION(icu_match, const String& pattern,
 
 class TransliteratorWrapper {
 public:
-  TransliteratorWrapper() {
+  void initialize() {
     UnicodeString basicID("Any-Latin ; NFKD; [:nonspacing mark:] Remove");
     UnicodeString basicIDAccent("Any-Latin ; NFKC");
     UErrorCode status = U_ZERO_ERROR;
@@ -331,23 +328,23 @@ static Array HHVM_FUNCTION(icu_tokenize, const String& text) {
 
 /////////////////////////////////////////////////////////////////////////////
 
-const StaticString s_UREGEX_OFFSET_CAPTURE("UREGEX_OFFSET_CAPTURE");
-
 void IntlExtension::initICU() {
+  // We need this initialization to be done late
+  // so that ICU's dynamic initializers have had
+  // a chance to run, which is important if we've
+  // linked against a static libICU.
+  s_transliterator.initialize();
+
   HHVM_FE(icu_match);
   HHVM_FE(icu_transliterate);
   HHVM_FE(icu_tokenize);
 
-#define UREGEX_CONST(v) Native::registerConstant<KindOfInt64> \
-                          (makeStaticString("UREGEX_" #v), UREGEX_##v);
-  UREGEX_CONST(CASE_INSENSITIVE);
-  UREGEX_CONST(COMMENTS);
-  UREGEX_CONST(DOTALL);
-  UREGEX_CONST(MULTILINE);
-  UREGEX_CONST(UWORD);
-#undef UREGEX_CONST
-  Native::registerConstant<KindOfInt64>(s_UREGEX_OFFSET_CAPTURE.get(),
-                                        k_UREGEX_OFFSET_CAPTURE);
+  HHVM_RC_INT_SAME(UREGEX_CASE_INSENSITIVE);
+  HHVM_RC_INT_SAME(UREGEX_COMMENTS);
+  HHVM_RC_INT_SAME(UREGEX_DOTALL);
+  HHVM_RC_INT_SAME(UREGEX_MULTILINE);
+  HHVM_RC_INT_SAME(UREGEX_UWORD);
+  HHVM_RC_INT(UREGEX_OFFSET_CAPTURE, k_UREGEX_OFFSET_CAPTURE);
 
   loadSystemlib("icu");
 }

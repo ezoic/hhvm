@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,7 +15,7 @@
 */
 #include "hphp/util/stack-trace.h"
 
-#if (!defined(__CYGWIN__) && !defined(__MINGW__) && !defined(__MSC_VER))
+#if (!defined(__CYGWIN__) && !defined(__MINGW__) && !defined(_MSC_VER))
 #include <execinfo.h>
 #endif
 
@@ -35,7 +35,6 @@
 #include "hphp/util/process.h"
 #include "hphp/util/lock.h"
 #include "hphp/util/logger.h"
-#include "hphp/util/light-process.h"
 #include "hphp/util/compatibility.h"
 #include "hphp/util/hash.h"
 

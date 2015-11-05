@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -64,17 +64,26 @@ public:
   static void Info(const std::string &msg);
   static void Verbose(const std::string &msg);
 
-  static void Error(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Warning(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Info(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Verbose(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
+  static void Error(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Warning(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Info(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Verbose(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+
+  template<typename... Args> static void FError(Args&&... args);
+  template<typename... Args> static void FWarning(Args&&... args);
+  template<typename... Args> static void FInfo(Args&&... args);
+  template<typename... Args> static void FVerbose(Args&&... args);
 
   static void Log(LogLevelType level, const char *type, const Exception &e,
                   const char *file = nullptr, int line = 0);
   static void OnNewRequest();
   static void ResetRequestCount();
 
-  static bool SetThreadLog(const char *file);
+  static bool SetThreadLog(const char *file, bool threadOnly);
   static void ClearThreadLog();
   static void SetNewOutput(FILE *output);
   static void UnlimitThreadMessages();
@@ -101,20 +110,20 @@ public:
 protected:
   class ThreadData {
   public:
-    ThreadData() : request(0), message(0), log(nullptr), hook(nullptr) {}
-    int request;
-    int message;
+    int request{0};
+    int message{0};
     LogFileFlusher flusher;
-    FILE *log;
-    PFUNC_LOG hook;
+    FILE *log{nullptr};
+    bool threadLogOnly{false};
+    PFUNC_LOG hook{nullptr};
     void *hookData;
   };
   static DECLARE_THREAD_LOCAL(ThreadData, s_threadData);
 
-  static void Log(LogLevelType level, const char *fmt, va_list ap)
-    ATTRIBUTE_PRINTF(2,0);
-  static void LogEscapeMore(LogLevelType level, const char *fmt, va_list ap)
-    ATTRIBUTE_PRINTF(2,0);
+  static void Log(LogLevelType level,
+    ATTRIBUTE_PRINTF_STRING const char *fmt, va_list ap) ATTRIBUTE_PRINTF(2,0);
+  static void LogEscapeMore(LogLevelType level,
+    ATTRIBUTE_PRINTF_STRING const char *fmt, va_list ap) ATTRIBUTE_PRINTF(2,0);
   static void Log(LogLevelType level, const std::string &msg,
                   const StackTrace *stackTrace,
                   bool escape = false, bool escapeMore = false);
@@ -148,5 +157,7 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 }
+
+#include "hphp/util/logger-inl.h"
 
 #endif // incl_HPHP_LOGGER_H_

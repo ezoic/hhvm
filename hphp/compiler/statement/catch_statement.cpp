@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -63,9 +63,6 @@ StatementPtr CatchStatement::clone() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// parser functions
-
-///////////////////////////////////////////////////////////////////////////////
 // static analysis functions
 
 void CatchStatement::analyzeProgram(AnalysisResultPtr ar) {
@@ -73,11 +70,7 @@ void CatchStatement::analyzeProgram(AnalysisResultPtr ar) {
   (void)resolveClass();
   if (m_stmt) m_stmt->analyzeProgram(ar);
   if (m_variable->isThis()) {
-    // catch (Exception $this) { ... }
-    // See note in alias_manager.cpp about why this forces a variable table
-    VariableTablePtr variables(getScope()->getVariables());
-    variables->forceVariants(ar, VariableTable::AnyVars);
-    variables->setAttribute(VariableTable::ContainsLDynamicVariable);
+    getFunctionScope()->setContainsBareThis(true, true);
   }
 }
 
@@ -114,21 +107,6 @@ void CatchStatement::setNthKid(int n, ConstructPtr cp) {
       assert(false);
       break;
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void CatchStatement::outputCodeModel(CodeGenerator &cg) {
-  cg.printObjectHeader("CatchStatement", 4);
-  cg.printPropertyHeader("class");
-  cg.printTypeExpression(m_origClassName);
-  cg.printPropertyHeader("variableName");
-  cg.printValue(m_variable->getName());
-  cg.printPropertyHeader("block");
-  cg.printAsEnclosedBlock(m_stmt);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

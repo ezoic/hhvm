@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,8 +8,9 @@
  *
  *)
 
-open Utils
+open Core
 open Typing_defs
+open Utils
 
 module Phase = Typing_phase
 
@@ -64,29 +65,31 @@ let is_auto_complete x =
 
 let autocomplete_result_to_json res =
   let func_param_to_json param =
-    Hh_json.JAssoc [ "name", Hh_json.JString param.param_name;
-                     "type", Hh_json.JString param.param_ty;
-                     "variadic", Hh_json.JBool param.param_variadic;
+    Hh_json.JSON_Object [ "name", Hh_json.JSON_String param.param_name;
+                     "type", Hh_json.JSON_String param.param_ty;
+                     "variadic", Hh_json.JSON_Bool param.param_variadic;
                    ]
   in
   let func_details_to_json details =
     match details with
-     | Some fd -> Hh_json.JAssoc [ "min_arity", Hh_json.JInt fd.min_arity;
-             "return_type", Hh_json.JString fd.return_ty;
-             "params", Hh_json.JList (List.map func_param_to_json fd.params);
-           ]
-     | None -> Hh_json.JNull
+     | Some fd -> Hh_json.JSON_Object [
+           "min_arity", Hh_json.int_ fd.min_arity;
+           "return_type", Hh_json.JSON_String fd.return_ty;
+           "params", Hh_json.JSON_Array (List.map fd.params func_param_to_json);
+       ]
+     | None -> Hh_json.JSON_Null
   in
   let name = res.res_name in
   let pos = res.res_pos in
   let ty = res.res_ty in
   let expected_ty = res.expected_ty in
-  Hh_json.JAssoc [ "name", Hh_json.JString name;
-           "type", Hh_json.JString ty;
-           "pos", Pos.json pos;
-           "func_details", func_details_to_json res.func_details;
-           "expected_ty", Hh_json.JBool expected_ty;
-         ]
+  Hh_json.JSON_Object [
+      "name", Hh_json.JSON_String name;
+      "type", Hh_json.JSON_String ty;
+      "pos", Pos.json pos;
+      "func_details", func_details_to_json res.func_details;
+      "expected_ty", Hh_json.JSON_Bool expected_ty;
+  ]
 
 let add_result name ty =
   autocomplete_results :=
@@ -117,7 +120,7 @@ let autocomplete_id id env = autocomplete_token Autocomplete.Acid (Some env) id
 
 let autocomplete_hint = autocomplete_token Autocomplete.Actype None
 
-let autocomplete_new cid env =
+let autocomplete_new cid env _ =
   match cid with
   | Nast.CI sid -> autocomplete_token Autocomplete.Acnew (Some env) sid
   | _ -> ()
@@ -214,7 +217,7 @@ let compute_complete_global funs classes =
   let gname = strip_suffix gname in
   let result_count = ref 0 in
   try
-    List.iter begin fun name ->
+    List.iter classes begin fun name ->
       if !result_count > 100 then raise Exit;
       if str_starts_with (strip_ns name) gname
       then match (Typing_env.Classes.get name) with
@@ -239,7 +242,7 @@ let compute_complete_global funs classes =
                   in
                   add_result_with_desc s (Phase.decl ty) desc)
         | _ -> ()
-    end classes;
+    end;
     if should_complete_fun completion_type
     then begin
       (* Disgusting hack alert!
@@ -263,15 +266,12 @@ let compute_complete_global funs classes =
       let gname_gns = match !Autocomplete.auto_complete_pos with
         | None -> None
         | Some p ->
-            let len =
-              p.Pos.pos_end.Lexing.pos_cnum -
-              p.Pos.pos_start.Lexing.pos_cnum -
-              suffix_len in
+            let len = (Pos.length p) - suffix_len in
             let start = String.length gname - len in
             if String.contains_from gname start '\\'
             then None else Some (strip_all_ns gname)
       in
-      List.iter begin fun name ->
+      List.iter funs begin fun name ->
         if !result_count > 100 then raise Exit;
         let stripped_name = strip_ns name in
         let matches_gname = str_starts_with stripped_name gname in
@@ -288,7 +288,7 @@ let compute_complete_global funs classes =
             in
             add_result stripped_name (Phase.decl ty)
           | _ -> ()
-      end funs
+      end
     end
   with Exit -> ()
 
@@ -306,11 +306,11 @@ let process_fun_call fun_args used_args env =
          * happen on the way up because autocomplete pos needs to get set
          * before this is called *)
         let argument_index = ref (-1) in
-        List.iteri begin fun index arg ->
+        List.iteri used_args begin fun index arg ->
           if is_target pos arg then argument_index := index;
-        end used_args;
+        end;
         begin try
-          let _, arg_ty = List.nth fun_args !argument_index in
+          let _, arg_ty = List.nth_exn fun_args !argument_index in
           ac_type := Some arg_ty
         with
           | Failure _ ->
@@ -346,61 +346,63 @@ let result_compare a b =
   else 1
 
 let get_results funs classes =
-  let completion_type = !Autocomplete.argument_global_type in
-  if completion_type = Some Autocomplete.Acid ||
-     completion_type = Some Autocomplete.Acnew ||
-     completion_type = Some Autocomplete.Actype
-  then compute_complete_global funs classes;
-  let results = !autocomplete_results in
-  let env = match !ac_env with
-    | Some e -> e
-    | None ->
-      let tcopt = TypecheckerOptions.permissive in
-      Typing_env.empty tcopt Relative_path.default
-  in
-  let results = List.map begin fun x ->
-    let env, ty = match x.ty with
-      | DeclTy ty -> Phase.localize_with_self env ty
-      | LoclTy ty -> env, ty
+  Errors.ignore_ begin fun() ->
+    let completion_type = !Autocomplete.argument_global_type in
+    if completion_type = Some Autocomplete.Acid ||
+       completion_type = Some Autocomplete.Acnew ||
+       completion_type = Some Autocomplete.Actype
+    then compute_complete_global funs classes;
+    let results = !autocomplete_results in
+    let env = match !ac_env with
+      | Some e -> e
+      | None ->
+        let tcopt = TypecheckerOptions.permissive in
+        Typing_env.empty tcopt Relative_path.default
     in
-    let desc_string = match x.desc with
-      | Some s -> s
-      | None -> Typing_print.full_strip_ns env ty
-    in
-    let func_details = match ty with
-      | (_, Tfun ft) ->
-        let param_to_record ?(is_variadic=false) (name, pty) =
-          {
-            param_name     = (match name with
-                               | Some n -> n
-                               | None -> "");
-            param_ty       = Typing_print.full_strip_ns env pty;
-            param_variadic = is_variadic;
+    let results = List.map results begin fun x ->
+      let env, ty = match x.ty with
+        | DeclTy ty -> Phase.localize_with_self env ty
+        | LoclTy ty -> env, ty
+      in
+      let desc_string = match x.desc with
+        | Some s -> s
+        | None -> Typing_print.full_strip_ns env ty
+      in
+      let func_details = match ty with
+        | (_, Tfun ft) ->
+          let param_to_record ?(is_variadic=false) (name, pty) =
+            {
+              param_name     = (match name with
+                                 | Some n -> n
+                                 | None -> "");
+              param_ty       = Typing_print.full_strip_ns env pty;
+              param_variadic = is_variadic;
+            }
+          in
+          Some {
+            return_ty = Typing_print.full_strip_ns env ft.ft_ret;
+            min_arity = arity_min ft.ft_arity;
+            params    = List.map ft.ft_params param_to_record @
+              (match ft.ft_arity with
+                 | Fellipsis _ -> let empty = (None, (Reason.none, Tany)) in
+                                  [param_to_record ~is_variadic:true empty]
+                 | Fvariadic (_, p) -> [param_to_record ~is_variadic:true p]
+                 | Fstandard _ -> [])
           }
-        in
-        Some {
-          return_ty = Typing_print.full_strip_ns env ft.ft_ret;
-          min_arity = arity_min ft.ft_arity;
-          params    = List.map param_to_record ft.ft_params @
-            (match ft.ft_arity with
-               | Fellipsis _ -> let empty = (None, (Reason.none, Tany)) in
-                                [param_to_record ~is_variadic:true empty]
-               | Fvariadic (_, p) -> [param_to_record ~is_variadic:true p]
-               | Fstandard _ -> [])
-        }
-      | _ -> None
-    in
-    let expected_ty = result_matches_expected_ty ty in
-    let pos = Typing_reason.to_pos (fst ty) in
-    {
-      res_pos      = Pos.to_absolute pos;
-      res_ty       = desc_string;
-      res_name     = x.name;
-      expected_ty  = expected_ty;
-      func_details = func_details;
-    }
-  end results in
-  List.sort result_compare results
+        | _ -> None
+      in
+      let expected_ty = result_matches_expected_ty ty in
+      let pos = Typing_reason.to_pos (fst ty) in
+      {
+        res_pos      = Pos.to_absolute pos;
+        res_ty       = desc_string;
+        res_name     = x.name;
+        expected_ty  = expected_ty;
+        func_details = func_details;
+      }
+    end in
+    List.sort result_compare results
+end
 
 let reset () =
   Autocomplete.auto_complete_for_global := "";

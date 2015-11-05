@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -43,9 +43,9 @@ void DebuggerThriftBuffer::throwError(const char *msg, int code) {
 ///////////////////////////////////////////////////////////////////////////////
 
 const StaticString
-  s_hit_limit(LITSTR_INIT("Hit serialization limit")),
-  s_unknown_exp(LITSTR_INIT("Hit unknown exception")),
-  s_type_mismatch(LITSTR_INIT("Type mismatch"));
+  s_hit_limit("Hit serialization limit"),
+  s_unknown_exp("Hit unknown exception"),
+  s_type_mismatch("Type mismatch");
 
 template<typename T>
 static inline int serializeImpl(T data, String& sdata) {

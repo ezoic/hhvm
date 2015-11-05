@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -49,7 +49,7 @@ struct Header {
     ProxyArray proxy_;
     GlobalsArray globals_;
     ObjectData obj_;
-    ResourceData res_;
+    ResourceHdr res_;
     RefData ref_;
     SmallNode small_;
     BigNode big_;
@@ -59,16 +59,52 @@ struct Header {
     c_AwaitAllWaitHandle awaitall_;
   };
 
-  Resumable* resumable() const {
+  const Resumable* resumable() const {
+    assert(kind() == HeaderKind::ResumableFrame);
+    return reinterpret_cast<const Resumable*>(
+      (char*)this + sizeof(ResumableNode) + resumable_.framesize
+    );
+  }
+  Resumable* resumable() {
+    assert(kind() == HeaderKind::ResumableFrame);
     return reinterpret_cast<Resumable*>(
       (char*)this + sizeof(ResumableNode) + resumable_.framesize
     );
   }
-  ObjectData* resumableObj() const {
-    auto const func = resumable()->actRec()->func();
-    return func->isGenerator()
-      ? reinterpret_cast<ObjectData*>((char*)this + resumable()->size()) - 1
-      : reinterpret_cast<ObjectData*>(resumable() + 1);
+  const ObjectData* resumableObj() const {
+    DEBUG_ONLY auto const func = resumable()->actRec()->func();
+    assert(func->isAsyncFunction());
+    auto obj = reinterpret_cast<const ObjectData*>(resumable() + 1);
+    assert(obj->headerKind() == HeaderKind::ResumableObj);
+    return obj;
+  }
+  ObjectData* resumableObj() {
+    DEBUG_ONLY auto const func = resumable()->actRec()->func();
+    assert(func->isAsyncFunction());
+    auto obj = reinterpret_cast<ObjectData*>(resumable() + 1);
+    assert(obj->headerKind() == HeaderKind::ResumableObj);
+    return obj;
+  }
+  const ObjectData* nativeObj() const {
+    assert(kind() == HeaderKind::NativeData);
+    auto obj = Native::obj(&native_);
+    assert(isObjectKind(obj->headerKind()));
+    return obj;
+  }
+  ObjectData* nativeObj() {
+    assert(kind() == HeaderKind::NativeData);
+    auto obj = Native::obj(&native_);
+    assert(isObjectKind(obj->headerKind()));
+    return obj;
+  }
+
+  // if this header is one of the types that contains an ObjectData,
+  // return the (possibly inner ptr) ObjectData*
+  const ObjectData* obj() const {
+    return isObjectKind(kind()) ? &obj_ :
+           kind() == HeaderKind::ResumableFrame ? resumableObj() :
+           kind() == HeaderKind::NativeData ? nativeObj() :
+           nullptr;
   }
 };
 
@@ -105,7 +141,7 @@ inline size_t Header::size() const {
       // [ObjectData][children...]
       return awaitall_.heapSize();
     case HeaderKind::Resource:
-      // [ResourceData][subclass]
+      // [ResourceHdr][ResourceData subclass]
       return res_.heapSize();
     case HeaderKind::Ref:
       return sizeof(RefData);
@@ -115,14 +151,14 @@ inline size_t Header::size() const {
     case HeaderKind::BigObj:    // [BigNode][Header...]
       return big_.nbytes;
     case HeaderKind::ResumableFrame:
-      // Generators -
-      // [ResumableNode][locals][Resumable][BaseGenerator][ObjectData]
       // Async functions -
       // [ResumableNode][locals][Resumable][ObjectData<WaitHandle>]
       return resumable()->size();
     case HeaderKind::NativeData:
       // [NativeNode][NativeData][ObjectData][props] is one allocation.
-      return native_.obj_offset + Native::obj(&native_)->heapSize();
+      // Generators -
+      // [NativeNode][NativeData<locals><Resumable><GeneratorData>][ObjectData]
+      return native_.obj_offset + nativeObj()->heapSize();
     case HeaderKind::Free:
     case HeaderKind::Hole:
       return free_.size();
@@ -150,7 +186,8 @@ template<class Fn> void BigHeap::iterate(Fn fn) {
       // so don't round them.
       auto size = hdr->hdr_.kind == HeaderKind::Hole ||
                   hdr->hdr_.kind == HeaderKind::Free ? hdr->free_.size() :
-                  MemoryManager::smartSizeClass(hdr->size());
+                  MemoryManager::smallSizeClass(hdr->size());
+      assert(size % 16 == 0);
       hdr = (Header*)((char*)hdr + size);
       if (hdr >= slab_end) {
         assert(hdr == slab_end && "hdr > slab_end indicates corruption");
@@ -200,7 +237,7 @@ template<class Fn> void MemoryManager::forEachHeader(Fn fn) {
 // iterate just the ObjectDatas, including the kinds with prefixes.
 // (NativeData and ResumableFrame).
 template<class Fn> void MemoryManager::forEachObject(Fn fn) {
-  if (debug) checkHeap();
+  if (debug) checkHeap("MM::forEachObject");
   std::vector<ObjectData*> ptrs;
   forEachHeader([&](Header* h) {
     switch (h->kind()) {
@@ -220,7 +257,7 @@ template<class Fn> void MemoryManager::forEachObject(Fn fn) {
         ptrs.push_back(h->resumableObj());
         break;
       case HeaderKind::NativeData:
-        ptrs.push_back(Native::obj(&h->native_));
+        ptrs.push_back(h->nativeObj());
         break;
       case HeaderKind::Packed:
       case HeaderKind::Struct:

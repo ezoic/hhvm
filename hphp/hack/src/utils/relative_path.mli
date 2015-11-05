@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -38,3 +38,4 @@ module Set : module type of Set.Make (S)
 module Map : module type of MyMap (S)
 
 val relativize_set : prefix -> Utils.SSet.t -> Set.t
+val set_of_list : t list -> Set.t

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,11 +16,8 @@
 
 #include "hphp/runtime/vm/jit/reg-algorithms.h"
 
-#include "hphp/runtime/vm/jit/abi-arm.h"
-#include "hphp/runtime/vm/jit/abi-x64.h"
+#include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/vasm-unit.h"
-
-#include "hphp/util/slice.h"
 
 namespace HPHP { namespace jit {
 
@@ -42,10 +39,10 @@ bool cycleHasSIMDReg(const CycleInfo& cycle, MovePlan& moves) {
 jit::vector<VMoveInfo>
 doVregMoves(Vunit& unit, MovePlan& moves) {
   constexpr auto N = 64;
-  assertx(std::max(x64::abi.all().size(), arm::abi.all().size()) <= N);
+  assertx(abi().all().size() <= N);
   jit::vector<VMoveInfo> howTo;
-  CycleInfo cycle_mem[N];
-  List<CycleInfo> cycles(cycle_mem, 0, N);
+  CycleInfo cycles[N];
+  size_t num_cycles = 0;
   PhysReg::Map<int> outDegree;
   PhysReg::Map<int> index;
 
@@ -77,7 +74,8 @@ doVregMoves(Vunit& unit, MovePlan& moves) {
         // next already visited; check if next is on current path.
         if (index[next] >= index[reg]) {
           // found a cycle.
-          cycles.push_back({ next, nextIndex - index[next] });
+          assert(num_cycles < N);
+          cycles[num_cycles++] = { next, nextIndex - index[next] };
         }
       }
       break;
@@ -104,7 +102,8 @@ doVregMoves(Vunit& unit, MovePlan& moves) {
   }
 
   // Deal with any cycles we encountered
-  for (auto const& cycle : cycles) {
+  for (size_t i = 0; i < num_cycles; ++i) {
+    auto const& cycle = cycles[i];
     // can't use xchg if one of the registers is SIMD
     bool hasSIMDReg = cycleHasSIMDReg(cycle, moves);
     if (cycle.length == 2 && !hasSIMDReg) {
@@ -136,10 +135,10 @@ doVregMoves(Vunit& unit, MovePlan& moves) {
 
 jit::vector<MoveInfo> doRegMoves(MovePlan& moves, PhysReg rTmp) {
   constexpr auto N = 64;
-  assertx(std::max(x64::abi.all().size(), arm::abi.all().size()) <= N);
+  assertx(abi().all().size() <= N);
   jit::vector<MoveInfo> howTo;
-  CycleInfo cycle_mem[N];
-  List<CycleInfo> cycles(cycle_mem, 0, N);
+  CycleInfo cycles[N];
+  size_t num_cycles = 0;
   PhysReg::Map<int> outDegree;
   PhysReg::Map<int> index;
 
@@ -172,7 +171,8 @@ jit::vector<MoveInfo> doRegMoves(MovePlan& moves, PhysReg rTmp) {
         // next already visited; check if next is on current path.
         if (index[next] >= index[reg]) {
           // found a cycle.
-          cycles.push_back({ next, nextIndex - index[next] });
+          assert(num_cycles < N);
+          cycles[num_cycles++] = { next, nextIndex - index[next] };
         }
       }
       break;
@@ -199,7 +199,8 @@ jit::vector<MoveInfo> doRegMoves(MovePlan& moves, PhysReg rTmp) {
   }
 
   // Deal with any cycles we encountered
-  for (auto const& cycle : cycles) {
+  for (size_t i = 0; i < num_cycles; ++i) {
+    auto const& cycle = cycles[i];
     // can't use xchg if one of the registers is SIMD
     bool hasSIMDReg = cycleHasSIMDReg(cycle, moves);
     if (cycle.length == 2 && !hasSIMDReg) {

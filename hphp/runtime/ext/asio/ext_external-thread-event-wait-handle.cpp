@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -66,12 +66,12 @@ void c_ExternalThreadEventWaitHandle::sweep() {
   }
 }
 
-SmartPtr<c_ExternalThreadEventWaitHandle>
+req::ptr<c_ExternalThreadEventWaitHandle>
 c_ExternalThreadEventWaitHandle::Create(
   AsioExternalThreadEvent* event,
   ObjectData* priv_data
 ) {
-  auto wh = makeSmartPtr<c_ExternalThreadEventWaitHandle>();
+  auto wh = req::make<c_ExternalThreadEventWaitHandle>();
   wh->initialize(event, priv_data);
   return wh;
 }
@@ -84,7 +84,7 @@ void c_ExternalThreadEventWaitHandle::initialize(
   setState(STATE_WAITING);
   setContextIdx(session->getCurrentContextIdx());
   m_event = event;
-  m_privData = priv_data;
+  m_privData.reset(priv_data);
 
   if (isInContext()) {
     registerToContext();
@@ -104,7 +104,7 @@ void c_ExternalThreadEventWaitHandle::destroyEvent(bool sweeping /*= false */) {
   m_sweepable.unregister();
 
   if (LIKELY(!sweeping)) {
-    m_privData = nullptr;
+    m_privData.reset();
     // drop ownership by pending event (see initialize())
     decRefObj(this);
   }

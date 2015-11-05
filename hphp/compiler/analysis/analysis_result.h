@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -41,7 +41,7 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 
-DECLARE_BOOST_TYPES(ClassScope);
+DECLARE_EXTENDED_BOOST_TYPES(ClassScope);
 DECLARE_EXTENDED_BOOST_TYPES(FileScope);
 DECLARE_BOOST_TYPES(FunctionScope);
 DECLARE_BOOST_TYPES(AnalysisResult);
@@ -64,12 +64,6 @@ public:
     FirstPreOptimize,
 
     CodeGen,
-  };
-
-  enum FindClassBy {
-    ClassName,
-    MethodName,
-    PropertyName
   };
 
   enum GlobalSymbolType {
@@ -167,14 +161,6 @@ public:
   void preOptimize();
 
   /**
-   * Force all class variables to be variants, since l-val or reference
-   * of dynamic properties are used.
-   */
-  void forceClassVariants(
-      ClassScopePtr curScope,
-      bool doStatic);
-
-  /**
    * Code generation functions.
    */
   bool outputAllPHP(CodeGenerator::Output output);
@@ -192,8 +178,9 @@ public:
   void parseOnDemandByConstant(const std::string &name) const {
     parseOnDemandBy(name, Option::AutoloadConstMap);
   }
+  template <class Map>
   void parseOnDemandBy(const std::string &name,
-                       const std::map<std::string,std::string>& amap) const;
+                       const Map& amap) const;
   FileScopePtr findFileScope(const std::string &name) const;
   const StringToFileScopePtrMap &getAllFiles() { return m_files;}
   const std::vector<FileScopePtr> &getAllFilesVector() {
@@ -211,21 +198,18 @@ public:
   bool declareConst(FileScopePtr fs, const std::string &name);
 
   ClassScopePtr findClass(const std::string &className) const;
-  ClassScopePtr findClass(const std::string &className,
-                          FindClassBy by);
 
   /**
    * Find all the redeclared classes by the name, excluding system classes.
    * Note that system classes cannot be redeclared.
    */
-  const ClassScopePtrVec &findRedeclaredClasses(
+  const std::vector<ClassScopePtr>& findRedeclaredClasses(
     const std::string &className) const;
 
   /**
    * Find all the classes by the name, including system classes.
    */
-  ClassScopePtrVec findClasses(const std::string &className) const;
-  bool classMemberExists(const std::string &name, FindClassBy by) const;
+  std::vector<ClassScopePtr> findClasses(const std::string &className) const;
   ClassScopePtr findExactClass(ConstructPtr cs, const std::string &name) const;
   FunctionScopePtr findFunction(const std::string &funcName) const ;
   BlockScopeConstPtr findConstantDeclarer(const std::string &constName) const {
@@ -283,7 +267,7 @@ private:
   std::set<std::pair<ConstructPtr, FileScopePtr> > m_nsFallbackFuncs;
   Phase m_phase;
   StringToFileScopePtrMap m_files;
-  FileScopePtrVec m_fileScopes;
+  std::vector<FileScopePtr> m_fileScopes;
 
   StringBag m_extraCodeFileNames;
   std::map<std::string, std::string> m_extraCodes;
@@ -292,7 +276,6 @@ private:
   StringToFunctionScopePtrMap m_functionDecs;
   StringToFunctionScopePtrVecMap m_functionReDecs;
   StringToClassScopePtrVecMap m_classDecs;
-  StringToClassScopePtrVecMap m_methodToClassDecs;
   StringToFileScopePtrMap m_constDecs;
   std::set<std::string> m_constRedeclared;
 
@@ -303,9 +286,7 @@ private:
   // Names of type aliases.
   std::set<std::string> m_typeAliasNames;
 
-  bool m_classForcedVariants[2];
-
-  StatementPtrVec m_stmts;
+  std::vector<StatementPtr> m_stmts;
   StatementPtr m_stmt;
 
   std::string m_outputPath;
@@ -321,7 +302,7 @@ public:
   }
 
 private:
-  BlockScopePtrVec m_ignoredScopes;
+  std::vector<BlockScopePtr> m_ignoredScopes;
 
   /**
    * Checks whether the file is in one of the on-demand parsing directories.
@@ -362,15 +343,6 @@ public:
   static DECLARE_THREAD_LOCAL(BlockScopeRawPtr, s_currentScopeThreadLocal);
   static DECLARE_THREAD_LOCAL(BlockScopeRawPtrFlagsHashMap,
                               s_changedScopesMapThreadLocal);
-
-#ifdef HPHP_INSTRUMENT_PROCESS_PARALLEL
-  static std::atomic<int>                     s_NumDoJobCalls;
-  static ConcurrentBlockScopeRawPtrIntHashMap s_DoJobUniqueScopes;
-  static std::atomic<int>                     s_NumForceRerunGlobal;
-  static std::atomic<int>                     s_NumReactivateGlobal;
-  static std::atomic<int>                     s_NumForceRerunUseKinds;
-  static std::atomic<int>                     s_NumReactivateUseKinds;
-#endif /* HPHP_INSTRUMENT_PROCESS_PARALLEL */
 
 private:
   template <typename Visitor>

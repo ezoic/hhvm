@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,25 +28,40 @@ enum class HeaderKind : uint8_t {
   Vector, Map, Set, Pair, ImmVector, ImmMap, ImmSet,
   ResumableFrame, // ResumableNode followed by Frame, Resumable, ObjectData
   NativeData, // a NativeData header preceding an HNI ObjectData
-  SmallMalloc, // small smart_malloc'd block
-  BigMalloc, // big smart_malloc'd block
+  SmallMalloc, // small req::malloc'd block
+  BigMalloc, // big req::malloc'd block
   BigObj, // big size-tracked object (valid header follows BigNode)
   Free, // small block in a FreeList
-  Hole // wasted space not in any freelist
+  Hole, // wasted space not in any freelist
 };
 const unsigned NumHeaderKinds = unsigned(HeaderKind::Hole) + 1;
+extern const char* header_names[];
+
+inline bool haveCount(HeaderKind k) {
+  return uint8_t(k) < uint8_t(HeaderKind::ResumableFrame);
+}
 
 /*
  * RefCount type for m_count field in refcounted objects
  */
 using RefCount = int32_t;
 
+enum class Counted {
+  Maybe, // objects can be static or uncounted, and support cow
+  Always // objects must be in request-heap with positive refcounts
+};
+
 /*
  * Common header for all heap-allocated objects. Layout is carefully
  * designed to allow overlapping with the second word of a TypedValue,
  * or to follow a C++ defined vptr.
+ *
+ * T can be any simple 16-bit type. CNT is Maybe for copy-on-write
+ * objects that support being allocated outside the request heap with
+ * a count field containing StaticValue or UncountedValue
  */
-template<class T = uint16_t> struct HeaderWord {
+template<class T = uint16_t, Counted CNT = Counted::Always>
+struct HeaderWord {
   union {
     struct {
       union {
@@ -78,9 +93,20 @@ template<class T = uint16_t> struct HeaderWord {
     static_assert(sizeof(T) == 2, "header layout requres 2-byte aux");
   }
 
-  void init(const HeaderWord<T>& h, RefCount count) {
+  void init(const HeaderWord<T,CNT>& h, RefCount count) {
     q = h.lo32 | uint64_t(count) << 32;
   }
+
+  bool checkCount() const;
+  bool isRefCounted() const;
+  bool hasMultipleRefs() const;
+  bool hasExactlyOneRef() const;
+  bool isStatic() const;
+  bool isUncounted() const;
+  void incRefCount() const;
+  void decRefCount() const;
+  bool decWillRelease() const;
+  bool decReleaseCheck();
 };
 
 constexpr auto HeaderOffset = sizeof(void*);

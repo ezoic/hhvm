@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -17,9 +17,9 @@
 
 #include "hphp/runtime/ext/asio/ext_gen-vector-wait-handle.h"
 
-#include "hphp/runtime/base/smart-ptr.h"
-#include "hphp/runtime/ext/ext_collections.h"
-#include "hphp/runtime/ext/ext_closure.h"
+#include "hphp/runtime/base/req-ptr.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
+#include "hphp/runtime/ext/closure/ext_closure.h"
 #include "hphp/runtime/ext/asio/asio-blockable.h"
 #include "hphp/runtime/ext/asio/asio-context.h"
 #include "hphp/runtime/ext/asio/asio-session.h"
@@ -37,7 +37,7 @@ namespace {
     assert(new_exception->instanceof(SystemLib::s_ExceptionClass));
 
     if (exception_field.isNull()) {
-      exception_field = new_exception;
+      exception_field.reset(new_exception);
     }
   }
 }
@@ -55,7 +55,7 @@ Object c_GenVectorWaitHandle::ti_create(const Variant& dependencies) {
       "Expected dependencies to be an instance of Vector");
   }
   assertx(collections::isType(obj->getVMClass(), CollectionType::Vector));
-  auto deps = SmartPtr<c_Vector>::attach(c_Vector::Clone(obj));
+  auto deps = req::ptr<c_Vector>::attach(c_Vector::Clone(obj));
   auto ctx_idx = std::numeric_limits<context_idx_t>::max();
   for (int64_t iter_pos = 0; iter_pos < deps->size(); ++iter_pos) {
     Cell* current = deps->at(iter_pos);
@@ -91,7 +91,7 @@ Object c_GenVectorWaitHandle::ti_create(const Variant& dependencies) {
       assert(child->instanceof(c_WaitableWaitHandle::classof()));
       auto child_wh = static_cast<c_WaitableWaitHandle*>(child);
 
-      auto my_wh = makeSmartPtr<c_GenVectorWaitHandle>();
+      auto my_wh = req::make<c_GenVectorWaitHandle>();
       my_wh->initialize(exception, deps.get(), iter_pos, ctx_idx, child_wh);
       AsioSession* session = AsioSession::Get();
       if (UNLIKELY(session->hasOnGenVectorCreate())) {
@@ -163,8 +163,7 @@ void c_GenVectorWaitHandle::onUnblocked() {
     tvWriteObject(m_deps.get(), &m_resultOrException);
   } else {
     setState(STATE_FAILED);
-    tvWriteObject(m_exception.get(), &m_resultOrException);
-    m_exception = nullptr;
+    tvMoveObject(m_exception.detach(), &m_resultOrException);
   }
 
   m_deps = nullptr;

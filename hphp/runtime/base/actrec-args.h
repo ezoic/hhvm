@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -56,17 +56,18 @@ inline Variant getArgVariant(ActRec *ar, unsigned arg,
  * Get a reference value from the stack
  */
 template <DataType DType>
-typename std::enable_if<DType == KindOfRef, VRefParam>::type
+typename std::enable_if<DType == KindOfRef, Variant*>::type
 getArg(ActRec *ar, unsigned arg) {
   auto tv = getArg(ar, arg);
   if (!tv) {
     raise_warning("Required parameter %d not passed", (int)arg);
-    return directRef(Variant());
+    return nullptr;
   }
   if (tv->m_type != KindOfRef) {
     raise_warning("Argument %d not passed as reference", (int)arg);
+    return nullptr;
   }
-  return directRef(tvAsVariant(tv));
+  return &tvAsVariant(tv);
 }
 
 /**

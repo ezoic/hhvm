@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -193,12 +193,17 @@ inline bool Vptr::operator!=(const Vptr& other) const {
 }
 
 inline Vptr operator+(Vptr lhs, int32_t d) {
-  return Vptr(lhs.base, lhs.index, lhs.scale, lhs.disp + d);
+  auto copy = lhs;
+  copy.disp += d;
+  return copy;
 }
 
 inline Vptr operator+(Vptr lhs, intptr_t d) {
-  return Vptr(lhs.base, lhs.index, lhs.scale,
-              safe_cast<int32_t>(lhs.disp + d));
+  return lhs + safe_cast<int32_t>(d);
+}
+
+inline Vptr baseless(VscaledDisp vd) {
+  return Vptr(Vreg{}, vd.vs.index, vd.vs.scale, vd.disp);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

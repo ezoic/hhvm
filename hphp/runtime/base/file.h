@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,8 +19,8 @@
 
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/request-local.h"
-#include "hphp/runtime/base/smart-containers.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-containers.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-resource.h"
 #include "hphp/runtime/base/type-string.h"
@@ -36,15 +36,17 @@ class StreamFilter;
 
 extern int __thread s_pcloseRet;
 
-// This structure holds the non-smart allocated data members of File.  The
+// This structure holds the request allocated data members of File.  The
 // purpose of the class is to allow File (and subclasses) to be managed by
-// the smart allocator while also allowing them to be persisted beyond the
-// lifetime of a request.  The FileData is stored in a shared_ptr and managed
-// by new/delete, so it is safe to store in an object whose lifetime is longer
-// than a request.  A File (or subclass) can be reconstructed using a shared_ptr
-// to a FileData.  Note that subclasses of File that need to be persisted must
-// subclass FileData to add any persistent data members, e.g. see Socket.
-// Classes in the FileData hierarchy may not contain smart allocated data.
+// the request heap while also allowing their underlying OS handles to be
+// persisted beyond the lifetime of a request.
+//
+// The FileData is stored in a shared_ptr and managed by new/delete, so it is
+// safe to store in an object whose lifetime is longer than a request.
+// A File (or subclass) can be reconstructed using a shared_ptr to a FileData.
+// Note that subclasses of File that need to be persisted must subclass
+// FileData to add any persistent data members, e.g. see Socket.
+// Classes in the FileData hierarchy may not contain request-allocated data.
 struct FileData {
   static const int CHUNK_SIZE;
 
@@ -93,13 +95,19 @@ struct File : SweepableResourceData {
 
   static String TranslatePath(const String& filename);
   // Same as TranslatePath except doesn't make paths absolute
-  static String TranslatePathKeepRelative(const String& filename);
+  static String TranslatePathKeepRelative(const char* fn, uint32_t len);
+  static String TranslatePathKeepRelative(const String& filename) {
+    return TranslatePathKeepRelative(filename.c_str(), filename.size());
+  }
+  static String TranslatePathKeepRelative(const std::string& filename) {
+    return TranslatePathKeepRelative(filename.c_str(), filename.size());
+  }
   // Same as TranslatePath except checks the file cache on miss
   static String TranslatePathWithFileCache(const String& filename);
   static String TranslateCommand(const String& cmd);
-  static SmartPtr<File> Open(
+  static req::ptr<File> Open(
     const String& filename, const String& mode,
-    int options = 0, const SmartPtr<StreamContext>& context = nullptr);
+    int options = 0, const req::ptr<StreamContext>& context = nullptr);
 
   static bool IsVirtualDirectory(const String& filename);
   static bool IsVirtualFile(const String& filename);
@@ -204,16 +212,16 @@ struct File : SweepableResourceData {
   virtual Array getMetaData();
   virtual Variant getWrapperMetaData() { return Variant(); }
   String getWrapperType() const;
-  String getStreamType() const { return m_streamType; }
-  const SmartPtr<StreamContext>& getStreamContext() { return m_streamContext; }
-  void setStreamContext(const SmartPtr<StreamContext>& context) {
+  String getStreamType() const { return String{m_streamType}; }
+  const req::ptr<StreamContext>& getStreamContext() { return m_streamContext; }
+  void setStreamContext(const req::ptr<StreamContext>& context) {
     m_streamContext = context;
   }
-  void appendReadFilter(const SmartPtr<StreamFilter>& filter);
-  void appendWriteFilter(const SmartPtr<StreamFilter>& filter);
-  void prependReadFilter(const SmartPtr<StreamFilter>& filter);
-  void prependWriteFilter(const SmartPtr<StreamFilter>& filter);
-  bool removeFilter(const SmartPtr<StreamFilter>& filter);
+  void appendReadFilter(const req::ptr<StreamFilter>& filter);
+  void appendWriteFilter(const req::ptr<StreamFilter>& filter);
+  void prependReadFilter(const req::ptr<StreamFilter>& filter);
+  void prependWriteFilter(const req::ptr<StreamFilter>& filter);
+  bool removeFilter(const req::ptr<StreamFilter>& filter);
 
   int64_t bufferedLen() { return m_data->m_writepos - m_data->m_readpos; }
 
@@ -243,7 +251,7 @@ struct File : SweepableResourceData {
    * Write one line of csv record.
    */
   int64_t writeCSV(const Array& fields, char delimiter = ',',
-                   char enclosure = '"');
+                   char enclosure = '"', char escape_char = '\\');
 
   /**
    * Read one line of csv record.
@@ -308,7 +316,6 @@ protected:
                 const String& stream_type = empty_string_ref);
 
 private:
-  template <typename F> friend void scan(const File& this_, F& mark);
   template<class ResourceList>
   String applyFilters(const String& buffer,
                       ResourceList& filters,
@@ -317,9 +324,9 @@ private:
   std::shared_ptr<FileData> m_data;
   StringData* m_wrapperType;
   StringData* m_streamType;
-  SmartPtr<StreamContext> m_streamContext;
-  smart::list<SmartPtr<StreamFilter>> m_readFilters;
-  smart::list<SmartPtr<StreamFilter>> m_writeFilters;
+  req::ptr<StreamContext> m_streamContext;
+  req::list<req::ptr<StreamFilter>> m_readFilters;
+  req::list<req::ptr<StreamFilter>> m_writeFilters;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

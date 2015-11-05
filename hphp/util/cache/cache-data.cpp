@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -268,9 +268,9 @@ bool CacheData::sufficientlyCompressed(uint64_t orig_size,
 void CacheData::dump() const {
   printf(
     "  Name: %s\n"
-    "  Flags: 0x%08lx\n"
-    "  Size: %ld\n"
-    "  ID: %ld\n",
+    "  Flags: 0x%08" PRIx64 "\n"
+    "  Size: %" PRIu64 "\n"
+    "  ID: %" PRIu64 "\n",
     name_.c_str(),
     flags_,
     fileSize(),

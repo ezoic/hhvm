@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -63,14 +63,17 @@ struct RequestLocal {
     }
     if (!m_node.m_p->getInited()) {
       m_node.m_p->setInited(true);
+      // This registration makes sure obj->requestShutdown() will be called. Do
+      // it before calling requestInit() so that obj is reachable to the GC no
+      // matter what the callback does.
+      auto index = g_context->registerRequestEventHandler(m_node.m_p);
       try {
         m_node.m_p->requestInit();
       } catch (...) {
         m_node.m_p->setInited(false);
+        g_context->unregisterRequestEventHandler(m_node.m_p, index);
         throw;
       }
-      // this registration makes sure m_p->requestShutdown() will be called
-      g_context->registerRequestEventHandler(m_node.m_p);
     }
     return m_node.m_p;
   }
@@ -79,7 +82,7 @@ struct RequestLocal {
     return (m_node.m_p != nullptr) && m_node.m_p->getInited();
   }
 
-  void create() NEVER_INLINE;
+  NEVER_INLINE void create();
 
   static void OnThreadExit(void * p) {
     ThreadLocalNode<T> * pNode = (ThreadLocalNode<T>*)p;
@@ -109,23 +112,23 @@ void RequestLocal<T>::create() {
 }
 
 #define IMPLEMENT_REQUEST_LOCAL(T,f) \
-  __thread RequestLocal<T> f
+  __thread HPHP::RequestLocal<T> f
 
 #define DECLARE_STATIC_REQUEST_LOCAL(T,f) \
-  static __thread RequestLocal<T> f
+  static __thread HPHP::RequestLocal<T> f
 
 #define IMPLEMENT_STATIC_REQUEST_LOCAL(T,f) \
-  static __thread RequestLocal<T> f
+  static __thread HPHP::RequestLocal<T> f
 
 #define DECLARE_EXTERN_REQUEST_LOCAL(T,f) \
-  extern __thread RequestLocal<T> f
+  extern __thread HPHP::RequestLocal<T> f
 
 #else // defined(USE_GCC_FAST_TLS)
 
 template<typename T>
 class RequestLocal {
 public:
-  RequestLocal(ThreadLocal<T> & tl) : m_tlsObjects(tl) {}
+  explicit RequestLocal(ThreadLocal<T> & tl) : m_tlsObjects(tl) {}
 
   bool getInited() const {
     return !m_tlsObjects.isNull() && m_tlsObjects.get()->getInited();
@@ -138,15 +141,17 @@ public:
     T *obj = m_tlsObjects.get();
     if (!obj->getInited()) {
       obj->setInited(true);
+      // This registration makes sure obj->requestShutdown() will be called. Do
+      // it before calling requestInit() so that obj is reachable to the GC no
+      // matter what the callback does.
+      auto index = g_context->registerRequestEventHandler(obj);
       try {
         obj->requestInit();
       } catch (...) {
         obj->setInited(false);
+        g_context->unregisterRequestEventHandler(obj, index);
         throw;
       }
-
-      // this registration makes sure obj->requestShutdown() will be called
-      g_context->registerRequestEventHandler(obj);
     }
     return obj;
   }
@@ -158,19 +163,19 @@ private:
 
 #define IMPLEMENT_REQUEST_LOCAL(T,f)     \
   IMPLEMENT_THREAD_LOCAL(T, f ## __tl);  \
-  RequestLocal<T> f(f ## __tl)
+  HPHP::RequestLocal<T> f(f ## __tl)
 
 #define DECLARE_STATIC_REQUEST_LOCAL(T,f)    \
   static DECLARE_THREAD_LOCAL(T,f ## __tl);  \
-  static RequestLocal<T> f
+  static HPHP::RequestLocal<T> f
 
 #define IMPLEMENT_STATIC_REQUEST_LOCAL(T,f)     \
   static IMPLEMENT_THREAD_LOCAL(T, f ## __tl);  \
-  static RequestLocal<T> f(f ## __tl)
+  static HPHP::RequestLocal<T> f(f ## __tl)
 
 #define DECLARE_EXTERN_REQUEST_LOCAL(T,f)    \
   extern DECLARE_THREAD_LOCAL(T,f ## __tl);  \
-  extern RequestLocal<T> f
+  extern HPHP::RequestLocal<T> f
 
 #endif // defined(USE_GCC_FAST_TLS)
 

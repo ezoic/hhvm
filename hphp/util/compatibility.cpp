@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -88,7 +88,7 @@ int pipe2(int pipefd[2], int flags) {
 #endif
 
 static int gettime_helper(clockid_t which_clock, struct timespec *tp) {
-#if defined(__CYGWIN__)
+#if defined(__CYGWIN__) || defined(_MSC_VER)
   // let's bypass trying to load vdso
   return clock_gettime(which_clock, tp);
 #elif defined(__APPLE__) || defined(__FreeBSD__)
@@ -133,16 +133,15 @@ int64_t gettime_diff_us(const timespec &start, const timespec &end) {
 }
 
 int fadvise_dontneed(int fd, off_t len) {
-#if defined(__FreeBSD__) || defined(__APPLE__)
+#if defined(__FreeBSD__) || defined(__APPLE__) || defined(_MSC_VER)
   return 0;
 #else
   return posix_fadvise(fd, 0, len, POSIX_FADV_DONTNEED);
 #endif
 }
 
-#if defined(__CYGWIN__)
+#if defined(__CYGWIN__) || defined(_MSC_VER)
 #include <windows.h>
-#include <libintl.h>
 
 // since we only support win 7+
 // capturestackbacktrace is always available in kernel
@@ -160,14 +159,13 @@ int backtrace (void **buffer, int size) {
 
 int dladdr(const void *addr, Dl_info *info) {
   MEMORY_BASIC_INFORMATION mem_info;
-  HMODULE module;
   char moduleName[MAX_PATH];
 
   if(!VirtualQuery(addr, &mem_info, sizeof(mem_info))) {
     return 0;
   }
 
-  if(!GetModuleFileNameA(module, moduleName, sizeof(moduleName))) {
+  if(!GetModuleFileNameA(nullptr, moduleName, sizeof(moduleName))) {
     return 0;
   }
 
@@ -180,10 +178,14 @@ int dladdr(const void *addr, Dl_info *info) {
   return 1;
 }
 
+#ifdef __CYGWIN__
+#include <libintl.h>
 // libbfd on cygwin is broken, stub dgettext to make linker unstupid
 char * libintl_dgettext(const char *domainname, const char *msgid) {
   return dgettext(domainname, msgid);
 }
+#endif
+
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////

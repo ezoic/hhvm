@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -13,8 +13,9 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_VM_PHYSREG_H_
-#define incl_HPHP_VM_PHYSREG_H_
+
+#ifndef incl_HPHP_JIT_PHYSREG_H_
+#define incl_HPHP_JIT_PHYSREG_H_
 
 #include "hphp/util/asm-x64.h"
 #include "hphp/util/bitops.h"
@@ -23,10 +24,11 @@
 #include <folly/Optional.h>
 
 namespace HPHP { namespace jit {
+
 struct Vreg;
 struct Vout;
 
-//////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
 /*
  * PhysReg represents a physical machine register.
@@ -149,7 +151,12 @@ struct PhysReg {
    */
   template<typename T>
   struct Map {
-    Map() : m_elms() {
+    Map() {
+      // Workaround for a potential GCC 5 bug, value initializing m_elms seems
+      // to use zero-initialization instead of default initialization.
+      for (auto& elm : m_elms) {
+        elm = T();
+      }
     }
 
     T& operator[](const PhysReg& r) {
@@ -203,7 +210,7 @@ struct PhysReg {
       return { m_elms, sizeof(m_elms) / sizeof(m_elms[0]) };
     }
 
-   private:
+  private:
     T m_elms[kMaxRegs];
   };
 
@@ -222,12 +229,15 @@ inline Reg64 r64(PhysReg r) { return Reg64(r); }
 
 constexpr PhysReg InvalidReg;
 
+std::string show(PhysReg r);
+
+///////////////////////////////////////////////////////////////////////////////
+
 /*
  * A set of registers.
  *
- * This type is guaranteed to be a standard layout class with a
- * trivial destructor.  (This makes it usable in classes that are
- * arena-allocated.)
+ * This type is guaranteed to be a standard layout class with a trivial
+ * destructor.  (This makes it usable in classes that are arena-allocated.)
  *
  * Zero-initializing this class is guaranteed to produce an empty set.
  */
@@ -381,7 +391,7 @@ struct RegSet {
 
 private:
   uint64_t m_bits;
-  static_assert(sizeof(m_bits) * 8 >= PhysReg::kMaxRegs, "");
+  static_assert(sizeof(decltype(m_bits)) * 8 >= PhysReg::kMaxRegs, "");
 };
 
 inline RegSet operator|(PhysReg r1, PhysReg r2) {
@@ -397,51 +407,7 @@ std::string show(RegSet regs);
 static_assert(std::is_trivially_destructible<RegSet>::value,
               "RegSet must have a trivial destructor");
 
-//////////////////////////////////////////////////////////////////////
-
-struct PhysRegSaverParity {
-  PhysRegSaverParity(int parity, X64Assembler& as, RegSet regs);
-  PhysRegSaverParity(int parity, Vout& as, RegSet regs);
-  ~PhysRegSaverParity();
-
-  static void emitPops(X64Assembler& as, RegSet regs);
-  static void emitPops(Vout&, RegSet regs);
-
-  PhysRegSaverParity(const PhysRegSaverParity&) = delete;
-  PhysRegSaverParity(PhysRegSaverParity&&) noexcept = default;
-  PhysRegSaverParity& operator=(const PhysRegSaverParity&) = delete;
-  PhysRegSaverParity& operator=(PhysRegSaverParity&&) = default;
-
-  int rspAdjustment() const;
-  int dwordsPushed() const;
-  void bytesPushed(int bytes);
-
-private:
-  X64Assembler* m_as;
-  Vout* m_v;
-  RegSet m_regs;
-  int m_adjust;
-};
-
-struct PhysRegSaverStub : public PhysRegSaverParity {
-  PhysRegSaverStub(X64Assembler& as, RegSet regs)
-      : PhysRegSaverParity(0, as, regs)
-  {}
-  PhysRegSaverStub(Vout& v, RegSet regs)
-      : PhysRegSaverParity(0, v, regs)
-  {}
-};
-
-struct PhysRegSaver : public PhysRegSaverParity {
-  PhysRegSaver(X64Assembler& as, RegSet regs)
-      : PhysRegSaverParity(1, as, regs)
-  {}
-  PhysRegSaver(Vout& v, RegSet regs)
-      : PhysRegSaverParity(1, v, regs)
-  {}
-};
-
-//////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
 }}
 

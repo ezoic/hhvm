@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -45,7 +45,7 @@ namespace {
   const context_idx_t MAX_CONTEXT_DEPTH =
     std::numeric_limits<context_idx_t>::max();
 
-  ObjectData* checkCallback(const Variant& callback, char* name) {
+  Object checkCallback(const Variant& callback, char* name) {
     if (!callback.isNull() &&
         (!callback.isObject() ||
          !callback.getObjectData()->instanceof(c_Closure::classof()))) {
@@ -55,7 +55,7 @@ namespace {
       ).str();
       SystemLib::throwInvalidArgumentExceptionObject(msg);
     }
-    return callback.getObjectDataOrNull();
+    return Object{callback.getObjectDataOrNull()};
   }
 
   void runCallback(const Object& function, const Array& params, char* name) {

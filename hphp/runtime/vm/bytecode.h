@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -47,8 +47,11 @@ struct Resumable;
 
 #define EVAL_FILENAME_SUFFIX ") : eval()'d code"
 
+// perform the set(op) operation on lhs & rhs, leaving the result in lhs.
+// The old value of lhs is decrefed. Caller must call tvToCell() if lhs or
+// rhs might be a ref.
 ALWAYS_INLINE
-void SETOP_BODY_CELL(Cell* lhs, SetOpOp op, Cell* rhs) {
+void setopBody(Cell* lhs, SetOpOp op, Cell* rhs) {
   assert(cellIsPlausible(*lhs));
   assert(cellIsPlausible(*rhs));
 
@@ -72,11 +75,6 @@ void SETOP_BODY_CELL(Cell* lhs, SetOpOp op, Cell* rhs) {
   case SetOpOp::MulEqualO:      cellMulEqO(*lhs, *rhs); return;
   }
   not_reached();
-}
-
-ALWAYS_INLINE
-void SETOP_BODY(TypedValue* lhs, SetOpOp op, Cell* rhs) {
-  SETOP_BODY_CELL(tvToCell(lhs), op, rhs);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -114,6 +112,11 @@ struct ExtraArgs : private boost::noncopyable {
    */
   TypedValue* getExtraArg(unsigned argInd) const;
 
+  template<class F> void scan(F& mark, unsigned int nargs) const {
+    for (unsigned i = 0; i < nargs; ++i) {
+      mark(*(m_extraArgs + i));
+    }
+  }
 private:
   ExtraArgs();
   ~ExtraArgs();
@@ -150,11 +153,7 @@ class VarEnv {
   const bool m_global;
 
  public:
-  template<class F> void scan(F& mark) const {
-    mark(m_nvTable);
-    // TODO #6511877 scan ExtraArgs. requires calculating numExtra
-    //mark(m_extraArgs);
-  }
+  template<class F> void scan(F& mark) const;
 
  public:
   explicit VarEnv();
@@ -557,12 +556,23 @@ inline ActRec* arFromSpOffset(const ActRec *sp, int32_t offset) {
 
 void frame_free_locals_no_hook(ActRec* fp);
 
-inline TypedValue* arReturn(ActRec* ar, Variant&& value) {
-  frame_free_locals_no_hook(ar);
-  ar->m_r = *value.asTypedValue();
-  tvWriteNull(value.asTypedValue());
-  return &ar->m_r;
-}
+#define arReturn(a, x)                          \
+  ([&] {                                        \
+    ActRec* ar_ = (a);                          \
+    TypedValue val_;                            \
+    new (&val_) Variant(x);                     \
+    frame_free_locals_no_hook(ar_);             \
+    ar_->m_r = val_;                            \
+    return &ar_->m_r;                           \
+  }())
+
+#define tvReturn(x)                                                     \
+  ([&] {                                                                \
+    TypedValue val_;                                                    \
+    new (&val_) Variant(x);                                             \
+    assert(val_.m_type != KindOfRef && val_.m_type != KindOfUninit);    \
+    return val_;                                                        \
+  }())
 
 template <bool crossBuiltin> Class* arGetContextClassImpl(const ActRec* ar);
 template <> Class* arGetContextClassImpl<true>(const ActRec* ar);
@@ -698,7 +708,7 @@ public:
   ALWAYS_INLINE
   void popX() {
     assert(m_top != m_base);
-    assert(!IS_REFCOUNTED_TYPE(m_top->m_type));
+    assert(!isRefcountedType(m_top->m_type));
     tvDebugTrash(m_top);
     m_top++;
   }
@@ -1122,6 +1132,17 @@ void pushLocalsAndIterators(const Func* func, int nparams = 0);
 Array getDefinedVariables(const ActRec*);
 
 ///////////////////////////////////////////////////////////////////////////////
+
+template<class F> void VarEnv::scan(F& mark) const {
+  mark(m_nvTable);
+  if (m_extraArgs) {
+    if (const auto ar = m_nvTable.getFP()) {
+      const int numExtra =
+        ar->numArgs() - ar->m_func->numNonVariadicParams();
+      m_extraArgs->scan(mark, numExtra);
+    }
+  }
+}
 
 }
 

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -21,7 +21,8 @@ type fake_members = {
   invalid : SSet.t;
   valid : SSet.t;
 }
-type local = locl ty list * locl ty
+type expression_id = Ident.t
+type local = locl ty list * locl ty * expression_id
 type local_env = fake_members * local IMap.t
 type env = {
   pos : Pos.t;
@@ -68,6 +69,7 @@ val get_typedef : env -> Typedefs.key -> Typedefs.t option
 val add_extends_dependency : env -> string -> unit
 val get_class_dep : env -> Classes.key -> Classes.t option
 val get_const : env -> class_type -> string -> class_elt option
+val get_typeconst : env -> class_type -> string -> typeconst_type option
 val get_gconst : env -> GConsts.key -> GConsts.t option
 val get_static_member : bool -> env -> class_type -> string -> class_elt option
 val suggest_static_member :
@@ -84,6 +86,8 @@ val grow_super : env -> bool
 val invert_grow_super : env -> (env -> env) -> env
 val get_self : env -> locl ty
 val get_self_id : env -> string
+val is_outside_class : env -> bool
+val get_parent_id : env -> string
 val get_parent : env -> decl ty
 val get_fn_kind : env -> Ast.fun_kind
 val get_file : env -> Relative_path.t
@@ -95,12 +99,11 @@ val set_anonymous : env -> int -> anon -> env
 val get_anonymous : env -> int -> anon option
 val set_self_id : env -> string -> env
 val set_self : env -> locl ty -> env
+val set_parent_id : env -> string -> env
 val set_parent : env -> decl ty -> env
 val set_static : env -> env
 val set_mode : env -> FileInfo.mode -> env
 val set_root : env -> Typing_deps.Dep.variant -> env
-val set_is_constructor : env -> env
-val is_constructor : env -> bool
 val get_mode : env -> FileInfo.mode
 val is_strict : env -> bool
 val is_decl : env -> bool
@@ -122,6 +125,8 @@ module FakeMembers :
 val unbind : env -> locl ty -> env * locl ty
 val set_local : env -> Ident.t -> locl ty -> env
 val get_local : env -> Ident.t -> env * locl ty
+val set_local_expr_id : env -> Ident.t -> expression_id -> env
+val get_local_expr_id : env -> Ident.t -> expression_id option
 val freeze_local_env : env -> env
 val anon : local_env -> env -> (env -> env * locl ty) -> env * locl ty
 val in_loop : env -> (env -> env) -> env

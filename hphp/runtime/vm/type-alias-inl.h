@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,15 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+struct StringData;
+struct ArrayData;
+
+namespace TypeStructure {
+ArrayData* resolve(const StringData* aliasName, const ArrayData* arr);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Static constructors.
 
 inline TypeAliasReq TypeAliasReq::Invalid() {
@@ -35,6 +44,8 @@ inline TypeAliasReq TypeAliasReq::From(const TypeAlias& alias) {
   req.name = alias.name;
   req.type = alias.type;
   req.nullable = alias.nullable;
+  req.typeStructure = Array(alias.typeStructure);
+  req.userAttrs = alias.userAttrs;
   return req;
 }
 
@@ -46,6 +57,8 @@ inline TypeAliasReq TypeAliasReq::From(TypeAliasReq req,
   }
   req.name = alias.name;
   req.nullable |= alias.nullable;
+  req.typeStructure = Array(alias.typeStructure);
+  req.userAttrs = alias.userAttrs;
   return req;
 }
 

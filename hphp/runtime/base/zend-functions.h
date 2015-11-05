@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1998-2010 Zend Technologies Ltd. (http://www.zend.com) |
    +----------------------------------------------------------------------+
    | This source file is subject to version 2.00 of the Zend license,     |
@@ -18,10 +18,11 @@
 #ifndef incl_HPHP_ZEND_FUNCTIONS_H_
 #define incl_HPHP_ZEND_FUNCTIONS_H_
 
+#include <folly/Range.h>
+
 #include <cstdint>
 
 #include "hphp/runtime/base/datatype.h"
-#include "hphp/util/slice.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -45,7 +46,7 @@ bool is_valid_var_name(const char *var_name, int len);
 /*
  * Adapted from ap_php_conv_10 for fast signed integer to string conversion.
  */
-StringSlice conv_10(int64_t num, char* buf_end);
+folly::StringPiece conv_10(int64_t num, char* buf_end);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

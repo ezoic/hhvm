@@ -26,14 +26,16 @@
 #include "hphp/util/trace.h"
 #include "hphp/util/match.h"
 
-#include "hphp/runtime/vm/jit/analysis.h"
 #include "hphp/runtime/vm/jit/alias-analysis.h"
-#include "hphp/runtime/vm/jit/ir-unit.h"
-#include "hphp/runtime/vm/jit/pass-tracer.h"
-#include "hphp/runtime/vm/jit/loop-analysis.h"
+#include "hphp/runtime/vm/jit/analysis.h"
 #include "hphp/runtime/vm/jit/cfg.h"
+#include "hphp/runtime/vm/jit/ir-unit.h"
+#include "hphp/runtime/vm/jit/loop-analysis.h"
+#include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/memory-effects.h"
 #include "hphp/runtime/vm/jit/mutation.h"
+#include "hphp/runtime/vm/jit/pass-tracer.h"
+#include "hphp/runtime/vm/jit/prof-data.h"
 
 namespace HPHP { namespace jit {
 
@@ -115,7 +117,7 @@ struct Env {
   explicit Env(IRUnit& unit, const BlockList& rpoBlocks)
     : unit(unit)
     , ainfo(collect_aliases(unit, rpoBlocks))
-    , loops(identify_loops(unit, rpoBlocks))
+    , loops(identifyLoops(unit, rpoBlocks))
   {}
 
   ~Env() {
@@ -169,23 +171,23 @@ IdomVector& find_idoms(Env& env) {
  * header block.
  */
 struct LoopEnv {
-  explicit LoopEnv(Env& global, LoopID canonical_loop)
+  explicit LoopEnv(Env& global, LoopID loopId)
     : global(global)
-    , canonical_loop(canonical_loop)
+    , loopId(loopId)
     , invariant_tmps(global.unit.numTmps())
-    , expanded_blocks(expanded_loop_blocks(global.loops, canonical_loop))
+    , blocks(global.loops.loops[loopId].blocks)
   {
-    FTRACE(2, "expanded_blocks: {}\n",
+    FTRACE(2, "blocks: {}\n",
       [&] () -> std::string {
         auto ret = std::string{};
-        for (auto& b : expanded_blocks) folly::format(&ret, "B{} ", b->id());
+        for (auto& b : blocks) folly::format(&ret, "B{} ", b->id());
         return ret;
       }()
     );
   }
 
-  Env& global;
-  LoopID canonical_loop;
+  Env&   global;
+  LoopID loopId;
 
   /*
    * SSATmps with loop-invariant definitions, either because they are purely
@@ -239,10 +241,9 @@ struct LoopEnv {
   jit::vector<IRInstruction*> hoistable_as_side_exits;
 
   /*
-   * All member blocks of any natural loop with the same header as our
-   * canonical loop.
+   * The set of blocks in this loop.
    */
-  jit::flat_set<Block*> expanded_blocks;
+  jit::flat_set<Block*> blocks;
 
   /*
    * Whether any block in the loop contains a php call.  If this is true,
@@ -271,19 +272,20 @@ struct LoopEnv {
 
 //////////////////////////////////////////////////////////////////////
 
-NaturalLoopInfo& linfo(LoopEnv& env) {
-  return env.global.loops.naturals[env.canonical_loop];
+LoopInfo& linfo(LoopEnv& env) {
+  return env.global.loops.loops[env.loopId];
 }
 
-Block* header(LoopEnv& env)     { return linfo(env).header; }
-Block* pre_header(LoopEnv& env) { return linfo(env).pre_header; }
+Block* header(LoopEnv& env)     { return linfo(env).header;    }
+Block* pre_header(LoopEnv& env) { return linfo(env).preHeader; }
+Block* pre_exit(LoopEnv& env)   { return linfo(env).preExit;   }
 
 template<class Seen, class F>
 void visit_loop_post_order(LoopEnv& env, Seen& seen, Block* b, F f) {
   if (seen[b->id()]) return;
   seen.set(b->id());
   auto go = [&] (Block* b) {
-    if (!b || !env.expanded_blocks.count(b)) return;
+    if (!b || !env.blocks.count(b)) return;
     visit_loop_post_order(env, seen, b, f);
   };
   go(b->next());
@@ -348,7 +350,8 @@ void analyze_block(LoopEnv& env, Block* blk) {
 
       [&] (IrrelevantEffects) {},
 
-      [&] (ReturnEffects)     { assertx(inst.is(InlineReturn)); },
+      [&] (ReturnEffects)     { assertx(inst.is(InlineReturn) ||
+                                        inst.is(InlineReturnNoFrame)); },
       [&] (ExitEffects)       { assertx(!"tried to exit in a loop"); }
     );
   }
@@ -357,7 +360,7 @@ void analyze_block(LoopEnv& env, Block* blk) {
 void analyze_loop(LoopEnv& env) {
   env.invariant_memory.set();
   analyze_block(env, header(env));
-  for (auto& blk : env.expanded_blocks) analyze_block(env, blk);
+  for (auto& blk : env.blocks) analyze_block(env, blk);
   FTRACE(2, "invariant: {}\n"
             "pure-load: {}\n"
             "  checked: {}\n"
@@ -397,7 +400,7 @@ bool try_pure_licmable(LoopEnv& env, const IRInstruction& inst) {
 
 bool check_is_loop_exit(LoopEnv& env, const IRInstruction& inst) {
   auto const t = inst.taken();
-  return t != header(env) && !env.expanded_blocks.count(t);
+  return !env.blocks.count(t);
 }
 
 bool impl_hoistable_check(LoopEnv& env, IRInstruction& inst) {
@@ -526,7 +529,9 @@ bool may_have_side_effects(const IRInstruction& inst) {
 void find_invariant_code(LoopEnv& env) {
   auto may_still_hoist_checks = true;
   auto visited_block = boost::dynamic_bitset<>(env.global.unit.numBlocks());
-
+  auto profData = mcg->tx().profData();
+  auto numInvocations = linfo(env).numInvocations;
+  FTRACE(4, "numInvocations: {}\n", numInvocations);
   for (auto& b : rpo_sort_loop(env)) {
     FTRACE(2, "  B{}:\n", b->id());
     if (may_still_hoist_checks && b != header(env)) {
@@ -537,6 +542,26 @@ void find_invariant_code(LoopEnv& env) {
           may_still_hoist_checks = false;
         }
       });
+    }
+
+    // Skip this block if its profile weight is less than the number
+    // of times the loop is invoked, since otherwise we're likely to
+    // executed the instruction more by hoisting it out of the loop.
+    auto tid = b->front().marker().profTransID();
+    auto profCount = profData->transCounter(tid);
+    if (profCount < numInvocations) {
+      FTRACE(4, "   skipping Block {} because of low profile weight ({})\n",
+             b->id(), profCount);
+      if (may_still_hoist_checks) {
+        for (auto& inst : b->instrs()) {
+          if (may_have_side_effects(inst)) {
+            FTRACE(5, "      may_still_hoist_checks = false\n");
+            may_still_hoist_checks = false;
+            break;
+          }
+        }
+      }
+      continue;
     }
 
     for (auto& inst : b->instrs()) {
@@ -643,7 +668,7 @@ void hoist_check_instruction(LoopEnv& env,
 
   // We've changed the pre-header and invalidated the dominator tree.
   env.global.idom_state = IdomState::Invalid;
-  update_pre_header(env.global.loops, env.canonical_loop, new_preh);
+  updatePreHeader(env.global.loops, env.loopId, new_preh);
 }
 
 void hoist_invariant_checks(LoopEnv& env) {
@@ -652,22 +677,9 @@ void hoist_invariant_checks(LoopEnv& env) {
   }
 }
 
-/*
- * If we have an ExitPlaceholder instruction that dominates the entire loop, we
- * can use its target as a side exit target.  Otherwise we can't hoist anything
- * as a side exit, since we don't know how to side exit here safely.  The first
- * instruction in the loop header definitely dominates every block in the loop,
- * so look for it there.
- */
-Block* find_exit_placeholder(LoopEnv& env) {
-  auto const h = header(env);
-  auto const skip = h->skipHeader();
-  return skip->is(ExitPlaceholder) ? skip->taken() : nullptr;
-}
-
 void hoist_side_exits(LoopEnv& env) {
-  auto const side_exit = find_exit_placeholder(env);
-  if (!side_exit) return;
+  auto const side_exit = pre_exit(env);
+  assertx(side_exit);
   for (auto& check : env.hoistable_as_side_exits) {
     hoist_check_instruction(env, check, side_exit, "side-exit");
   }
@@ -684,16 +696,21 @@ void process_loop(LoopEnv& env) {
 
 //////////////////////////////////////////////////////////////////////
 
-void insert_pre_headers(IRUnit& unit, LoopAnalysis& loops) {
-  auto added_pre_headers = false;
-  for (auto& linfo : loops.naturals) {
-    if (!linfo.pre_header) {
-      insert_loop_pre_header(unit, loops, linfo.id);
-      added_pre_headers = true;
+void insert_pre_headers_and_exits(IRUnit& unit, LoopAnalysis& loops) {
+  auto added = false;
+  for (auto& linfo : loops.loops) {
+    if (!linfo.preHeader) {
+      insertLoopPreHeader(unit, loops, linfo.id);
+      added = true;
+    }
+    if (linfo.preHeader && !linfo.preExit) {
+      insertLoopPreExit(unit, loops, linfo.id);
+      added = true;
     }
   }
-  if (added_pre_headers) {
-    FTRACE(1, "Loops after adding pre-headers:\n{}\n", show(loops));
+  if (added) {
+    FTRACE(1, "Loops after adding pre-headers and pre-exits:\n{}\n",
+           show(loops));
   }
 }
 
@@ -704,13 +721,13 @@ void insert_pre_headers(IRUnit& unit, LoopAnalysis& loops) {
 void optimizeLoopInvariantCode(IRUnit& unit) {
   PassTracer tracer { &unit, Trace::hhir_licm, "LICM" };
   Env env { unit, rpoSortCfg(unit) };
-  if (env.loops.naturals.empty()) {
+  if (env.loops.loops.empty()) {
     FTRACE(1, "no loops\n");
     return;
   }
   FTRACE(2, "Locations:\n{}\n", show(env.ainfo));
   FTRACE(1, "Loops:\n{}\n", show(env.loops));
-  insert_pre_headers(env.unit, env.loops);
+  insert_pre_headers_and_exits(env.unit, env.loops);
 
   /*
    * Note: currently this is visiting inner loops first, but not for any strong
@@ -718,22 +735,22 @@ void optimizeLoopInvariantCode(IRUnit& unit) {
    */
 
   auto workQ = jit::queue<LoopID>{};
-  auto seen = boost::dynamic_bitset<>(env.loops.naturals.size());
+  auto seen = boost::dynamic_bitset<>(env.loops.loops.size());
 
   auto enqueue = [&] (LoopID id) {
     if (id == kInvalidLoopID) return;
-    id = env.loops.headers[env.loops.naturals[id].header];
+    id = env.loops.headers[env.loops.loops[id].header];
     if (seen[id]) return;
     seen[id] = true;
     workQ.push(id);
   };
 
-  for (auto& id : env.loops.inner_loops) enqueue(id);
+  for (auto& id : env.loops.innerLoops) enqueue(id);
 
   do {
     auto const id = workQ.front();
     workQ.pop();
-    enqueue(env.loops.naturals[id].canonical_outer);
+    enqueue(env.loops.loops[id].parent);
 
     FTRACE(1, "L{}:\n", id);
     auto lenv = LoopEnv { env, id };
@@ -755,5 +772,4 @@ void optimizeLoopInvariantCode(IRUnit& unit) {
  *
  *   o More kinds of checks for hoisting (CheckType, CheckTypeMem).
  *
- *   o Maybe support for only hoisting things that dominate all the loop exits.
  */

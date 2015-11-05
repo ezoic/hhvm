@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,7 +20,6 @@
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/rds.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
@@ -106,50 +105,59 @@ struct Class : AtomicCountable {
    * Instance property information.
    */
   struct Prop {
-    // m_name is "" for inaccessible properties (i.e. private properties
-    // declared by parents).
-    LowStringPtr m_name;
-    LowStringPtr m_mangledName;
-    LowStringPtr m_originalMangledName;
-    // First parent class that declares this property.
-    LowPtr<Class> m_class;
-    Attr m_attrs;
-    LowStringPtr m_typeConstraint;
-    // When built in RepoAuthoritative mode, this is a control-flow
-    // insensitive, always-true type assertion for this property.  (It may be
-    // Gen if there was nothing interesting known.)
-    RepoAuthType m_repoAuthType;
-    LowStringPtr m_docComment;
-    int m_idx;
+    /*
+     * name is "" for inaccessible properties (i.e. private properties declared
+     * by parents).
+     */
+    LowStringPtr name;
+    LowStringPtr mangledName;
+    LowStringPtr originalMangledName;
+
+    /* First parent class that declares this property. */
+    LowPtr<Class> cls;
+
+    Attr attrs;
+    LowStringPtr typeConstraint;
+    /*
+     * When built in RepoAuthoritative mode, this is a control-flow insensitive,
+     * always-true type assertion for this property.  (It may be Gen if there
+     * was nothing interesting known.)
+     */
+    RepoAuthType repoAuthType;
+    LowStringPtr docComment;
+    int idx;
   };
 
   /*
    * Static property information.
    */
   struct SProp {
-    LowStringPtr m_name;
-    Attr m_attrs;
-    LowStringPtr m_typeConstraint;
-    LowStringPtr m_docComment;
-    // Most derived class that declared this property.
-    LowPtr<Class> m_class;
-    int m_idx;
-    // Used if (m_class == this).
-    TypedValue m_val;
-    RepoAuthType m_repoAuthType;
+    LowStringPtr name;
+    Attr attrs;
+    LowStringPtr typeConstraint;
+    LowStringPtr docComment;
+
+    /* Most derived class that declared this property. */
+    LowPtr<Class> cls;
+    int idx;
+
+    /* Used if (cls == this). */
+    TypedValue val;
+
+    RepoAuthType repoAuthType;
   };
 
   /*
    * Class constant information.
    */
   struct Const {
-    // Most derived class that declared this constant.
-    LowPtr<Class> m_class;
-    LowStringPtr m_name;
-    TypedValueAux m_val;
+    /* Most derived class that declared this constant. */
+    LowPtr<Class> cls;
+    LowStringPtr name;
+    TypedValueAux val;
 
-    bool isAbstract()      const { return m_val.constModifiers().m_isAbstract; }
-    bool isType()          const { return m_val.constModifiers().m_isType; }
+    bool isAbstract() const { return val.constModifiers().m_isAbstract; }
+    bool isType()     const { return val.constModifiers().m_isType; }
   };
 
   /*
@@ -177,9 +185,9 @@ struct Class : AtomicCountable {
     void push_back(const TypedValue& v);
 
     /*
-     * Make a smart-allocated copy of `src'.
+     * Make a request-allocated copy of `src'.
      */
-    static PropInitVec* allocWithSmartAllocator(const PropInitVec& src);
+    static PropInitVec* allocWithReqAllocator(const PropInitVec& src);
 
     static constexpr size_t dataOff() {
       return offsetof(PropInitVec, m_data);
@@ -190,7 +198,7 @@ struct Class : AtomicCountable {
 
     TypedValueAux* m_data;
     unsigned m_size;
-    bool m_smart;
+    bool m_req_allocated;
   };
 
   /*
@@ -556,8 +564,8 @@ public:
   /*
    * The info vector for declared instance properties or static properties.
    */
-  const Prop* declProperties() const;
-  const SProp* staticProperties() const;
+  folly::Range<const Prop*> declProperties() const;
+  folly::Range<const SProp*> staticProperties() const;
 
   /*
    * Look up the index of a declared instance property or static property.
@@ -731,7 +739,8 @@ public:
   /*
    * Whether this class has a type constant named `typeCnsName'.
    */
-  bool hasTypeConstant(const StringData* typeCnsName) const;
+  bool hasTypeConstant(const StringData* typeCnsName,
+                       bool includeAbs = false) const;
 
   /*
    * Look up the actual value of a class constant.  Perform dynamic
@@ -742,7 +751,8 @@ public:
    * The returned Cell is guaranteed not to hold a reference counted object (it
    * may, however, be KindOfString for a static string).
    */
-  Cell clsCnsGet(const StringData* clsCnsName) const;
+  Cell clsCnsGet(const StringData* clsCnsName,
+                 bool includeTypeCns = false) const;
 
   /*
    * Look up a class constant's TypedValue if it doesn't require dynamic
@@ -750,11 +760,15 @@ public:
    *
    * Return nullptr if this class has no constant of the given name.
    *
+   * Return nullptr if the constant is abstract.
+   *
    * The TypedValue represents the constant's value iff it is a scalar,
    * otherwise it has m_type set to KindOfUninit.  Non-scalar class constants
    * need to run 86cinit code to determine their value at runtime.
    */
-  const Cell* cnsNameToTV(const StringData* clsCnsName, Slot& clsCnsInd) const;
+  const Cell* cnsNameToTV(const StringData* clsCnsName,
+                          Slot& clsCnsInd,
+                          bool includeTypeCns = false) const;
 
   /*
    * Provide the current runtime type of this class constant.
@@ -914,6 +928,7 @@ public:
   MaybeDataType enumBaseTy() const;
 
 
+  bool needsInitSProps() const;
   /////////////////////////////////////////////////////////////////////////////
   // Offset accessors.                                                 [static]
 
@@ -1091,8 +1106,6 @@ private:
         unsigned classVecLen,
         unsigned funcVecLen);
   ~Class();
-
-  bool needsInitSProps() const;
 
   /*
    * Trait method import routines.

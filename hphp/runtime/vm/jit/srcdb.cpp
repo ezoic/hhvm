@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,13 +19,14 @@
 #include <stdarg.h>
 #include <string>
 
-#include "hphp/runtime/vm/jit/back-end-x64.h"
+#include "hphp/runtime/vm/treadmill.h"
+
 #include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/recycle-tc.h"
 #include "hphp/runtime/vm/jit/relocation.h"
-#include "hphp/runtime/vm/jit/service-requests-inline.h"
-#include "hphp/runtime/vm/jit/service-requests-x64.h"
-#include "hphp/runtime/vm/treadmill.h"
+#include "hphp/runtime/vm/jit/service-requests.h"
+#include "hphp/runtime/vm/jit/smashable-instr.h"
+
 #include "hphp/util/trace.h"
 
 #include <folly/MoveWrapper.h>
@@ -54,17 +55,15 @@ void IncomingBranch::relocate(RelocationInfo& rel) {
 
 void IncomingBranch::patch(TCA dest) {
   switch (type()) {
-    case Tag::JMP: {
-      mcg->backEnd().smashJmp(toSmash(), dest);
+    case Tag::JMP:
+      smashJmp(toSmash(), dest);
       mcg->getDebugInfo()->recordRelocMap(toSmash(), dest, "Arc-2");
       break;
-    }
 
-    case Tag::JCC: {
-      mcg->backEnd().smashJcc(toSmash(), dest);
+    case Tag::JCC:
+      smashJcc(toSmash(), dest);
       mcg->getDebugInfo()->recordRelocMap(toSmash(), dest, "Arc-1");
       break;
-    }
 
     case Tag::ADDR: {
       // Note that this effectively ignores a
@@ -79,10 +78,10 @@ void IncomingBranch::patch(TCA dest) {
 TCA IncomingBranch::target() const {
   switch (type()) {
     case Tag::JMP:
-      return mcg->backEnd().jmpTarget(toSmash());
+      return smashableJmpTarget(toSmash());
 
     case Tag::JCC:
-      return mcg->backEnd().jccTarget(toSmash());
+      return smashableJccTarget(toSmash());
 
     case Tag::ADDR:
       return *reinterpret_cast<TCA*>(toSmash());
@@ -135,7 +134,7 @@ TCA SrcRec::getFallbackTranslation() const {
 }
 
 FPInvOffset SrcRec::nonResumedSPOff() const {
-  return serviceReqSPOff(getFallbackTranslation());
+  return svcreq::extract_spoff(getFallbackTranslation());
 }
 
 void SrcRec::chainFrom(IncomingBranch br) {
@@ -154,19 +153,6 @@ void SrcRec::chainFrom(IncomingBranch br) {
   }
 }
 
-void SrcRec::emitFallbackJump(CodeBlock& cb, ConditionCode cc /* = -1 */) {
-  // This is a spurious platform dependency. TODO(2990497)
-  mcg->backEnd().prepareForSmash(
-    cb,
-    cc == CC_None ? x64::kJmpLen : x64::kJmpccLen
-  );
-
-  auto from = cb.frontier();
-  TCA destAddr = getFallbackTranslation();
-  mcg->backEnd().emitSmashableJump(cb, destAddr, cc);
-  registerFallbackJump(from, cc);
-}
-
 void SrcRec::registerFallbackJump(TCA from, ConditionCode cc /* = -1 */) {
   auto incoming = cc < 0 ? IncomingBranch::jmpFrom(from)
                          : IncomingBranch::jccFrom(from);
@@ -174,18 +160,6 @@ void SrcRec::registerFallbackJump(TCA from, ConditionCode cc /* = -1 */) {
   // We'll need to know the location of this jump later so we can
   // patch it to new translations added to the chain.
   mcg->cgFixups().m_inProgressTailJumps.push_back(incoming);
-}
-
-void SrcRec::emitFallbackJumpCustom(CodeBlock& cb,
-                                    CodeBlock& frozen,
-                                    SrcKey sk,
-                                    TransFlags trflags,
-                                    ConditionCode cc) {
-  // Another platform dependency (the same one as above). TODO(2990497)
-  auto optSPOff = folly::Optional<FPInvOffset>{};
-  if (!sk.resumed()) optSPOff = nonResumedSPOff();
-  auto toSmash = x64::emitRetranslate(cb, frozen, cc, sk, optSPOff, trflags);
-  registerFallbackJump(toSmash, cc);
 }
 
 void SrcRec::newTranslation(TransLoc loc,
@@ -197,8 +171,8 @@ void SrcRec::newTranslation(TransLoc loc,
   TRACE(1, "SrcRec(%p)::newTranslation @%p, ", this, loc.mainStart());
 
   m_translations.push_back(loc);
-  if (!m_topTranslation.load(std::memory_order_acquire)) {
-    m_topTranslation.store(loc.mainStart(), std::memory_order_release);
+  if (!m_topTranslation.get()) {
+    m_topTranslation = loc.mainStart();
     patchIncomingBranches(loc.mainStart());
   }
 
@@ -230,8 +204,8 @@ void SrcRec::relocate(RelocationInfo& rel) {
     m_anchorTranslation = adjusted;
   }
 
-  if (auto adjusted = rel.adjustedAddressAfter(m_topTranslation.load())) {
-    m_topTranslation.store(adjusted);
+  if (auto adjusted = rel.adjustedAddressAfter(m_topTranslation.get())) {
+    m_topTranslation = adjusted;
   }
 
   for (auto &t : m_translations) {
@@ -269,15 +243,15 @@ void SrcRec::addDebuggerGuard(TCA dbgGuard, TCA dbgBranchGuardSrc) {
   // Set m_dbgBranchGuardSrc after patching, so we don't try to patch
   // the debug guard.
   m_dbgBranchGuardSrc = dbgBranchGuardSrc;
-  m_topTranslation.store(dbgGuard, std::memory_order_release);
+  m_topTranslation = dbgGuard;
 }
 
 void SrcRec::patchIncomingBranches(TCA newStart) {
   if (hasDebuggerGuard()) {
     // We have a debugger guard, so all jumps to us funnel through
     // this.  Just smash m_dbgBranchGuardSrc.
-    TRACE(1, "smashing m_dbgBranchGuardSrc @%p\n", m_dbgBranchGuardSrc);
-    mcg->backEnd().smashJmp(m_dbgBranchGuardSrc, newStart);
+    TRACE(1, "smashing m_dbgBranchGuardSrc @%p\n", m_dbgBranchGuardSrc.get());
+    smashJmp(m_dbgBranchGuardSrc, newStart);
     return;
   }
 
@@ -305,7 +279,7 @@ void SrcRec::replaceOldTranslations() {
   // which is a REQ_RETRANSLATE.
   auto translations = std::move(m_translations);
   m_tailFallbackJumps.clear();
-  m_topTranslation.store(nullptr, std::memory_order_release);
+  m_topTranslation = nullptr;
 
   /*
    * It may seem a little weird that we're about to point every

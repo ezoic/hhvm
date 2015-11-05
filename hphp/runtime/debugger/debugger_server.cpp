@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,8 +20,9 @@
 
 #include "hphp/runtime/debugger/debugger_client.h"
 #include "hphp/runtime/debugger/debugger.h"
+#include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/util/network.h"
 #include "hphp/util/logger.h"
 
@@ -102,7 +103,7 @@ bool DebuggerServer::start() {
     if (s_fd < 0 && errno == EAFNOSUPPORT) {
       continue;
     }
-    auto m_sock = makeSmartPtr<Socket>(
+    auto m_sock = req::make<Socket>(
       s_fd, cur->ai_family, cur->ai_addr->sa_data, port);
 
     int yes = 1;
@@ -147,12 +148,13 @@ void DebuggerServer::stop() {
 }
 
 void DebuggerServer::accept() {
+  g_context.getCheck();
   TRACE(2, "DebuggerServer::accept\n");
   // Setup server-side usage logging before accepting any connections.
   Debugger::InitUsageLogging();
   // server loop
   unsigned int count = m_socks.size();
-  struct pollfd fds[count];
+  struct pollfd* fds = (struct pollfd*)alloca(sizeof(struct pollfd) * count);
 
   for (unsigned int i = 0; i < count; i++) {
     fds[i].fd = nthSocket(i)->fd();
@@ -168,7 +170,7 @@ void DebuggerServer::accept() {
         socklen_t salen = sizeof(sa);
         try {
           auto sock = nthSocket(i);
-          auto new_sock = makeSmartPtr<Socket>(
+          auto new_sock = req::make<Socket>(
             ::accept(sock->fd(), &sa, &salen), sock->getType());
           if (new_sock->valid()) {
             Debugger::CreateProxy(new_sock, false);
@@ -194,6 +196,7 @@ void DebuggerServer::accept() {
   for(auto &m_sock : m_socks) {
     m_sock.reset();
   }
+  hphp_memory_cleanup();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

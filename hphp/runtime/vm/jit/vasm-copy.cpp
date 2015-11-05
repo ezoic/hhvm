@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,11 +39,12 @@ TRACE_SET_MOD(vasm_copy);
 
 using RpoID = uint32_t;
 
-constexpr auto kNumPhysRegs = 1;
+constexpr auto kNumPhysRegs = 2;
 
 folly::Optional<int32_t> phys_reg_index(Vreg reg) {
   assert(reg.isPhys());
-  if (reg == x64::rVmFp) return 0;
+  if (reg == rvmfp()) return 0;
+  if (reg == rvmtl()) return 1;
   return folly::none;
 }
 
@@ -56,7 +57,7 @@ folly::Optional<int32_t> phys_reg_index(Vreg reg) {
  */
 struct RegInfo { Vreg base; int32_t disp; };
 
-std::string show(RegInfo x) {
+DEBUG_ONLY std::string show(RegInfo x) {
   return folly::sformat("{} + {}", show(x.base), x.disp);
 }
 
@@ -155,26 +156,26 @@ void analyze_inst_physical(Env& env,
     if (auto const idx = phys_reg_index(dst)) {
       /*
        * A common pattern for us is to load an address into the frame pointer
-       * right before a bindcall.  In this case, if the frame pointer was not
+       * right before a PHP call.  In this case, if the frame pointer was not
        * altered before this redefinition, it will effectively still be
-       * not-altered after the bindcall, because bindcall restores it to the
+       * not-altered after the call, because callphp{} restores it to the
        * previous value.
        *
        * We don't need to worry about not setting the altered flag in between
-       * this instruction and the bindcall, because bindcall's uses are only of
-       * a RegSet---we cannot mis-optimize any of its args based on the state
-       * we're tracking for the frame pointer.
+       * this instruction and the callphp{}, because callphp{}'s uses are only
+       * of a RegSet---we cannot mis-optimize any of its args based on the
+       * state we're tracking for the frame pointer.
        *
-       * We also skip over bindcall's definition of rVmFp for this reason.
-       * Really bindcall only preserves rbp if we properly set up the rbp arg
-       * to it, but the program is ill-formed if it's not doing that so it's ok
-       * to just ignore that definition here.
+       * We also skip over callphp{}'s definition of rvmfp() for this reason.
+       * Really callphp{} only preserves rvmfp() if we properly set up the
+       * rvmfp() arg to it, but the program is ill-formed if it's not doing
+       * that so it's ok to just ignore that definition here.
        */
-      if (next && next->op == Vinstr::bindcall && dst == x64::rVmFp) {
-        FTRACE(3, "      post-dominated by bindcall---preserving frame ptr\n");
+      if (next && next->op == Vinstr::callphp && dst == rvmfp()) {
+        FTRACE(3, "      post-dominated by callphp---preserving frame ptr\n");
         return;
       }
-      if (inst.op == Vinstr::bindcall && dst == x64::rVmFp) return;
+      if (inst.op == Vinstr::callphp && dst == rvmfp()) return;
 
       FTRACE(3, "      kill {}\n", show(dst));
       state.phys_altered[*idx] = true;
@@ -369,7 +370,7 @@ void optimize(Env& env) {
  * offset.  It then folds offsets in memory operands to try to require fewer
  * registers.  The main motivation for this is to generally eliminate the need
  * for a separate stack pointer (the result of HHIR's DefSP instruction, which
- * will just be an lea off of the rVmFp physical register).
+ * will just be an lea off of the rvmfp() physical register).
  */
 void optimizeCopies(Vunit& unit, const Abi& abi) {
   VpassTracer tracer{&unit, Trace::vasm_copy, "vasm-copy"};

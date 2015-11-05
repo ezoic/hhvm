@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -73,6 +73,7 @@ X(rawurlencode)
 X(round)
 X(serialize)
 X(sha1)
+X(strlen)
 X(str_repeat)
 X(str_split)
 X(substr)
@@ -164,6 +165,7 @@ folly::Optional<Type> const_fold(ISS& env, const bc::FCallBuiltin& op) {
   X(s_rawurlencode)
   X(s_round)
   X(s_sha1)
+  X(s_strlen)
   X(s_str_repeat)
   X(s_str_split)
   X(s_substr)
@@ -309,6 +311,16 @@ bool builtin_min2(ISS& env, const bc::FCallBuiltin& op) {
   return minmax2(env, op);
 }
 
+bool builtin_strlen(ISS& env, const bc::FCallBuiltin& op) {
+  if (op.arg1 != 1) return false;
+  auto const ty = popC(env);
+  // Returns null and raises a warning when input is an array, resource, or
+  // object.
+  if (ty.subtypeOfAny(TPrim, TStr)) nothrow(env);
+  push(env, ty.subtypeOfAny(TPrim, TStr) ? TInt : TOptInt);
+  return true;
+}
+
 const StaticString
   s_max2("__SystemLib\\max2"),
   s_min2("__SystemLib\\min2");
@@ -323,6 +335,7 @@ bool handle_builtin(ISS& env, const bc::FCallBuiltin& op) {
   X(max2)
   X(min2)
   X(mt_rand)
+  X(strlen)
 
 #undef X
 
@@ -333,7 +346,9 @@ bool handle_builtin(ISS& env, const bc::FCallBuiltin& op) {
 
 }
 
-void builtin(ISS& env, const bc::FCallBuiltin& op) {
+namespace interp_step {
+
+void in(ISS& env, const bc::FCallBuiltin& op) {
   if (options.ConstantFoldBuiltins) {
     if (auto const val = const_fold(env, op)) {
       constprop(env);
@@ -350,6 +365,8 @@ void builtin(ISS& env, const bc::FCallBuiltin& op) {
   for (auto i = uint32_t{0}; i < op.arg1; ++i) popT(env);
   specialFunctionEffects(env, name);
   push(env, rt);
+}
+
 }
 
 //////////////////////////////////////////////////////////////////////

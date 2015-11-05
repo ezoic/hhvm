@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,7 @@
 #include <vector>
 
 #include <sys/mman.h>
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && !defined(_MSC_VER)
 #include <execinfo.h>
 #endif
 
@@ -99,7 +99,7 @@ struct SymbolRep : boost::static_visitor<std::string> {
   std::string operator()(Profile k) const {
     return folly::format(
       "{}:t{}:{}",
-      k.name->data(),
+      k.name,
       k.transId,
       k.bcOff
     ).str();
@@ -355,6 +355,31 @@ void flush() {
   }
 }
 
+/* RDS Layout:
+ * +-------------+ <-- tl_base
+ * |  Header     |
+ * +-------------+
+ * |             |
+ * |  Normal     | growing higher
+ * |    region   | vvv
+ * |             |
+ * +-------------+ <-- tl_base + s_normal_frontier
+ * | \ \ \ \ \ \ |
+ * +-------------+ <-- tl_base + s_local_frontier
+ * |             |
+ * |  Local      | ^^^
+ * |    region   | growing lower
+ * |             |
+ * +-------------+ <-- tl_base + s_persistent_base
+ * |             |
+ * | Persistent  | growing higher
+ * |     region  | vvv
+ * |             |
+ * +-------------+ <-- tl_base + s_persistent_frontier
+ * | \ \ \ \ \ \ |
+ * +-------------+ higher addresses
+ */
+
 size_t usedBytes() {
   return s_normal_frontier;
 }
@@ -372,11 +397,11 @@ folly::Range<const char*> normalSection() {
 }
 
 folly::Range<const char*> localSection() {
-  return {(const char*)s_local_frontier, usedLocalBytes()};
+  return {(const char*)tl_base + s_local_frontier, usedLocalBytes()};
 }
 
 folly::Range<const char*> persistentSection() {
-  return {(const char*)s_persistent_base, usedPersistentBytes()};
+  return {(const char*)tl_base + s_persistent_base, usedPersistentBytes()};
 }
 
 Array& s_constants() {
@@ -445,7 +470,7 @@ void threadInit() {
     "Failed to mmap persistent RDS region. errno = {}",
     folly::errnoStr(errno).c_str()
   );
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(_MSC_VER)
   // MapViewOfFileEx() requires "the specified memory region is not already in
   // use by the calling process" when mapping the shared area below. Otherwise
   // it will return MAP_FAILED. We first map the full size to make sure the
@@ -504,7 +529,7 @@ void threadExit() {
       (char*)tl_base + RuntimeOption::EvalJitTargetCacheSize,
       "-rds");
   }
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(_MSC_VER)
   munmap(tl_base, s_persistent_base);
   munmap((char*)tl_base + s_persistent_base,
          RuntimeOption::EvalJitTargetCacheSize - s_persistent_base);

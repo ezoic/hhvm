@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -337,7 +337,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #define IMM_SA(n)      ue.emitInt32(ue.mergeLitstr(data.str##n));
 #define IMM_RATA(n)    encodeRAT(ue, data.rat);
 #define IMM_AA(n)      ue.emitInt32(ue.mergeArray(data.arr##n));
-#define IMM_OA_IMPL(n) ue.emitByte(static_cast<uint8_t>(data.subop));
+#define IMM_OA_IMPL(n) ue.emitByte(static_cast<uint8_t>(data.subop##n));
 #define IMM_OA(type)   IMM_OA_IMPL
 #define IMM_BA(n)      emit_branch(*data.target);
 #define IMM_VSA(n)     emit_vsa(data.keys);
@@ -355,13 +355,18 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 
 #define POP_MMANY      pop(count_stack_elems(data.mvec));
 #define POP_C_MMANY    pop(1); pop(count_stack_elems(data.mvec));
-#define POP_R_MMANY    pop(1); pop(count_stack_elems(data.mvec));
-#define POP_V_MMANY    pop(1); pop(count_stack_elems(data.mvec));
+#define POP_R_MMANY    POP_C_MMANY
+#define POP_V_MMANY    POP_C_MMANY
+#define POP_MFINAL     pop(data.arg1);
+#define POP_C_MFINAL   pop(1); pop(data.arg1);
+#define POP_R_MFINAL   POP_C_MFINAL
+#define POP_V_MFINAL   POP_C_MFINAL
 #define POP_CMANY      pop(data.arg##1);
 #define POP_SMANY      pop(data.keys.size());
 #define POP_FMANY      pop(data.arg##1);
 #define POP_CVMANY     pop(data.arg##1);
 #define POP_CVUMANY    pop(data.arg##1);
+#define POP_IDX_A      pop(data.arg2 + 1);
 
 #define PUSH_NOV
 #define PUSH_ONE(x)            push(1);
@@ -369,6 +374,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #define PUSH_THREE(x, y, z)    push(3);
 #define PUSH_INS_1(x)          push(1);
 #define PUSH_INS_2(x)          push(1);
+#define PUSH_IDX_A             push(data.arg2);
 
 #define O(opcode, imms, inputs, outputs, flags)                   \
     auto emit_##opcode = [&] (const bc::opcode& data) {           \
@@ -429,6 +435,11 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #undef POP_C_MMANY
 #undef POP_R_MMANY
 #undef POP_V_MMANY
+#undef POP_MFINAL
+#undef POP_C_MFINAL
+#undef POP_R_MFINAL
+#undef POP_V_MFINAL
+#undef POP_IDX_A
 
 #undef PUSH_NOV
 #undef PUSH_ONE
@@ -436,6 +447,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #undef PUSH_THREE
 #undef PUSH_INS_1
 #undef PUSH_INS_2
+#undef PUSH_IDX_A
 
 #define O(opcode, ...)                                        \
     case Op::opcode:                                          \
@@ -946,6 +958,11 @@ void emit_class(EmitUnitState& state,
   pce->setEnumBaseTy(cls.enumBaseTy);
 }
 
+void emit_typealias(UnitEmitter& ue, const php::TypeAlias& alias) {
+  auto const id = ue.addTypeAlias(alias);
+  ue.pushMergeableTypeAlias(HPHP::Unit::MergeKind::TypeAlias, id);
+}
+
 //////////////////////////////////////////////////////////////////////
 
 }
@@ -991,7 +1008,7 @@ std::unique_ptr<UnitEmitter> emit_unit(const Index& index,
   emit_pseudomain(state, *ue, unit);
   for (auto& c : unit.classes)     emit_class(state, *ue, *c);
   for (auto& f : unit.funcs)       emit_func(state, *ue, *f);
-  for (auto& t : unit.typeAliases) ue->addTypeAlias(*t);
+  for (auto& t : unit.typeAliases) emit_typealias(*ue, *t);
 
   for (size_t id = 0; id < unit.classes.size(); ++id) {
     // We may not have a DefCls PC if we're a closure, or a

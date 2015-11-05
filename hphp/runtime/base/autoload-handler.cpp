@@ -19,7 +19,7 @@
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
-#include "hphp/runtime/base/smart-containers.h"
+#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/container-functions.h"
@@ -46,7 +46,7 @@ const StaticString
   s_exception("exception"),
   s_previous("previous");
 
-using SmartCufIterPtr = smart::unique_ptr<CufIter>;
+using CufIterPtr = req::unique_ptr<CufIter>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -92,7 +92,7 @@ Variant vm_call_user_func_cufiter(const CufIter& cufIter,
  * Helper method from converting between a PHP function and a CufIter.
  */
 bool vm_decode_function_cufiter(const Variant& function,
-                                SmartCufIterPtr& cufIter) {
+                                CufIterPtr& cufIter) {
   ObjectData* obj = nullptr;
   Class* cls = nullptr;
   CallerFrame cf;
@@ -104,7 +104,7 @@ bool vm_decode_function_cufiter(const Variant& function,
     return false;
   }
 
-  cufIter = smart::make_unique<CufIter>();
+  cufIter = req::make_unique<CufIter>();
   cufIter->setFunc(func);
   cufIter->setName(invName);
   if (obj) {
@@ -130,7 +130,7 @@ void AutoloadHandler::requestInit() {
   assert(m_map_root.get() == nullptr);
   assert(m_loading.get() == nullptr);
   m_spl_stack_inited = false;
-  new (&m_handlers) smart::deque<HandlerBundle>();
+  new (&m_handlers) req::deque<HandlerBundle>();
 }
 
 void AutoloadHandler::requestShutdown() {
@@ -242,7 +242,7 @@ AutoloadHandler::loadFromMapImpl(const String& clsName,
   const Variant& file = typeMapCell->m_data.parr->get(canonicalName);
   bool ok = false;
   if (file.isString()) {
-    String fName = file.toCStrRef().get();
+    String fName{file.toCStrRef().get()};
     if (fName.get()->data()[0] != '/') {
       if (!m_map_root.empty()) {
         fName = m_map_root + fName;
@@ -269,9 +269,10 @@ AutoloadHandler::loadFromMapImpl(const String& clsName,
       throw;
     } catch (ExtendedException& ee) {
       auto fileAndLine = ee.getFileAndLine();
-      err = (fileAndLine.first.empty()) ? ee.getMessage()
-        : folly::format("{0} in {1} on line {2}",
-                        ee.getMessage(), fileAndLine.first.c_str(),
+      err = (fileAndLine.first.empty())
+        ? ee.getMessage()
+        : folly::format("{} in {} on line {}",
+                        ee.getMessage(), fileAndLine.first,
                         fileAndLine.second).str();
     } catch (Exception& e) {
       err = e.getMessage();
@@ -326,12 +327,18 @@ AutoloadHandler::invokeFailureCallback(const Variant& func, const String& kind,
 
 bool AutoloadHandler::autoloadFunc(StringData* name) {
   return !m_map.isNull() &&
-    loadFromMap(name, s_function, true, FuncExistsChecker(name)) != Failure;
+    loadFromMap(String{name},
+                s_function,
+                true,
+                FuncExistsChecker(name)) != Failure;
 }
 
 bool AutoloadHandler::autoloadConstant(StringData* name) {
   return !m_map.isNull() &&
-    loadFromMap(name, s_constant, false, ConstExistsChecker(name)) != Failure;
+    loadFromMap(String{name},
+                s_constant,
+                false,
+                ConstExistsChecker(name)) != Failure;
 }
 
 bool AutoloadHandler::autoloadType(const String& name) {
@@ -553,7 +560,7 @@ Array AutoloadHandler::getHandlers() {
         callable.append(String(cls->nameStr()));
       } else {
         obj = (ObjectData*)cufIter->ctx();
-        callable.append(obj);
+        callable.append(Variant{obj});
       }
       callable.append(String(f->nameStr()));
       handlers.append(callable.toArray());
@@ -582,7 +589,7 @@ bool AutoloadHandler::CompareBundles::operator()(
 }
 
 bool AutoloadHandler::addHandler(const Variant& handler, bool prepend) {
-  SmartCufIterPtr cufIter = nullptr;
+  CufIterPtr cufIter = nullptr;
   if (!vm_decode_function_cufiter(handler, cufIter)) {
     return false;
   }
@@ -611,7 +618,7 @@ bool AutoloadHandler::isRunning() {
 }
 
 void AutoloadHandler::removeHandler(const Variant& handler) {
-  SmartCufIterPtr cufIter = nullptr;
+  CufIterPtr cufIter = nullptr;
   if (!vm_decode_function_cufiter(handler, cufIter)) {
     return;
   }

@@ -13,16 +13,19 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
 #include "hphp/runtime/vm/jit/loop-analysis.h"
 
 #include <string>
 
 #include <folly/ScopeGuard.h>
 
+#include "hphp/runtime/vm/jit/cfg.h"
 #include "hphp/runtime/vm/jit/containers.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
-#include "hphp/runtime/vm/jit/cfg.h"
+#include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/mutation.h"
+#include "hphp/runtime/vm/jit/prof-data.h"
 
 namespace HPHP { namespace jit {
 
@@ -32,6 +35,9 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////
 
+using BlockSet = jit::flat_set<Block*>;
+using EdgeSet  = jit::flat_set<Edge*>;
+
 struct Env {
   Env(const IRUnit& unit,
       const BlockList& rpoBlocks)
@@ -40,20 +46,20 @@ struct Env {
     , idoms(findDominators(unit, rpoBlocks, numberBlocks(unit, rpoBlocks)))
   {}
 
-  const IRUnit& unit;
+  const IRUnit&    unit;
   const BlockList& rpoBlocks;
   const IdomVector idoms;
 };
 
 //////////////////////////////////////////////////////////////////////
 
-jit::flat_set<Edge*> find_back_edges(const Env& env) {
-  auto vec = jit::vector<Edge*>{};
+EdgeSet findBackEdges(const Env& env) {
+  jit::vector<Edge*> vec;
 
   // Every back edge must be a retreating edge, which means we must've already
   // visited its target when iterating in RPO.  Keeping this seen set avoids
   // consulting the dominator tree for every edge.
-  auto seen = boost::dynamic_bitset<>(env.unit.numBlocks());
+  boost::dynamic_bitset<> seen(env.unit.numBlocks());
 
   auto consider = [&] (Edge* edge) {
     if (!edge) return;
@@ -72,14 +78,14 @@ jit::flat_set<Edge*> find_back_edges(const Env& env) {
     consider(blk->nextEdge());
   }
 
-  auto ret = jit::flat_set<Edge*>(begin(vec), end(vec));
+  EdgeSet ret(begin(vec), end(vec));
 
-  FTRACE(2, "back_edges:\n{}",
+  FTRACE(2, "back-edges:\n{}",
     [&] () -> std::string {
       auto s = std::string{};
       for (auto& edge : ret) {
         folly::format(&s, "  B{} -> B{}\n", edge->from()->id(),
-          edge->to()->id());
+                      edge->to()->id());
       }
       return s;
     }()
@@ -88,162 +94,254 @@ jit::flat_set<Edge*> find_back_edges(const Env& env) {
   return ret;
 }
 
-template<class Visited>
-void natural_loop_dfs(jit::vector<Block*>& out, Visited& visited, Block* blk) {
-  if (visited.test(blk->id())) return;
-  visited.set(blk->id());
-  blk->forEachPred([&] (Block* pred) {
-    natural_loop_dfs(out, visited, pred);
+/*
+ * Finds the unvisited blocks in the CFG by doing a reverse DFS
+ * starting at `block', and adds them to `blocks'.
+ */
+void findBlocks(BlockSet& blocks,
+                boost::dynamic_bitset<>& visited,
+                Block* block) {
+  if (visited.test(block->id())) return;
+  visited.set(block->id());
+  block->forEachPred([&] (Block* pred) {
+    findBlocks(blocks, visited, pred);
   });
-  out.push_back(blk);
+  blocks.insert(block);
 }
 
-NaturalLoopInfo identify_natural_loop(
-    Env& env,
-    const jit::flat_set<Edge*>& all_back_edges,
-    const Edge* back_edge) {
-  auto ret = NaturalLoopInfo{};
-  ret.header = back_edge->to();
-
-  /*
-   * The natural loop associated with this back edge consists of all nodes
-   * reachable in the reverse CFG from back_edge->from() before the header.
-   * Since back_edge->to() dominates back_edge->from(), we're guaranteed that
-   * every path backwards will reach back_edge->to(), which is already marked
-   * as visited, and the search will terminate.
-   */
-  auto visited = boost::dynamic_bitset<>(env.unit.numBlocks());
-  visited.set(ret.header->id());
-  auto members = jit::vector<Block*>{};
-  natural_loop_dfs(members, visited, back_edge->from());
-  ret.members = jit::flat_set<Block*>(begin(members), end(members));
-
-  /*
-   * Check if this loop has a pre-header.
-   */
-  ret.pre_header = [&] () -> Block* {
-    Edge* candidate = nullptr;
-    for (auto& pred_edge : ret.header->preds()) {
-      if (all_back_edges.count(&pred_edge)) continue;
-      if (candidate) return nullptr;
-      candidate = &pred_edge;
-      if (candidate->from()->numSuccs() != 1) return nullptr;
-    }
-    return candidate ? candidate->from() : nullptr;
-  }();
-
-  return ret;
-}
-
-template<class Analysis, class F>
-void for_each_loop(Analysis& loops,
-                   LoopID id,
-                   LoopID (NaturalLoopInfo::*next_id),
-                   F f) {
-  while (id != kInvalidLoopID) {
-    auto& cur = loops.naturals[id];
-    f(cur);
-    id = (cur.*next_id);
+/*
+ * The loop associated with this header consists of all nodes reachable
+ * in the reverse CFG from its back-edges's sources before the header.
+ */
+void findLoop(Env& env,
+              Block* header,
+              const EdgeSet& backEdges,
+              BlockSet& blocks) {
+  boost::dynamic_bitset<> visited(env.unit.numBlocks());
+  visited.set(header->id());
+  blocks.insert(header);
+  for (auto& backEdge : backEdges) {
+    findBlocks(blocks, visited, backEdge->from());
   }
 }
 
-void determine_nesting(Env& env, LoopAnalysis& loops) {
-  /*
-   * Link all loops with the same header into a list.  An arbitrary one of them
-   * will end up as the first in the list, or the "canonical" natural loop for
-   * that header.
-   */
-  for (auto& linfo : loops.naturals) {
-    if (loops.headers.contains(linfo.header)) {
-      linfo.header_next = loops.headers[linfo.header];
-    }
-    loops.headers[linfo.header] = linfo.id;
+Block* findPreHeader(Block* header, const EdgeSet& allBackEdges) {
+  Edge* candidate = nullptr;
+  for (auto& predEdge : header->preds()) {
+    if (allBackEdges.count(&predEdge)) continue;
+    if (candidate) return nullptr;
+    candidate = &predEdge;
+    if (candidate->from()->numSuccs() != 1) return nullptr;
   }
+  return candidate ? candidate->from() : nullptr;
+}
 
-  /*
-   * Use the dominator tree to build the loop nest tree.  If a loop B is nested
-   * inside loop A, then the header of B is dominated by the header of A, and
-   * the header of B is a member of loop A.  We build the tree bottom up by
-   * running upwards in the IdomVector for each loop header, looking for
-   * another loop header.
-   */
-  for (auto& header_to_loop_kv : loops.headers) {
-    auto const inner_id = header_to_loop_kv.second;
-    auto const block = loops.naturals[inner_id].header;
+/*
+ * Find and set the parent loop for each loop, if it exists.  This
+ * uses the dominator tree, since the a parent loop's header must
+ * dominate the headers of its children loops.
+ */
+void findParents(Env& env, LoopAnalysis& la) {
+  for (auto& headerToLoop : la.headers) {
+    auto const innerId = headerToLoop.second;
+    auto const block   = la.loops[innerId].header;
 
     // Chase up the dominator tree and see if we find a parent loop.
-    auto found_outer = false;
-    for (auto up = env.idoms[block];
-         up != nullptr && !found_outer;
-         up = env.idoms[up]) {
-      if (!loops.headers.contains(up)) continue;
-
-      // We have a loop header `up' that dominates the loop header `block'.  If
-      // any loop headed by `up' contains `block', then it is a parent loop.
-      for (auto outer_id = loops.headers[up];
-           outer_id != kInvalidLoopID;
-           outer_id = loops.naturals[outer_id].header_next) {
-        auto& outer = loops.naturals[outer_id];
-        if (!outer.members.count(block)) continue;
-        auto const canon_up = loops.headers[up];
-        for_each_loop(
-          loops, inner_id, &NaturalLoopInfo::header_next,
-          [&] (NaturalLoopInfo& inner) {
-            inner.canonical_outer = canon_up;
-          }
-        );
-        found_outer = true;
+    for (auto up = env.idoms[block]; up != nullptr; up = env.idoms[up]) {
+      if (!la.headers.contains(up)) continue;
+      auto upId = la.headers[up];
+      if (la.loops[upId].blocks.count(block)) {
+        la.loops[innerId].parent = upId;
         break;
       }
     }
   }
 }
 
-void find_inner_loops(LoopAnalysis& loops) {
-  auto parents = sparse_id_set<LoopID>(loops.naturals.size());
-  for (auto& loop : loops.naturals) {
-    for_each_loop(
-      loops, loop.canonical_outer, &NaturalLoopInfo::header_next,
-      [&] (const NaturalLoopInfo& out) {
-        parents.insert(out.id);
-      }
-    );
+void findInnerLoops(LoopAnalysis& la) {
+  sparse_id_set<LoopID> parents(la.loops.size());
+  for (auto& loop : la.loops) {
+    if (loop.parent != kInvalidLoopID) {
+      parents.insert(loop.parent);
+    }
   }
 
-  loops.inner_loops.reserve(loops.naturals.size() - parents.size());
-  for (auto& loop : loops.naturals) {
-    if (!parents.contains(loop.id)) loops.inner_loops.push_back(loop.id);
+  la.innerLoops.reserve(la.loops.size() - parents.size());
+  for (auto& loop : la.loops) {
+    if (!parents.contains(loop.id)) {
+      la.innerLoops.push_back(loop.id);
+    }
   }
+}
+
+/*
+ * Return the `loop's preExit block if it was already created or if a
+ * suitable block already exists.  Otherwise, return nullptr.
+ */
+Block* findLoopPreExit(LoopInfo& loop) {
+  if (loop.preExit) return loop.preExit;
+  const auto preHeader = loop.preHeader;
+  if (!preHeader) return nullptr;
+  if (preHeader->preds().size() != 1) return nullptr;
+  const auto& pred = preHeader->preds().front().from();
+  if (pred->back().op() == ExitPlaceholder) loop.preExit = pred->taken();
+  return loop.preExit;
+}
+
+/*
+ * Clone the `unit's CFG starting at `startBlock', and rename SSATmps
+ * according to `tmpRenames' map along the way.  The new block
+ * corresponding to `startBlock' is returned.  All blocks reachable
+ * from `startBlock' are also cloned, so that there is no path from
+ * the cloned blocks to the original blocks in the `unit'.  Note that,
+ * as instructions are cloned into the new blocks, the dest SSATmps of
+ * these instructions also need to be renamed, so they're added to
+ * `tmpRenames' along the way.
+ */
+Block* cloneCFG(IRUnit& unit,
+                Block* startBlock,
+                jit::flat_map<SSATmp*, SSATmp*> tmpRenames) {
+  jit::queue<Block*> toClone;
+  boost::dynamic_bitset<> toCloneSet(unit.numBlocks());
+  jit::hash_map<Block*, Block*> blockRenames;
+
+  FTRACE(5, "cloneCFG: starting at B{}\n", startBlock->id());
+
+  auto push = [&](Block* b) {
+    if (!b || toCloneSet[b->id()]) return;
+    toClone.push(b);
+    toCloneSet[b->id()] = true;
+  };
+
+  // Clone each of the blocks.
+  push(startBlock);
+  while (!toClone.empty()) {
+    auto origBlock = toClone.front();
+    toClone.pop();
+    auto copyBlock = unit.defBlock(origBlock->hint());
+    blockRenames[origBlock] = copyBlock;
+    FTRACE(5, "cloneCFG: copying B{} to B{}\n",
+           origBlock->id(), copyBlock->id());
+
+    // Clone each of the instructions in the block.
+    for (auto& origInst : *origBlock) {
+      auto copyInst = unit.clone(&origInst);
+
+      // Remember the new SSATmps (the dests) which will need to be renamed.
+      for (size_t d = 0; d < origInst.numDsts(); d++) {
+        tmpRenames[origInst.dst(d)] = copyInst->dst(d);
+      }
+
+      // Rename all the source SSATmps that need renaming.
+      for (size_t s = 0; s < origInst.numSrcs(); s++) {
+        auto it = tmpRenames.find(copyInst->src(s));
+        if (it != tmpRenames.end()) {
+          auto newSrc = it->second;
+          copyInst->setSrc(s, newSrc);
+        }
+      }
+      copyBlock->push_back(copyInst);
+    }
+
+    push(origBlock->next());
+    push(origBlock->taken());
+  }
+
+  // Now go through all new blocks and reset their next/taken blocks
+  // to their corresponding new blocks.
+  for (auto& blockRename : blockRenames) {
+    auto newBlock = blockRename.second;
+    auto& lastInst = newBlock->back();
+    if (lastInst.next())  lastInst.setNext (blockRenames[lastInst.next()]);
+    if (lastInst.taken()) lastInst.setTaken(blockRenames[lastInst.taken()]);
+  }
+
+  return blockRenames[startBlock];
 }
 
 //////////////////////////////////////////////////////////////////////
 
-bool DEBUG_ONLY check_invariants(const LoopAnalysis& loops) {
-  always_assert(loops.back_edges.size() == loops.naturals.size());
+/*
+ * Search the HHIR control-flow graph backwards starting at `b' for
+ * the first blocks not in `visited' that belong to a Profile
+ * translation other than `headerTID', and add those blocks' TransIDs
+ * to `set'.
+ */
+void findPredTransIDs(TransID headerTID, Block* b,
+                      boost::dynamic_bitset<>& visited,
+                      TransIDSet& set) {
+  if (visited[b->id()]) return;
+  visited[b->id()] = true;
+  auto bTID = b->front().marker().profTransID();
+  if (set.count(bTID)) return;
+  if (bTID != headerTID) {
+    if (bTID != kInvalidTransID) set.insert(bTID);
+    else assertx(b->id() == 0); // only the entry block may have no ProfTransID
+    return;
+  }
+  // Keep searching.
+  for (auto& predEdge : b->preds()) {
+    findPredTransIDs(headerTID, predEdge.from(), visited, set);
+  }
+}
 
-  for (auto& nat : loops.naturals) {
-    // Loops in the same header list have the same header block and the same
-    // pre-header block.
-    for_each_loop(
-      loops, nat.id, &NaturalLoopInfo::header_next,
-      [&] (const NaturalLoopInfo& info) {
-        always_assert(info.header == nat.header);
-        always_assert(info.pre_header == nat.pre_header);
-      }
-    );
+/*
+ * Computes the approximate number of times that `loop' was invoked
+ * (i.e. entered) using profiling data.  This value is computed by
+ * adding up the profiling weights of all the Profile translations
+ * that may execute immediately before the Profile translation
+ * containing the loop header.
+ */
+uint64_t countInvocations(const LoopInfo& loop, const IRUnit& unit) {
+  always_assert(mcg->tx().profData());
+
+  // Find the predecessor TransIDs along each non-back-edge
+  // predecessor of the loop header.
+  boost::dynamic_bitset<> visited(unit.numBlocks());
+  TransIDSet predTIDs;
+  auto headerTID = loop.header->front().marker().profTransID();
+  for (auto& predEdge : loop.header->preds()) {
+    if (loop.backEdges.count(&predEdge) == 0) {
+      findPredTransIDs(headerTID, predEdge.from(), visited, predTIDs);
+    }
+  }
+  auto const profData = mcg->tx().profData();
+  uint64_t count = 0;
+  for (auto tid : predTIDs) {
+    count += profData->transCounter(tid);
+  }
+  return count;
+}
+
+//////////////////////////////////////////////////////////////////////
+
+bool DEBUG_ONLY checkInvariants(const LoopAnalysis& la) {
+  always_assert(la.backEdges.size() >= la.loops.size());
+
+  size_t totalBackEdges = 0;
+
+  for (auto& loop : la.loops) {
+    totalBackEdges += loop.backEdges.size();
 
     // Any loop that contains another loop's header block also contains its
-    // pre_header block.
-    for (auto oid = nat.id + 1; oid < loops.naturals.size(); ++oid) {
-      auto& other = loops.naturals[oid];
-      if (other.pre_header && nat.members.count(other.header)) {
-        // The `members' set does not contain loop headers, so we have to check
-        // that too.
-        always_assert(nat.members.count(other.pre_header) ||
-                      nat.header == other.pre_header);
+    // pre-header block.
+    for (auto oid = loop.id + 1; oid < la.loops.size(); ++oid) {
+      auto& other = la.loops[oid];
+      if (other.preHeader && loop.blocks.count(other.header)) {
+        always_assert(loop.blocks.count(other.preHeader));
+      }
+    }
+
+    // A parent loop must contain all the blocks in its children loops.
+    if (loop.parent != kInvalidLoopID) {
+      auto const& parentBlocks = la.loops[loop.parent].blocks;
+      for (auto block : loop.blocks) {
+        always_assert(parentBlocks.count(block));
       }
     }
   }
+
+  always_assert(la.backEdges.size() == totalBackEdges);
 
   return true;
 }
@@ -252,75 +350,171 @@ bool DEBUG_ONLY check_invariants(const LoopAnalysis& loops) {
 
 }
 
-LoopAnalysis identify_loops(const IRUnit& unit, const BlockList& rpoBlocks) {
-  FTRACE(1, "identify_loops:vvvvvvvvvvvvvvvvvvvv\n");
-  SCOPE_EXIT { FTRACE(1, "identify_loops:^^^^^^^^^^^^^^^^^^^^\n"); };
+LoopAnalysis identifyLoops(const IRUnit& unit, const BlockList& rpoBlocks) {
+  FTRACE(1, "identifyLoops:vvvvvvvvvvvvvvvvvvvv\n");
+  SCOPE_EXIT { FTRACE(1, "identifyLoops:^^^^^^^^^^^^^^^^^^^^\n"); };
 
-  auto ret = LoopAnalysis{unit.numBlocks()};
-  auto env = Env { unit, rpoBlocks };
+  LoopAnalysis la{unit.numBlocks()};
+  Env env{unit, rpoBlocks};
 
-  ret.back_edges = find_back_edges(env);
+  la.backEdges = findBackEdges(env);
 
-  ret.naturals.reserve(ret.back_edges.size());
-  for (auto& edge : ret.back_edges) {
-    ret.naturals.push_back(identify_natural_loop(env, ret.back_edges, edge));
-    ret.naturals.back().id = ret.naturals.size() - 1;
-  }
-
-  determine_nesting(env, ret);
-  find_inner_loops(ret);
-
-  assertx(check_invariants(ret));
-
-  return ret;
-}
-
-jit::flat_set<Block*> expanded_loop_blocks(const LoopAnalysis& loops,
-                                           LoopID loop_id) {
-  auto ret = loops.naturals[loop_id].members;
-  if (loops.naturals[loop_id].header_next == kInvalidLoopID) {
-    return ret;
-  }
-
-  // Start at the second one in the list, inserting the new members.
-  for_each_loop(
-    loops,
-    loops.naturals[loops.naturals[loop_id].header_next].id,
-    &NaturalLoopInfo::header_next,
-    [&] (const NaturalLoopInfo& info) {
-      for (auto& m : info.members) {
-        ret.insert(m);
-      }
+  unsigned nextId = 0;
+  for (auto& edge : la.backEdges) {
+    auto header = edge->to();
+    if (la.headers.contains(header)) {
+      auto loopId = la.headers[header];
+      la.loops[loopId].backEdges.insert(edge);
+    } else { // new loop
+      la.headers[header] = nextId;
+      LoopInfo loopInfo;
+      loopInfo.id = nextId;
+      loopInfo.header = header;
+      la.loops.push_back(loopInfo);
+      la.loops.back().backEdges.insert(edge);
+      nextId++;
     }
-  );
+  }
 
-  return ret;
+  for (auto& h : la.headers) {
+    auto loopId = h.second;
+    auto&  loop = la.loops[loopId];
+    auto header = loop.header;
+    findLoop(env, header, loop.backEdges, loop.blocks);
+    loop.preHeader = findPreHeader(header, la.backEdges);
+    loop.numInvocations = countInvocations(loop, unit);
+  }
+
+  findParents(env, la);
+  findInnerLoops(la);
+
+  assertx(checkInvariants(la));
+
+  return la;
 }
 
 //////////////////////////////////////////////////////////////////////
 
-void insert_loop_pre_header(IRUnit& unit,
-                            LoopAnalysis& loops,
-                            LoopID loop_id) {
-  assertx(check_invariants(loops));
-  always_assert(loops.naturals[loop_id].pre_header == nullptr);
+/*
+ * If loop `loopId' already contains a `preExit' block, then return
+ * it.  Otherwise, create one and return it.
+ *
+ * Creating a `preExit' requires both:
+ *   1. the loop to have a preHeader; and
+ *   2. the loop header to contain an ExitPlaceholder, optionally
+ *      preceded by a DefLabel.
+ *
+ * This function then transforms a CFG from:
+ *
+ *             |
+ *             v
+ * +--------------------------+
+ * | ...                      |  B1: oldPreHeader
+ * | Jmp ta, tb, ...          |
+ * +--------------------------+
+ *             |
+ *             v
+ * +--------------------------+
+ * | tx, ty, ... = DefLabel   |  B2: header
+ * | ExitPlaceholder origExit |
+ * +--------------------------+ --> B3: origExit (note: may use tx, ty)
+ *             |
+ *             v
+ *
+ *
+ * into the following CFG:
+ *
+ *             |
+ *             v
+ * +--------------------------+
+ * | ...                      |  B1: oldPreHeader
+ * | ExitPlaceholder preExit  |
+ * +--------------------------+ --> B4: preExit
+ *             |                 (cloned from origExit, renaming tx,ty => ta,tb)
+ *             v
+ * +--------------------------+
+ * | Jmp ta, tb, ...          |  B5: newPreHeader
+ * +--------------------------+
+ *             |
+ *             v
+ * +--------------------------+
+ * | tx, ty, ... = DefLabel   |  B2: header
+ * | ExitPlaceholder origExit |
+ * +--------------------------+ --> B3: origExit
+ *             |
+ *             v
+ *
+ */
+Block* insertLoopPreExit(IRUnit& unit,
+                         LoopAnalysis& la,
+                         LoopID loopId) {
+  auto& loop = la.loops[loopId];
+  const auto oldPreHeader = loop.preHeader;
+  assertx(oldPreHeader);
 
-  // All natural loops with the same header are going to be affected, so find
-  // the front of that list.
-  auto const first_loop_id = loops.headers[loops.naturals[loop_id].header];
-  auto const& first_loop = loops.naturals[first_loop_id];
-  auto const header = first_loop.header;
+  // Check if we already have a pre-exit block, return it.
+  if (auto preExit = findLoopPreExit(loop)) return preExit;
+
+  const auto header = loop.header;
+
+  auto const eph = header->skipHeader();
+  assertx(eph->is(ExitPlaceholder));
+
+  auto origExit = eph->taken();
+
+  jit::flat_map<SSATmp*, SSATmp*> tmpRenames;
+  if (header->front().is(DefLabel)) {
+    auto& defLabel = header->front();
+    auto& jmpLabel = oldPreHeader->back();
+    assertx(jmpLabel.is(Jmp));
+    assertx(jmpLabel.numSrcs() == defLabel.numDsts());
+    for (size_t i = 0; i < jmpLabel.numSrcs(); i++) {
+      tmpRenames[defLabel.dst(i)] = jmpLabel.src(i);
+    }
+  }
+
+  Block* preExit = cloneCFG(unit, origExit, tmpRenames);
+  loop.preExit = preExit;
+
+  // Split oldPreHeader before the Jmp, and append an
+  // ExitPlaceholder{ fallthru=newPreHeader, taken=preExit }.
+  auto newPreHeader = unit.defBlock(oldPreHeader->hint());
+  assertx(oldPreHeader->back().is(Jmp));
+  auto const jmp = &(oldPreHeader->back());
+  oldPreHeader->erase(jmp);
+  newPreHeader->prepend(jmp);
+  auto exitPlaceholder = unit.gen(ExitPlaceholder, jmp->marker(), preExit);
+  oldPreHeader->insert(oldPreHeader->end(), exitPlaceholder);
+  exitPlaceholder->setNext(newPreHeader);
+
+  updatePreHeader(la, loopId, newPreHeader); // also checks invariants
+
+  return preExit;
+}
+
+//////////////////////////////////////////////////////////////////////
+
+void insertLoopPreHeader(IRUnit& unit,
+                         LoopAnalysis& la,
+                         LoopID loopId) {
+  auto& loop = la.loops[loopId];
+
+  assertx(checkInvariants(la));
+  always_assert(loop.preHeader == nullptr);
+
+  auto const header = loop.header;
 
   // Find all non-back-edge predecessors.  They'll be rechained to go to the
   // new pre-header.
-  auto preds = jit::vector<Block*>{};
-  for (auto& pred_edge : header->preds()) {
-    if (loops.back_edges.count(&pred_edge)) continue;
-    preds.push_back(pred_edge.from());
+  jit::vector<Block*> preds;
+  for (auto& predEdge : header->preds()) {
+    if (la.backEdges.count(&predEdge) == 0) {
+      preds.push_back(predEdge.from());
+    }
   }
   always_assert(!preds.empty());
 
-  // If we already have a block that qualifies as a pre_header, but pre_header
+  // If we already have a block that qualifies as a pre-header, but pre-header
   // was nullptr (asserted above), that means the block was added after this
   // LoopAnalysis was created.  So someone has invalidated the LoopAnalysis
   // structure by changing the CFG before calling this function, which isn't
@@ -328,45 +522,44 @@ void insert_loop_pre_header(IRUnit& unit,
   if (preds.size() == 1) {
     always_assert_flog(
       preds[0]->numSuccs() != 1,
-      "insert_loop_pre_header on L{} (in B{}), which already had a pre_header",
-      first_loop_id,
+      "insertLoopPreHeader on L{} (in B{}), which already had a pre-header",
+      loopId,
       header->id()
     );
   }
 
-  auto const pre_header = unit.defBlock();
+  auto const preHeader = unit.defBlock();
   auto const marker = header->front().marker();
 
   // If the header starts with a DefLabel, the arguments from all the incoming
-  // edges need to be collected in a new DefLabel in the new pre_header, and
+  // edges need to be collected in a new DefLabel in the new pre-header, and
   // Jmp'd into the header.
-  auto args = [&] () -> jit::vector<SSATmp*> {
-    auto ret = jit::vector<SSATmp*>{};
-    if (!header->front().is(DefLabel)) return ret;
+  jit::vector<SSATmp*> args;
+  if (header->front().is(DefLabel)) {
     auto const num_args = header->front().numDsts();
     auto const label = unit.defLabel(num_args, marker);
-    pre_header->insert(pre_header->begin(), label);
-    if (!num_args) return ret;
-    ret.reserve(num_args);
-    for (auto& dst : label->dsts()) ret.push_back(dst);
-    return ret;
-  }();
-
-  if (args.empty()) {
-    pre_header->prepend(unit.gen(Jmp, marker, header));
-  } else {
-    pre_header->prepend(unit.gen(Jmp, marker, header,
-      std::make_pair(args.size(), &args[0])));
+    preHeader->insert(preHeader->begin(), label);
+    if (num_args > 0) {
+      args.reserve(num_args);
+      for (auto& dst : label->dsts()) args.push_back(dst);
+    }
   }
 
-  // Rechain the predecessors to go to the new pre_header.
+  if (args.empty()) {
+    preHeader->prepend(unit.gen(Jmp, marker, header));
+  } else {
+    preHeader->prepend(unit.gen(Jmp, marker, header,
+                                std::make_pair(args.size(), &args[0])));
+  }
+
+  // Rechain the predecessors to go to the new preHeader.
   for (auto& pred : preds) {
     auto& branch = pred->back();
     if (branch.taken() == header) {
-      branch.setTaken(pre_header);
+      branch.setTaken(preHeader);
     } else {
       assertx(branch.next() == header);
-      branch.setNext(pre_header);
+      branch.setNext(preHeader);
     }
   }
 
@@ -376,94 +569,60 @@ void insert_loop_pre_header(IRUnit& unit,
    * don't need to retype the DefLabel in the actual loop header, because it
    * must already contain the types for these incoming values.
    */
-  if (!args.empty()) retypeDests(&pre_header->front(), &unit);
+  if (!args.empty()) retypeDests(&preHeader->front(), &unit);
 
   // Will assert invariants on the way out:
-  update_pre_header(loops, first_loop_id, pre_header);
+  updatePreHeader(la, loopId, preHeader);
 }
 
 /*
- * We only need to add the new pre_header block to any loop that contained the
- * header block for loop_id, as well as to any loop that has the same header as
- * loop_id.
- *
- * For loops that aren't at the same header as this loop_id:
- *
- *   If a loop L contained loop_id's header block, then the header block had a
- *   path to L's back edge that didn't go through L's header.  Since the new
- *   pre header has a path to the header (as its only successor), this means
- *   the pre header also has a path to L's back edge that doesn't go through
- *   L's header, so it's part of L's loop.
- *
- *   On the other hand, if a loop didn't contain loop_id's header, it means the
- *   new pre_header can't have a path to that loop's back edge that doesn't go
- *   through its header either, since the only successor of the new pre_header
- *   is the header.
- *
- *   Furthermore, natural loops with different header blocks are either totally
- *   disjoint or else one contains the other.  Since we've built the loop nest
- *   already, this means we can find all the loops that may contain the header
- *   block by chasing up the loop parent pointers: since if a loop contained
- *   this loop's header, it must be a parent loop.
+ * Set the pre-header of loop `loopId' to `preHeader', and also add
+ * `preHeader' to any ancestor of `loopId'.
  */
-void update_pre_header(LoopAnalysis& loops, LoopID loop_id, Block* new_preh) {
-  assertx(loops.headers[loops.naturals[loop_id].header] == loop_id);
-  auto const header = loops.naturals[loop_id].header;
+void updatePreHeader(LoopAnalysis& la, LoopID loopId, Block* preHeader) {
+  auto& loop = la.loops[loopId];
+  assertx(la.headers[loop.header] == loopId);
 
-  for_each_loop(
-    loops, loop_id, &NaturalLoopInfo::header_next,
-    [&] (NaturalLoopInfo& info) {
-      info.pre_header = new_preh;
-    }
-  );
+  loop.preHeader = preHeader;
 
-  for_each_loop(
-    loops, loop_id, &NaturalLoopInfo::canonical_outer,
-    [&] (const NaturalLoopInfo& canon_out) {
-      for_each_loop(
-        loops, canon_out.id, &NaturalLoopInfo::header_next,
-        [&] (NaturalLoopInfo& possible_parent) {
-          if (possible_parent.members.count(header)) {
-            possible_parent.members.insert(new_preh);
-          }
-        }
-      );
-    }
-  );
+  for (auto ancestorId = loop.parent; ancestorId != kInvalidLoopID;
+       ancestorId = la.loops[ancestorId].parent) {
+    la.loops[ancestorId].blocks.insert(preHeader);
+  }
 
-  assertx(check_invariants(loops));
+  assertx(checkInvariants(la));
 }
 
 //////////////////////////////////////////////////////////////////////
 
-std::string show(const NaturalLoopInfo& linfo) {
+std::string show(const LoopInfo& linfo) {
   auto ret = std::string{};
   folly::format(&ret, "Loop {}, header: B{}", linfo.id, linfo.header->id());
-  if (linfo.pre_header != nullptr) {
-    folly::format(&ret, "  (pre-header: B{})\n", linfo.pre_header->id());
-  } else {
-    ret += "\n";
+  if (linfo.preHeader != nullptr) {
+    folly::format(&ret, "  (pre-header: B{})", linfo.preHeader->id());
   }
-  for (auto& b : linfo.members) {
+  if (linfo.preExit != nullptr) {
+    folly::format(&ret, "  (pre-exit: B{})", linfo.preExit->id());
+  }
+  ret += "\n";
+  folly::format(&ret, "        numInvocations: {}\n", linfo.numInvocations);
+  for (auto& b : linfo.blocks) {
     folly::format(&ret, "                B{}\n", b->id());
   }
 
   return ret;
 }
 
-std::string show(const LoopAnalysis& loops) {
+std::string show(const LoopAnalysis& la) {
   auto ret = std::string{};
-  for (auto& x : loops.naturals) ret += show(x);
+  for (auto& x : la.loops) ret += show(x);
 
   folly::format(&ret, "digraph G {{\n");
-  for (auto& x : loops.naturals) {
+  for (auto& x : la.loops) {
     folly::format(&ret, "L{};\n", x.id);
 
-    if (x.header_next != kInvalidLoopID) {
-      folly::format(&ret, "L{} -> L{} [color=green];\n", x.id, x.header_next);
-    }
-    if (x.canonical_outer != kInvalidLoopID) {
-      folly::format(&ret, "L{} -> L{};\n", x.id, x.canonical_outer);
+    if (x.parent != kInvalidLoopID) {
+      folly::format(&ret, "L{} -> L{};\n", x.id, x.parent);
     }
   }
   folly::format(&ret, "}}\n");

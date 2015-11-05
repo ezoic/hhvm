@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,17 +17,16 @@
 #ifndef incl_HPHP_OFFLINE_TRANS_DATA_
 #define incl_HPHP_OFFLINE_TRANS_DATA_
 
-#include <string>
-#include <vector>
 #include <map>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
-#include "hphp/util/deprecated/base.h"
+#include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/runtime/vm/func.h"
 
 #include "hphp/tools/tc-print/perf-events.h"
-#include "hphp/runtime/vm/jit/translator.h"
 
 #define INVALID_ID ((TransID)-1)
 

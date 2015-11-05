@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -59,6 +59,12 @@ static class SysvmsgExtension final : public Extension {
 public:
   SysvmsgExtension() : Extension("sysvmsg", NO_EXTENSION_VERSION_YET) {}
   void moduleInit() override {
+    HHVM_RC_INT(MSG_IPC_NOWAIT, k_MSG_IPC_NOWAIT);
+    HHVM_RC_INT(MSG_EAGAIN,     EAGAIN);
+    HHVM_RC_INT(MSG_ENOMSG,     ENOMSG);
+    HHVM_RC_INT(MSG_NOERROR,    k_MSG_NOERROR);
+    HHVM_RC_INT(MSG_EXCEPT,     k_MSG_EXCEPT);
+
     HHVM_FE(ftok);
     HHVM_FE(msg_get_queue);
     HHVM_FE(msg_queue_exists);
@@ -129,8 +135,9 @@ public:
   int id;
 
   CLASSNAME_IS("MessageQueue");
-  // overriding ResourceData
-  virtual const String& o_getClassNameHook() const { return classnameof(); }
+  const String& o_getClassNameHook() const override {
+    return classnameof();
+  }
 };
 
 Variant HHVM_FUNCTION(msg_get_queue,
@@ -145,7 +152,7 @@ Variant HHVM_FUNCTION(msg_get_queue,
       return false;
     }
   }
-  auto q = makeSmartPtr<MessageQueue>();
+  auto q = req::make<MessageQueue>();
   q->key = key;
   q->id = id;
   return Variant(std::move(q));
@@ -264,7 +271,7 @@ bool HHVM_FUNCTION(msg_send,
     int err = errno;
     raise_warning("Unable to send message: %s",
                     folly::errnoStr(err).c_str());
-    errorcode = err;
+    errorcode.assignIfRef(err);
     return false;
   }
   return true;
@@ -303,18 +310,18 @@ bool HHVM_FUNCTION(msg_receive,
 
   int result = msgrcv(q->id, buffer, maxsize, desiredmsgtype, realflags);
   if (result < 0) {
-    errorcode = errno;
+    errorcode.assignIfRef(errno);
     return false;
   }
 
-  msgtype = (int)buffer->mtype;
+  msgtype.assignIfRef((int)buffer->mtype);
   if (unserialize) {
     const char *bufText = (const char *)buffer->mtext;
-    uint bufLen = strlen(bufText);
+    uint32_t bufLen = strlen(bufText);
     VariableUnserializer vu(bufText, bufLen,
                             VariableUnserializer::Type::Serialize);
     try {
-      message = vu.unserialize();
+      message.assignIfRef(vu.unserialize());
     } catch (ResourceExceededException&) {
       throw;
     } catch (Exception&) {
@@ -322,7 +329,7 @@ bool HHVM_FUNCTION(msg_receive,
       return false;
     }
   } else {
-    message = String((const char *)buffer->mtext);
+    message.assignIfRef(String((const char *)buffer->mtext));
   }
 
   return true;
@@ -372,7 +379,7 @@ struct Semaphore : SweepableResourceData {
 
     if (!acquire && count == 0) {
       raise_warning("SysV semaphore %d (key 0x%x) is not currently acquired",
-                      o_getId(), key);
+                    getId(), key);
       return false;
     }
 
@@ -518,7 +525,7 @@ Variant HHVM_FUNCTION(sem_get,
     }
   }
 
-  auto sem_ptr = makeSmartPtr<Semaphore>();
+  auto sem_ptr = req::make<Semaphore>();
   sem_ptr->key   = key;
   sem_ptr->semid = semid;
   sem_ptr->count = 0;
@@ -539,13 +546,13 @@ bool HHVM_FUNCTION(sem_remove,
   un.buf = &buf;
   if (semctl(sem_ptr->semid, 0, IPC_STAT, un) < 0) {
     raise_warning("SysV semaphore %d does not (any longer) exist",
-                    sem_identifier->o_getId());
+                    sem_identifier->getId());
     return false;
   }
 
   if (semctl(sem_ptr->semid, 0, IPC_RMID, un) < 0) {
     raise_warning("failed for SysV sempphore %d: %s",
-                    sem_identifier->o_getId(),
+                    sem_identifier->getId(),
                     folly::errnoStr(errno).c_str());
     return false;
   }

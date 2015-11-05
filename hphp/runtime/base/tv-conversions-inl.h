@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,7 +38,7 @@ inline bool cellToBool(Cell cell) {
     case KindOfString:        return cell.m_data.pstr->toBoolean();
     case KindOfArray:         return !!cell.m_data.parr->size();
     case KindOfObject:        return cell.m_data.pobj->toBoolean();
-    case KindOfResource:      return cell.m_data.pres->o_toBoolean();
+    case KindOfResource:      return cell.m_data.pres->data()->o_toBoolean();
     case KindOfRef:
     case KindOfClass:         break;
   }
@@ -58,7 +58,7 @@ inline int64_t cellToInt(Cell cell) {
     case KindOfString:        return cell.m_data.pstr->toInt64(10);
     case KindOfArray:         return cell.m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return cell.m_data.pobj->toInt64();
-    case KindOfResource:      return cell.m_data.pres->o_toInt64();
+    case KindOfResource:      return cell.m_data.pres->data()->o_toInt64();
     case KindOfRef:
     case KindOfClass:         break;
   }

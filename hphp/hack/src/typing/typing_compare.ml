@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -20,9 +20,10 @@
  *    either redeclared or checked again.
  *)
 (*****************************************************************************)
-open Utils
+open Core
 open Typing_defs
 open Typing_deps
+open Utils
 
 module Env = Typing_env
 module ShapeMap = Nast.ShapeMap
@@ -113,7 +114,7 @@ module CompareTypes = struct
     | Taccess (root_ty1, ids1), Taccess (root_ty2, ids2)
       when List.length ids1 = List.length ids2 ->
         let acc = ty acc root_ty1 root_ty2 in
-        List.fold_left2 string_id acc ids1 ids2
+        List.fold2_exn ~f:string_id ~init:acc ids1 ids2
     | Ttuple tyl1, Ttuple tyl2 ->
         tyl acc tyl1 tyl2
     | Tshape (fields_known1, fdm1), Tshape (fields_known2, fdm2) ->
@@ -123,7 +124,16 @@ module CompareTypes = struct
           | Some v2 ->
               ty acc v1 v2
         end fdm1 acc in
-        subst, same && (fields_known1 = fields_known2)
+        begin match fields_known1, fields_known2 with
+          | FieldsPartiallyKnown unset_fields1,
+            FieldsPartiallyKnown unset_fields2 ->
+              ShapeMap.fold begin fun name unset_pos1 acc ->
+                match ShapeMap.get name unset_fields2 with
+                  | None -> default
+                  | Some unset_pos2 -> pos acc unset_pos1 unset_pos2
+               end unset_fields1 (subst, same)
+          | _ -> subst, same && (fields_known1 = fields_known2)
+        end
     | (Tany | Tmixed | Tarray (_, _) | Tfun _ | Taccess (_, _) | Tgeneric (_, _)
        | Toption _ | Tprim _ | Tshape _| Tapply (_, _) | Ttuple _ | Tthis
       ), _ -> default
@@ -131,7 +141,7 @@ module CompareTypes = struct
   and tyl acc tyl1 tyl2 =
     if List.length tyl1 <> List.length tyl2
     then default
-    else List.fold_left2 ty acc tyl1 tyl2
+    else List.fold2_exn ~f:ty ~init:acc tyl1 tyl2
 
   and ty_opt acc ty1 ty2 = cmp_opt ty acc ty1 ty2
 
@@ -163,7 +173,7 @@ module CompareTypes = struct
   and fun_params acc params1 params2 =
     if List.length params1 <> List.length params2
     then default
-    else List.fold_left2 fun_param acc params1 params2
+    else List.fold2_exn ~f:fun_param ~init:acc params1 params2
 
   and fun_param acc (name1, ty1) (name2, ty2) =
     if name1 <> name2
@@ -173,7 +183,7 @@ module CompareTypes = struct
   and tparam_list acc tpl1 tpl2 =
     if List.length tpl1 <> List.length tpl2
     then default
-    else List.fold_left2 tparam acc tpl1 tpl2
+    else List.fold2_exn ~f:tparam ~init:acc tpl1 tpl2
 
   and variance acc x1 x2 =
     match x1, x2 with
@@ -266,7 +276,7 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
   let rec reason = function
     | Rnone                  -> Rnone
     | Rwitness p             -> Rwitness (pos p)
-    | Ridx p                 -> Ridx (pos p)
+    | Ridx (p, r)            -> Ridx (pos p, reason r)
     | Ridx_vector p          -> Ridx_vector (pos p)
     | Rappend p              -> Rappend (pos p)
     | Rfield p               -> Rfield (pos p)
@@ -275,6 +285,7 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
     | Raccess p              -> Raccess (pos p)
     | Rarith p               -> Rarith (pos p)
     | Rarith_ret p           -> Rarith_ret (pos p)
+    | Rarray_plus_ret p      -> Rarray_plus_ret (pos p)
     | Rstring2 p             -> Rstring2 (pos p)
     | Rcomp p                -> Rcomp (pos p)
     | Rconcat p              -> Rconcat (pos p)
@@ -314,7 +325,8 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
     | Rexpr_dep_type (r, p, n) -> Rexpr_dep_type (reason r, pos p, n)
     | Rnullsafe_op p           -> Rnullsafe_op (pos p)
     | Rtconst_no_cstr (p, s)   -> Rtconst_no_cstr (pos p, s)
-
+    | Rused_as_map p           -> Rused_as_map (pos p)
+    | Rused_as_shape p         -> Rused_as_shape (pos p)
   let string_id (p, x) = pos p, x
 
   let rec ty (p, x) =
@@ -327,16 +339,16 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
     | Tarray (ty1, ty2)    -> Tarray (ty_opt ty1, ty_opt ty2)
     | Tprim _ as x         -> x
     | Tgeneric (s, cstr_opt) -> Tgeneric (s, constraint_ cstr_opt)
-    | Ttuple tyl           -> Ttuple (List.map (ty) tyl)
+    | Ttuple tyl           -> Ttuple (List.map tyl ty)
     | Toption x            -> Toption (ty x)
     | Tfun ft              -> Tfun (fun_type ft)
-    | Tapply (sid, xl)     -> Tapply (string_id sid, List.map (ty) xl)
+    | Tapply (sid, xl)     -> Tapply (string_id sid, List.map xl ty)
     | Taccess (root_ty, ids) ->
-        Taccess (ty root_ty, List.map string_id ids)
+        Taccess (ty root_ty, List.map ids string_id)
     | Tshape (fields_known, fdm) ->
         Tshape (fields_known, ShapeMap.map ty fdm)
 
-  and ty_opt x = opt_map ty x
+  and ty_opt x = Option.map x ty
 
   and constraint_ = function
     | None -> None
@@ -344,8 +356,8 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
 
   and fun_type ft =
     { ft with
-      ft_tparams = List.map type_param ft.ft_tparams   ;
-      ft_params  = List.map fun_param ft.ft_params     ;
+      ft_tparams = List.map ft.ft_tparams type_param   ;
+      ft_params  = List.map ft.ft_params fun_param     ;
       ft_ret     = ty ft.ft_ret                        ;
       ft_pos     = pos ft.ft_pos                       ;
     }
@@ -384,17 +396,18 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
       tc_extends               = tc.tc_extends                        ;
       tc_req_ancestors         = tc.tc_req_ancestors                  ;
       tc_req_ancestors_extends = tc.tc_req_ancestors_extends          ;
-      tc_tparams               = List.map type_param tc.tc_tparams    ;
+      tc_tparams               = List.map tc.tc_tparams type_param    ;
       tc_consts                = SMap.map class_elt tc.tc_consts      ;
       tc_typeconsts            = SMap.map typeconst tc.tc_typeconsts  ;
       tc_props                 = SMap.map class_elt tc.tc_props       ;
       tc_sprops                = SMap.map class_elt tc.tc_sprops      ;
       tc_methods               = SMap.map class_elt tc.tc_methods     ;
       tc_smethods              = SMap.map class_elt tc.tc_smethods    ;
-      tc_construct             = opt_map class_elt (fst tc.tc_construct), (snd tc.tc_construct);
+      tc_construct             = Option.map (fst tc.tc_construct) class_elt,
+                                   (snd tc.tc_construct);
       tc_ancestors             = SMap.map ty tc.tc_ancestors          ;
       tc_user_attributes       = tc.tc_user_attributes                ;
-      tc_enum_type             = opt_map enum_type tc.tc_enum_type    ;
+      tc_enum_type             = Option.map tc.tc_enum_type enum_type ;
     }
 
   and enum_type te =
@@ -405,7 +418,7 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
   and typedef = function
     | Typing_heap.Typedef.Error as x -> x
     | Typing_heap.Typedef.Ok (is_abstract, tparams, tcstr, h, pos) ->
-        let tparams = List.map type_param tparams in
+        let tparams = List.map tparams type_param in
         let tcstr = ty_opt tcstr in
         let tdef = (is_abstract, tparams, tcstr, ty h, pos) in
         Typing_heap.Typedef.Ok tdef
@@ -497,7 +510,7 @@ module ClassDiff = struct
     let typeconsts_diff = smap class1.tc_typeconsts class2.tc_typeconsts in
     let is_unchanged = is_unchanged && SSet.is_empty typeconsts_diff in
     let acc =
-      add_inverted_deps acc (fun x -> Dep.Class (cid^"::"^x)) typeconsts_diff in
+      add_inverted_deps acc (fun x -> Dep.Const (cid, x)) typeconsts_diff in
 
     acc, is_unchanged
 
@@ -548,8 +561,8 @@ let rec get_extend_deps_ trace cid_hash to_redecl =
       then
         let to_redecl = DepSet.add obj acc in
         get_extend_deps_ trace obj to_redecl
-    else to_redecl
-  end ideps to_redecl
+      else to_redecl
+    end ideps to_redecl
   end
 
 (*****************************************************************************)
@@ -707,10 +720,10 @@ let get_classes_psubst old_classes new_classes classes =
     | Some class1, Some class2 ->
         let subst_list, same = CompareTypes.class_ ([], true) class1 class2 in
         if same then begin
-          List.iter begin fun (pos1, pos2) ->
+          List.iter subst_list begin fun (pos1, pos2) ->
             is_empty := false;
             Hashtbl.add subst pos1 pos2
-          end subst_list
+          end
         end
     | _ -> ()
   end classes;

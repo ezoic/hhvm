@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -58,7 +58,7 @@ namespace HPHP {
  */
 
 inline char* memcpy8(void* dst, const void* src, uint32_t len) {
-#if defined(__x86_64__) && !defined(__APPLE__)
+#if defined(__x86_64__) && !defined(__CYGWIN__) && !defined(__MINGW__)
   return reinterpret_cast<char*>(_memcpy8(dst, src, len));
 #else
   memcpy(dst, src, len);
@@ -68,7 +68,7 @@ inline char* memcpy8(void* dst, const void* src, uint32_t len) {
 
 inline char* memcpy16(void* dst, const void* src, uint32_t len) {
   assertx(len > 0 && len % 16 == 0);
-#if defined(__x86_64__) && !defined(__APPLE__)
+#if defined(__x86_64__) && !defined(__CYGWIN__) && !defined(__MINGW__)
   return reinterpret_cast<char*>(_memcpy16(dst, src, len));
 #else
   return reinterpret_cast<char*>(memcpy(dst, src, len));
@@ -77,7 +77,7 @@ inline char* memcpy16(void* dst, const void* src, uint32_t len) {
 
 inline void bcopy32(void* dst, const void* src, uint32_t len) {
   assertx(len >= 32);
-#if defined(__x86_64__) && !defined(__APPLE__)
+#if defined(__x86_64__) && !defined(__CYGWIN__) && !defined(__MINGW__)
   _bcopy32(dst, src, len);
 #else
   memcpy(dst, src, len / 32 * 32);
@@ -86,7 +86,7 @@ inline void bcopy32(void* dst, const void* src, uint32_t len) {
 
 inline void bcopy_in_64(void* dst, const void* src, uint32_t lenIn64) {
   assertx(lenIn64 != 0);
-#if defined(__x86_64__) && !defined(__APPLE__)
+#if defined(__x86_64__) && !defined(__CYGWIN__) && !defined(__MINGW__)
   _bcopy_in_64(dst, src, lenIn64);
 #else
   memcpy(dst, src, lenIn64 * 64);
@@ -152,9 +152,11 @@ inline void memcpy16_inline(void* dst, const void* src, uint64_t len) {
  * terminator.
  *
  * Assumes it can load more words than the size to compare (this is often
- * possible in HPHP when you know you are dealing with smart allocated memory).
+ * possible in HPHP when you know you dealing with request-allocated memory).
  * The final word compare is adjusted to handle the slack in lenBytes so only
  * the bytes we care about are compared.
+ *
+ * Assumes that the the buffer addresses are 8-bytes aligned.
  */
 ALWAYS_INLINE
 bool wordsame(const void* mem1, const void* mem2, uint32_t lenBytes) {
@@ -162,10 +164,7 @@ bool wordsame(const void* mem1, const void* mem2, uint32_t lenBytes) {
   auto constexpr W = sizeof(T);
 
   assert(reinterpret_cast<const uintptr_t>(mem1) % W == 0);
-  // We would like to make sure `mem2' is also aligned.  But `strintern_eq' has
-  // always been using `wordsame()' on non-aligned pointers, and this doesn't
-  // seem to cause crashes in practice.
-  // assert(reinterpret_cast<const uintptr_t>(mem2) % W == 0);
+  assert(reinterpret_cast<const uintptr_t>(mem2) % W == 0);
 
   // Inverse of lenBytes.  Do the negation here to avoid doing it later on the
   // critical path.

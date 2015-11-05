@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -85,7 +85,7 @@ public:
   /**
    * Starts/stops a debugger client.
    */
-  static SmartPtr<Socket> Start(const DebuggerClientOptions &options);
+  static req::ptr<Socket> Start(const DebuggerClientOptions &options);
   static void Stop();
 
   /**
@@ -138,8 +138,10 @@ public:
   static void AdjustScreenMetrics();
   static bool Match(const char *input, const char *cmd);
   static bool IsValidNumber(const std::string &arg);
-  static String FormatVariable(const Variant& v, int maxlen = 80,
-                               char format = 'd');
+
+  static String FormatVariable(const Variant& v, char format = 'd');
+  static String FormatVariableWithLimit(const Variant& v, int maxlen);
+
   static String FormatInfoVec(const IDebuggable::InfoVec &info,
                               int *nameLen = nullptr);
   static String FormatTitle(const char *title);
@@ -161,17 +163,16 @@ public:
   /**
    * Output functions
    */
-  void print  (const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
-  void help   (const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
-  void info   (const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
-  void output (const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
-  void error  (const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
-
-  void print  (const std::string &s);
-  void help   (const std::string &s);
-  void info   (const std::string &s);
-  void output (const std::string &s);
-  void error  (const std::string &s);
+  void print  (ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
+  void help   (ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
+  void info   (ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
+  void output (ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
+  void error  (ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(2,3);
 
   void print  (const String& s);
   void help   (const String& s);
@@ -179,11 +180,23 @@ public:
   void output (const String& s);
   void error  (const String& s);
 
+  void print  (const std::string& s);
+  void help   (const std::string& s);
+  void info   (const std::string& s);
+  void output (const std::string& s);
+  void error  (const std::string& s);
+
+  void print  (folly::StringPiece);
+  void help   (folly::StringPiece);
+  void info   (folly::StringPiece);
+  void output (folly::StringPiece);
+  void error  (folly::StringPiece);
+
   bool code(const String& source, int lineFocus = 0, int line1 = 0,
             int line2 = 0,
             int charFocus0 = 0, int lineFocus1 = 0, int charFocus1 = 0);
   void shortCode(BreakPointInfoPtr bp);
-  char ask(const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
+  char ask(ATTRIBUTE_PRINTF_STRING const char *fmt, ...) ATTRIBUTE_PRINTF(2,3);
 
   std::string wrap(const std::string &s);
   void helpTitle(const char *title);
@@ -472,7 +485,9 @@ private:
   int  checkEvalEnd();
   void processTakeCode();
   bool processEval();
-  DebuggerCommand *createCommand();
+  DebuggerCommandPtr createCommand();
+  template<class T> DebuggerCommandPtr new_cmd(const char* name);
+  template<class T> DebuggerCommandPtr match_cmd(const char* name);
 
   void updateLiveLists();
   void promptFunctionPrototype();
@@ -490,7 +505,7 @@ private:
   // connections
   void closeAllConnections();
   void switchMachine(std::shared_ptr<DMachineInfo> machine);
-  SmartPtr<Socket> connectLocal();
+  req::ptr<Socket> connectLocal();
   bool connectRemote(const std::string &host, int port);
   bool tryConnect(const std::string &host, int port, bool clearmachines);
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -39,39 +39,6 @@ namespace HPHP {
 
 #define MIN_KEY_LENGTH          384
 
-#define OPENSSL_ALGO_SHA1       1
-#define OPENSSL_ALGO_MD5        2
-#define OPENSSL_ALGO_MD4        3
-#ifdef HAVE_OPENSSL_MD2_H
-#define OPENSSL_ALGO_MD2        4
-#endif
-#define OPENSSL_ALGO_DSS1       5
-#if OPENSSL_VERSION_NUMBER >= 0x0090708fL
-#define OPENSSL_ALGO_SHA224     6
-#define OPENSSL_ALGO_SHA256     7
-#define OPENSSL_ALGO_SHA384     8
-#define OPENSSL_ALGO_SHA512     9
-#define OPENSSL_ALGO_RMD160     10
-#endif
-
-enum php_openssl_key_type {
-  OPENSSL_KEYTYPE_RSA,
-  OPENSSL_KEYTYPE_DSA,
-  OPENSSL_KEYTYPE_DH,
-  OPENSSL_KEYTYPE_DEFAULT = OPENSSL_KEYTYPE_RSA,
-#ifdef EVP_PKEY_EC
-  OPENSSL_KEYTYPE_EC = OPENSSL_KEYTYPE_DH +1
-#endif
-};
-enum php_openssl_cipher_type {
-  PHP_OPENSSL_CIPHER_RC2_40,
-  PHP_OPENSSL_CIPHER_RC2_128,
-  PHP_OPENSSL_CIPHER_RC2_64,
-  PHP_OPENSSL_CIPHER_DES,
-  PHP_OPENSSL_CIPHER_3DES,
-  PHP_OPENSSL_CIPHER_DEFAULT = PHP_OPENSSL_CIPHER_RC2_40
-};
-
 // bitfields
 const int64_t k_OPENSSL_RAW_DATA = 1;
 const int64_t k_OPENSSL_ZERO_PADDING = 2;
@@ -79,44 +46,8 @@ const int64_t k_OPENSSL_NO_PADDING = 3;
 const int64_t k_OPENSSL_PKCS1_OAEP_PADDING = 4;
 
 // exported constants
-const int64_t k_OPENSSL_ALGO_SHA1 = 1;
-const int64_t k_OPENSSL_ALGO_MD5 = 2;
-const int64_t k_OPENSSL_ALGO_MD4 = 3;
-const int64_t k_OPENSSL_ALGO_MD2 = 4;
-const int64_t k_OPENSSL_ALGO_DSS1 = 5;
-const int64_t k_OPENSSL_ALGO_SHA224 = 6;
-const int64_t k_OPENSSL_ALGO_SHA256 = 7;
-const int64_t k_OPENSSL_ALGO_SHA384 = 8;
-const int64_t k_OPENSSL_ALGO_SHA512 = 9;
-const int64_t k_OPENSSL_ALGO_RMD160 = 10;
-
-const int64_t k_OPENSSL_CIPHER_RC2_40 = 0;
-const int64_t k_OPENSSL_CIPHER_RC2_128 = 1;
-const int64_t k_OPENSSL_CIPHER_RC2_64 = 2;
-const int64_t k_OPENSSL_CIPHER_DES = 3;
-const int64_t k_OPENSSL_CIPHER_3DES = 4;
-
-const int64_t k_OPENSSL_KEYTYPE_RSA = 0;
-const int64_t k_OPENSSL_KEYTYPE_DSA = 1;
-const int64_t k_OPENSSL_KEYTYPE_DH = 2;
-const int64_t k_OPENSSL_KEYTYPE_EC = 3;
-
 const int64_t k_OPENSSL_SSLV23_PADDING = 2;
 const int64_t k_OPENSSL_PKCS1_PADDING = 1;
-
-const int64_t k_OPENSSL_VERSION_NUMBER = OPENSSL_VERSION_NUMBER;
-const StaticString k_OPENSSL_VERSION_TEXT(OPENSSL_VERSION_TEXT);
-
-// PKCS
-const int64_t k_PKCS7_TEXT = 1;
-const int64_t k_PKCS7_NOCERTS = 2;
-const int64_t k_PKCS7_NOSIGS = 4;
-const int64_t k_PKCS7_NOCHAIN = 8;
-const int64_t k_PKCS7_NOINTERN = 16;
-const int64_t k_PKCS7_NOVERIFY = 32;
-const int64_t k_PKCS7_DETACHED = 64;
-const int64_t k_PKCS7_BINARY = 128;
-const int64_t k_PKCS7_NOATTR = 256;
 
 static char default_ssl_conf_filename[PATH_MAX];
 
@@ -229,7 +160,7 @@ public:
    *   passphrase - NULL causes a passphrase prompt to be emitted in
    *   the Apache error log!
    */
-  static SmartPtr<Key> Get(const Variant& var, bool public_key,
+  static req::ptr<Key> Get(const Variant& var, bool public_key,
                            const char *passphrase = nullptr) {
     if (var.is(KindOfArray)) {
       Array arr = var.toArray();
@@ -245,9 +176,9 @@ public:
     return GetHelper(var, public_key, passphrase);
   }
 
-  static SmartPtr<Key> GetHelper(const Variant& var, bool public_key,
+  static req::ptr<Key> GetHelper(const Variant& var, bool public_key,
                                  const char *passphrase) {
-    SmartPtr<Certificate> ocert;
+    req::ptr<Certificate> ocert;
     EVP_PKEY *key = NULL;
 
     if (var.isResource()) {
@@ -295,7 +226,7 @@ public:
     }
 
     if (key) {
-      return makeSmartPtr<Key>(key);
+      return req::make<Key>(key);
     }
 
     return nullptr;
@@ -328,7 +259,7 @@ public:
 
   DECLARE_RESOURCE_ALLOCATION(CSRequest)
 
-  static SmartPtr<CSRequest> Get(const Variant& var) {
+  static req::ptr<CSRequest> Get(const Variant& var) {
     auto csr = cast_or_null<CSRequest>(GetRequest(var));
     if (!csr || !csr->m_csr) {
       raise_warning("cannot get CSR");
@@ -338,7 +269,7 @@ public:
   }
 
 private:
-  static SmartPtr<CSRequest> GetRequest(const Variant& var) {
+  static req::ptr<CSRequest> GetRequest(const Variant& var) {
     if (var.isResource()) {
       return dyn_cast_or_null<CSRequest>(var);
     }
@@ -349,7 +280,7 @@ private:
       X509_REQ *csr = PEM_read_bio_X509_REQ(in, NULL,NULL,NULL);
       BIO_free(in);
       if (csr) {
-        return makeSmartPtr<CSRequest>(csr);
+        return req::make<CSRequest>(csr);
       }
     }
     return nullptr;
@@ -982,7 +913,7 @@ bool HHVM_FUNCTION(openssl_csr_export, const Variant& csr, VRefParam out,
   if (PEM_write_bio_X509_REQ(bio_out, pcsr->csr())) {
     BUF_MEM *bio_buf;
     BIO_get_mem_ptr(bio_out, &bio_buf);
-    out = String((char*)bio_buf->data, bio_buf->length, CopyString);
+    out.assignIfRef(String((char*)bio_buf->data, bio_buf->length, CopyString));
     BIO_free(bio_out);
     return true;
   }
@@ -995,7 +926,7 @@ Variant HHVM_FUNCTION(openssl_csr_get_public_key, const Variant& csr) {
   auto pcsr = CSRequest::Get(csr);
   if (!pcsr) return false;
 
-  return Variant(makeSmartPtr<Key>(X509_REQ_get_pubkey(pcsr->csr())));
+  return Variant(req::make<Key>(X509_REQ_get_pubkey(pcsr->csr())));
 }
 
 Variant HHVM_FUNCTION(openssl_csr_get_subject, const Variant& csr,
@@ -1017,7 +948,7 @@ Variant HHVM_FUNCTION(openssl_csr_new,
   struct php_x509_request req;
   memset(&req, 0, sizeof(req));
 
-  SmartPtr<Key> okey;
+  req::ptr<Key> okey;
   X509_REQ *csr = NULL;
   std::vector<String> strings;
   if (php_openssl_parse_config(&req, configargs.toArray(), strings)) {
@@ -1031,7 +962,7 @@ Variant HHVM_FUNCTION(openssl_csr_new,
     if (req.priv_key == NULL) {
       req.generatePrivateKey();
       if (req.priv_key) {
-        okey = makeSmartPtr<Key>(req.priv_key);
+        okey = req::make<Key>(req.priv_key);
       }
     }
     if (req.priv_key == NULL) {
@@ -1047,19 +978,20 @@ Variant HHVM_FUNCTION(openssl_csr_new,
         /* Add extensions */
         if (req.request_extensions_section &&
             !X509V3_EXT_REQ_add_conf(req.req_config, &ext_ctx,
-                                     (char*)req.request_extensions_section, csr)) {
+                                     (char*)req.request_extensions_section,
+                                     csr)) {
           raise_warning("Error loading extension section %s",
                           req.request_extensions_section);
         } else {
           ret = true;
           if (X509_REQ_sign(csr, req.priv_key, req.digest)) {
-            ret = makeSmartPtr<CSRequest>(csr);
+            ret = req::make<CSRequest>(csr);
             csr = NULL;
           } else {
             raise_warning("Error signing request");
           }
 
-          privkey = okey;
+          privkey.assignIfRef(Variant(okey));
         }
       }
     }
@@ -1079,7 +1011,7 @@ Variant HHVM_FUNCTION(openssl_csr_sign, const Variant& csr,
   auto pcsr = CSRequest::Get(csr);
   if (!pcsr) return false;
 
-  SmartPtr<Certificate> ocert;
+  req::ptr<Certificate> ocert;
   if (!cacert.isNull()) {
     ocert = Certificate::Get(cacert);
     if (!ocert) {
@@ -1102,7 +1034,7 @@ Variant HHVM_FUNCTION(openssl_csr_sign, const Variant& csr,
     return false;
   }
 
-  SmartPtr<Certificate> onewcert;
+  req::ptr<Certificate> onewcert;
   struct php_x509_request req;
   memset(&req, 0, sizeof(req));
   Variant ret = false;
@@ -1136,7 +1068,7 @@ Variant HHVM_FUNCTION(openssl_csr_sign, const Variant& csr,
     raise_warning("No memory");
     goto cleanup;
   }
-  onewcert = makeSmartPtr<Certificate>(new_cert);
+  onewcert = req::make<Certificate>(new_cert);
   /* Version 3 cert */
   if (!X509_set_version(new_cert, 2)) {
     goto cleanup;
@@ -1226,7 +1158,7 @@ bool HHVM_FUNCTION(openssl_open, const String& sealed_data, VRefParam open_data,
       len1 + len2 == 0) {
     return false;
   }
-  open_data = s.setSize(len1 + len2);
+  open_data.assignIfRef(s.setSize(len1 + len2));
   return true;
 }
 
@@ -1320,7 +1252,7 @@ bool HHVM_FUNCTION(openssl_pkcs12_export, const Variant& x509, VRefParam out,
   if (ret) {
     BUF_MEM *bio_buf;
     BIO_get_mem_ptr(bio_out, &bio_buf);
-    out = String((char*)bio_buf->data, bio_buf->length, CopyString);
+    out.assignIfRef(String((char*)bio_buf->data, bio_buf->length, CopyString));
   }
   BIO_free(bio_out);
   return ret;
@@ -1332,7 +1264,6 @@ const StaticString
 
 bool HHVM_FUNCTION(openssl_pkcs12_read, const String& pkcs12, VRefParam certs,
                                         const String& pass) {
-  Variant &vcerts = certs;
   bool ret = false;
   PKCS12 *p12 = NULL;
 
@@ -1346,8 +1277,10 @@ bool HHVM_FUNCTION(openssl_pkcs12_read, const String& pkcs12, VRefParam certs,
     X509 *cert = NULL;
     STACK_OF(X509) *ca = NULL;
     if (PKCS12_parse(p12, pass.data(), &pkey, &cert, &ca)) {
-      vcerts = Array::Create();
-
+      Variant vcerts = Array::Create();
+      SCOPE_EXIT {
+        certs.assignIfRef(vcerts);
+      };
       BIO *bio_out = BIO_new(BIO_s_mem());
       if (PEM_write_bio_X509(bio_out, cert)) {
         BUF_MEM *bio_buf;
@@ -1402,7 +1335,7 @@ bool HHVM_FUNCTION(openssl_pkcs7_decrypt, const String& infilename,
   bool ret = false;
   BIO *in = NULL, *out = NULL, *datain = NULL;
   PKCS7 *p7 = NULL;
-  SmartPtr<Key> okey;
+  req::ptr<Key> okey;
 
   auto ocert = Certificate::Get(recipcert);
   if (!ocert) {
@@ -1533,8 +1466,8 @@ bool HHVM_FUNCTION(openssl_pkcs7_sign, const String& infilename,
   STACK_OF(X509) *others = NULL;
   BIO *infile = NULL, *outfile = NULL;
   PKCS7 *p7 = NULL;
-  SmartPtr<Key> okey;
-  SmartPtr<Certificate> ocert;
+  req::ptr<Key> okey;
+  req::ptr<Certificate> ocert;
 
   if (!extracerts.empty()) {
     others = load_all_certs_from_file(extracerts.data());
@@ -1769,7 +1702,7 @@ bool HHVM_FUNCTION(openssl_pkey_export, const Variant& key, VRefParam out,
   if (ret) {
     char *bio_mem_ptr;
     long bio_mem_len = BIO_get_mem_data(bio_out, &bio_mem_ptr);
-    out = String(bio_mem_ptr, bio_mem_len, CopyString);
+    out.assignIfRef(String(bio_mem_ptr, bio_mem_len, CopyString));
   }
   BIO_free(bio_out);
   return ret;
@@ -1812,10 +1745,10 @@ static void add_bignum_as_string(Array &arr,
     return;
   }
   int num_bytes = BN_num_bytes(bn);
-  unsigned char *out = (unsigned char *)smart_malloc(num_bytes);
+  unsigned char *out = (unsigned char *)req::malloc(num_bytes);
   BN_bn2bin(bn, out);
   arr.set(key, String((const char *)out, num_bytes, CopyString));
-  smart_free(out);
+  req::free(out);
 }
 
 Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
@@ -1837,7 +1770,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
   switch (EVP_PKEY_type(pkey->type)) {
   case EVP_PKEY_RSA:
   case EVP_PKEY_RSA2:
-    ktype = k_OPENSSL_KEYTYPE_RSA;
+    ktype = OPENSSL_KEYTYPE_RSA;
     assert(rsa);
     add_bignum_as_string(details, s_n, rsa->n);
     add_bignum_as_string(details, s_e, rsa->e);
@@ -1853,7 +1786,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
   case EVP_PKEY_DSA2:
   case EVP_PKEY_DSA3:
   case EVP_PKEY_DSA4:
-    ktype = k_OPENSSL_KEYTYPE_DSA;
+    ktype = OPENSSL_KEYTYPE_DSA;
     assert(dsa);
     add_bignum_as_string(details, s_p, dsa->p);
     add_bignum_as_string(details, s_q, dsa->q);
@@ -1863,7 +1796,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     ret.set(s_dsa, details);
     break;
   case EVP_PKEY_DH:
-    ktype = k_OPENSSL_KEYTYPE_DH;
+    ktype = OPENSSL_KEYTYPE_DH;
     assert(dh);
     add_bignum_as_string(details, s_p, dh->p);
     add_bignum_as_string(details, s_g, dh->g);
@@ -1872,7 +1805,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     ret.set(s_dh, details);
     break;
 #ifdef EVP_PKEY_EC
-  case EVP_PKEY_EC:      ktype = k_OPENSSL_KEYTYPE_EC;    break;
+  case EVP_PKEY_EC:      ktype = OPENSSL_KEYTYPE_EC;    break;
 #endif
   }
   ret.set(s_type, ktype);
@@ -1898,7 +1831,7 @@ Resource HHVM_FUNCTION(openssl_pkey_new,
   std::vector<String> strings;
   if (php_openssl_parse_config(&req, configargs.toArray(), strings) &&
       req.generatePrivateKey()) {
-    ret = Resource(makeSmartPtr<Key>(req.priv_key));
+    ret = Resource(req::make<Key>(req.priv_key));
   }
 
   php_openssl_dispose_config(&req);
@@ -1938,7 +1871,7 @@ bool HHVM_FUNCTION(openssl_private_decrypt, const String& data,
   }
 
   if (successful) {
-    decrypted = s.setSize(cryptedlen);
+    decrypted.assignIfRef(s.setSize(cryptedlen));
     return true;
   }
 
@@ -1974,7 +1907,7 @@ bool HHVM_FUNCTION(openssl_private_encrypt, const String& data,
   }
 
   if (successful) {
-    crypted = s.setSize(cryptedlen);
+    crypted.assignIfRef(s.setSize(cryptedlen));
     return true;
   }
 
@@ -2014,7 +1947,7 @@ bool HHVM_FUNCTION(openssl_public_decrypt, const String& data,
   }
 
   if (successful) {
-    decrypted = s.setSize(cryptedlen);
+    decrypted.assignIfRef(s.setSize(cryptedlen));
     return true;
   }
 
@@ -2050,7 +1983,7 @@ bool HHVM_FUNCTION(openssl_public_encrypt, const String& data,
   }
 
   if (successful) {
-    crypted = s.setSize(cryptedlen);
+    crypted.assignIfRef(s.setSize(cryptedlen));
     return true;
   }
 
@@ -2087,7 +2020,7 @@ Variant HHVM_FUNCTION(openssl_seal, const String& data, VRefParam sealed_data,
   // holder is needed to make sure none of the Keys get deleted prematurely.
   // The pkeys array points to elements inside of Keys returned from Key::Get()
   // which may be newly allocated and have no other owners.
-  std::vector<SmartPtr<Key>> holder;
+  std::vector<req::ptr<Key>> holder;
 
   /* get the public keys we are using to seal this data */
   bool ret = true;
@@ -2131,7 +2064,7 @@ Variant HHVM_FUNCTION(openssl_seal, const String& data, VRefParam sealed_data,
 
   EVP_SealFinal(&ctx, buf + len1, &len2);
   if (len1 + len2 > 0) {
-    sealed_data = s.setSize(len1 + len2);
+    sealed_data.assignIfRef(s.setSize(len1 + len2));
 
     Array ekeys;
     for (int i = 0; i < nkeys; i++) {
@@ -2139,7 +2072,7 @@ Variant HHVM_FUNCTION(openssl_seal, const String& data, VRefParam sealed_data,
       ekeys.append(String((char*)eks[i], eksl[i], AttachString));
       eks[i] = NULL;
     }
-    env_keys = ekeys;
+    env_keys.assignIfRef(ekeys);
   }
 
  clean_exit:
@@ -2204,7 +2137,7 @@ bool HHVM_FUNCTION(openssl_sign, const String& data, VRefParam signature,
   EVP_SignInit(&md_ctx, mdtype);
   EVP_SignUpdate(&md_ctx, (unsigned char *)data.data(), data.size());
   if (EVP_SignFinal(&md_ctx, sigbuf, (unsigned int *)&siglen, pkey)) {
-    signature = s.setSize(siglen);
+    signature.assignIfRef(s.setSize(siglen));
 #if OPENSSL_VERSION_NUMBER >= 0x0090700fL
     EVP_MD_CTX_cleanup(&md_ctx);
 #endif
@@ -2289,7 +2222,7 @@ Variant HHVM_FUNCTION(openssl_x509_checkpurpose, const Variant& x509cert,
   int ret = -1;
   STACK_OF(X509) *untrustedchain = NULL;
   X509_STORE *pcainfo = NULL;
-  SmartPtr<Certificate> ocert;
+  req::ptr<Certificate> ocert;
 
   if (!untrustedfile.empty()) {
     untrustedchain = load_all_certs_from_file(untrustedfile.data());
@@ -2361,7 +2294,7 @@ bool HHVM_FUNCTION(openssl_x509_export, const Variant& x509, VRefParam output,
   if (ret) {
     BUF_MEM *bio_buf;
     BIO_get_mem_ptr(bio_out, &bio_buf);
-    output = String(bio_buf->data, bio_buf->length, CopyString);
+    output.assignIfRef(String(bio_buf->data, bio_buf->length, CopyString));
   }
   BIO_free(bio_out);
   return ret;
@@ -2415,6 +2348,10 @@ static time_t asn1_time_to_time_t(ASN1_UTCTIME *timestr) {
   long gmadjust = 0;
 #if HAVE_TM_GMTOFF
   gmadjust = thetime.tm_gmtoff;
+#elif defined(_MSC_VER)
+  TIME_ZONE_INFORMATION inf;
+  GetTimeZoneInformation(&inf);
+  gmadjust = thetime.tm_isdst ? inf.DaylightBias : inf.StandardBias;
 #else
   /**
    * If correcting for daylight savings time, we set the adjustment to
@@ -2614,7 +2551,7 @@ Variant HHVM_FUNCTION(openssl_x509_read, const Variant& x509certdata) {
 }
 
 Variant HHVM_FUNCTION(openssl_random_pseudo_bytes, int length,
-                                        VRefParam crypto_strong /* = false */) {
+                      VRefParam crypto_strong /* = false */) {
   if (length <= 0) {
     return false;
   }
@@ -2624,15 +2561,11 @@ Variant HHVM_FUNCTION(openssl_random_pseudo_bytes, int length,
   String s = String(length, ReserveString);
   buffer = (unsigned char *)s.mutableData();
 
-  crypto_strong = false;
-
-  int crypto_strength = 0;
-
-  if ((crypto_strength = RAND_pseudo_bytes(buffer, length)) < 0) {
-    crypto_strong = false;
+  if (RAND_bytes(buffer, length) <= 0) {
+    crypto_strong.assignIfRef(false);
     return false;
   } else {
-    crypto_strong = (bool)crypto_strength;
+    crypto_strong.assignIfRef(true);
     s.setSize(length);
     return s;
   }
@@ -2895,51 +2828,60 @@ class opensslExtension final : public Extension {
  public:
   opensslExtension() : Extension("openssl") {}
   void moduleInit() override {
-#define SSLCNS(cns) Native::registerConstant<KindOfInt64> \
-                      (makeStaticString("OPENSSL_"#cns), k_OPENSSL_##cns)
-    SSLCNS(RAW_DATA);
-    SSLCNS(ZERO_PADDING);
-    SSLCNS(ALGO_RMD160);
-    SSLCNS(ALGO_SHA512);
-    SSLCNS(ALGO_SHA384);
-    SSLCNS(ALGO_SHA256);
-    SSLCNS(ALGO_SHA224);
-    SSLCNS(ALGO_DSS1);
-    SSLCNS(ALGO_MD2);
-    SSLCNS(ALGO_MD4);
-    SSLCNS(ALGO_MD5);
-    SSLCNS(ALGO_SHA1);
-    SSLCNS(CIPHER_3DES);
-    SSLCNS(CIPHER_DES);
-    SSLCNS(CIPHER_RC2_128);
-    SSLCNS(CIPHER_RC2_40);
-    SSLCNS(CIPHER_RC2_64);
-    SSLCNS(KEYTYPE_DH);
-    SSLCNS(KEYTYPE_DSA);
-    SSLCNS(KEYTYPE_EC);
-    SSLCNS(KEYTYPE_RSA);
-    SSLCNS(NO_PADDING);
-    SSLCNS(PKCS1_OAEP_PADDING);
-    SSLCNS(PKCS1_PADDING);
-    SSLCNS(SSLV23_PADDING);
-    SSLCNS(VERSION_NUMBER);
-#undef SSLCNS
-#define PKCSCNS(cns) Native::registerConstant<KindOfInt64> \
-                       (makeStaticString("PKCS7_" #cns), k_PKCS7_##cns)
-    PKCSCNS(BINARY);
-    PKCSCNS(DETACHED);
-    PKCSCNS(NOATTR);
-    PKCSCNS(NOCERTS);
-    PKCSCNS(NOCHAIN);
-    PKCSCNS(NOINTERN);
-    PKCSCNS(NOSIGS);
-    PKCSCNS(NOVERIFY);
-    PKCSCNS(TEXT);
-#undef PKCSCNS
+    HHVM_RC_INT(OPENSSL_RAW_DATA, k_OPENSSL_RAW_DATA);
+    HHVM_RC_INT(OPENSSL_ZERO_PADDING, k_OPENSSL_ZERO_PADDING);
+    HHVM_RC_INT(OPENSSL_NO_PADDING, k_OPENSSL_NO_PADDING);
+    HHVM_RC_INT(OPENSSL_PKCS1_OAEP_PADDING, k_OPENSSL_PKCS1_OAEP_PADDING);
+    HHVM_RC_INT(OPENSSL_SSLV23_PADDING, k_OPENSSL_SSLV23_PADDING);
+    HHVM_RC_INT(OPENSSL_PKCS1_PADDING, k_OPENSSL_PKCS1_PADDING);
 
-    Native::registerConstant<KindOfString>(
-      s_OPENSSL_VERSION_TEXT.get(), k_OPENSSL_VERSION_TEXT.get()
-    );
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_SHA1);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_MD5);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_MD4);
+#ifdef HAVE_OPENSSL_MD2_H
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_MD2);
+#endif
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_DSS1);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_SHA224);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_SHA256);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_SHA384);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_SHA512);
+    HHVM_RC_INT_SAME(OPENSSL_ALGO_RMD160);
+
+    HHVM_RC_INT(OPENSSL_CIPHER_RC2_40, PHP_OPENSSL_CIPHER_RC2_40);
+    HHVM_RC_INT(OPENSSL_CIPHER_RC2_128, PHP_OPENSSL_CIPHER_RC2_128);
+    HHVM_RC_INT(OPENSSL_CIPHER_RC2_64, PHP_OPENSSL_CIPHER_RC2_64);
+    HHVM_RC_INT(OPENSSL_CIPHER_DES, PHP_OPENSSL_CIPHER_DES);
+    HHVM_RC_INT(OPENSSL_CIPHER_3DES, PHP_OPENSSL_CIPHER_3DES);
+
+    HHVM_RC_INT_SAME(OPENSSL_KEYTYPE_RSA);
+    HHVM_RC_INT_SAME(OPENSSL_KEYTYPE_DSA);
+    HHVM_RC_INT_SAME(OPENSSL_KEYTYPE_DH);
+    HHVM_RC_INT_SAME(OPENSSL_KEYTYPE_EC);
+
+    HHVM_RC_INT_SAME(OPENSSL_VERSION_NUMBER);
+
+    HHVM_RC_INT_SAME(PKCS7_TEXT);
+    HHVM_RC_INT_SAME(PKCS7_NOCERTS);
+    HHVM_RC_INT_SAME(PKCS7_NOSIGS);
+    HHVM_RC_INT_SAME(PKCS7_NOCHAIN);
+    HHVM_RC_INT_SAME(PKCS7_NOINTERN);
+    HHVM_RC_INT_SAME(PKCS7_NOVERIFY);
+    HHVM_RC_INT_SAME(PKCS7_DETACHED);
+    HHVM_RC_INT_SAME(PKCS7_BINARY);
+    HHVM_RC_INT_SAME(PKCS7_NOATTR);
+
+    HHVM_RC_STR_SAME(OPENSSL_VERSION_TEXT);
+
+    HHVM_RC_INT_SAME(X509_PURPOSE_SSL_CLIENT);
+    HHVM_RC_INT_SAME(X509_PURPOSE_SSL_SERVER);
+    HHVM_RC_INT_SAME(X509_PURPOSE_NS_SSL_SERVER);
+    HHVM_RC_INT_SAME(X509_PURPOSE_SMIME_SIGN);
+    HHVM_RC_INT_SAME(X509_PURPOSE_SMIME_ENCRYPT);
+    HHVM_RC_INT_SAME(X509_PURPOSE_CRL_SIGN);
+#ifdef X509_PURPOSE_ANY
+    HHVM_RC_INT_SAME(X509_PURPOSE_ANY);
+#endif
 
     HHVM_FE(openssl_csr_export_to_file);
     HHVM_FE(openssl_csr_export);

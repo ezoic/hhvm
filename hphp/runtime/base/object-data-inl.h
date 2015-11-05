@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -74,22 +74,6 @@ inline ObjectData::ObjectData(Class* cls,
   o_id = ++os_max_id;
 }
 
-inline void ObjectData::setStatic() const {
-  assert(false);
-}
-
-inline bool ObjectData::isStatic() const {
-  return false;
-}
-
-inline void ObjectData::setUncounted() const {
-  assert(false);
-}
-
-inline bool ObjectData::isUncounted() const {
-  return false;
-}
-
 inline size_t ObjectData::heapSize() const {
   return m_cls->builtinODTailSize() + sizeForNProps(m_cls->numDeclProperties());
 }
@@ -100,7 +84,7 @@ inline ObjectData* ObjectData::newInstance(Class* cls) {
   }
   if (auto const ctor = cls->instanceCtor()) {
     auto obj = ctor(cls);
-    assert(obj->getCount() > 0);
+    assert(obj->checkCount());
     return obj;
   }
   Attr attrs = cls->attrs();
@@ -127,7 +111,7 @@ inline ObjectData* ObjectData::newInstance(Class* cls) {
   }
 
   // callCustomInstanceInit may have inc-refd.
-  assert(obj->getCount() > 0);
+  assert(obj->checkCount());
   return obj;
 }
 
@@ -179,6 +163,10 @@ inline bool ObjectData::isImmutableCollection() const {
 inline CollectionType ObjectData::collectionType() const {
   assert(isValidCollection(static_cast<CollectionType>(m_hdr.kind)));
   return static_cast<CollectionType>(m_hdr.kind);
+}
+
+inline HeaderKind ObjectData::headerKind() const {
+  return m_hdr.kind;
 }
 
 inline bool ObjectData::isIterator() const {

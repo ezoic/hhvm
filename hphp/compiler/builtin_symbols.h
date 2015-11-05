@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,9 +17,13 @@
 #ifndef incl_HPHP_BUILTIN_SYMBOLS_H_
 #define incl_HPHP_BUILTIN_SYMBOLS_H_
 
-#include "hphp/compiler/hphp.h"
 #include <set>
+#include <string>
+
 #include "hphp/util/string-bag.h"
+
+#include "hphp/compiler/hphp.h"
+
 #include "hphp/runtime/base/class-info.h"
 
 namespace HPHP {
@@ -52,7 +56,6 @@ public:
    * Testing whether a variable is a PHP superglobal.
    */
   static bool IsSuperGlobal(const std::string &name);
-  static TypePtr GetSuperGlobalType(const std::string &name);
 
   static bool IsDeclaredDynamic(const std::string& name);
   static void LoadSuperGlobals();
@@ -63,24 +66,24 @@ private:
   static StringBag s_strings;
   static const char *SystemClasses[];
 
-  static StringToTypePtrMap s_superGlobals;
+  static hphp_string_set s_superGlobals;
 
   static std::set<std::string> s_declaredDynamic;
 
   static FunctionScopePtr ImportFunctionScopePtr(AnalysisResultPtr ar,
-                                                 ClassInfo *cls,
-                                                 ClassInfo::MethodInfo *method);
+                                                 const ClassInfo* cls,
+                                                 const ClassInfo::MethodInfo* method);
   static void ImportExtFunctions(AnalysisResultPtr ar,
-                                 ClassInfo *cls);
+                                 const ClassInfo* cls);
   static void ImportExtMethods(AnalysisResultPtr ar,
-                               FunctionScopePtrVec &vec,
-                               ClassInfo *cls);
+                               std::vector<FunctionScopePtr>& vec,
+                               const ClassInfo* cls);
   static void ImportExtProperties(AnalysisResultPtr ar,
                                   VariableTablePtr dest,
-                                  ClassInfo *cls);
+                                  const ClassInfo* cls);
   static void ImportExtConstants(AnalysisResultPtr ar,
                                  ConstantTablePtr dest,
-                                 ClassInfo *cls);
+                                 const ClassInfo* cls);
   static void ImportNativeConstants(AnalysisResultPtr ar,
                                     ConstantTablePtr dest);
   static ClassScopePtr ImportClassScopePtr(AnalysisResultPtr ar,

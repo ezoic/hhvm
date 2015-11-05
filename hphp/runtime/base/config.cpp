@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,11 +17,15 @@
 #include "hphp/runtime/base/config.h"
 
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/erase.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/filesystem.hpp>
 #include <fstream>
 
 #include "hphp/compiler/option.h"
 #include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/array-iterator.h"
+#include "hphp/util/logger.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -84,7 +88,7 @@ std::string Config::IniName(const std::string& config,
   return out;
 }
 
-void Config::ParseIniString(const std::string iniStr, IniSetting::Map &ini) {
+void Config::ParseIniString(const std::string iniStr, IniSettingMap &ini) {
   Config::SetParsedIni(ini, iniStr, "", false);
 }
 
@@ -92,7 +96,7 @@ void Config::ParseHdfString(const std::string hdfStr, Hdf &hdf) {
   hdf.fromString(hdfStr.c_str());
 }
 
-void Config::ParseConfigFile(const std::string &filename, IniSetting::Map &ini,
+void Config::ParseConfigFile(const std::string &filename, IniSettingMap &ini,
                              Hdf &hdf) {
   // We don't allow a filename of just ".ini"
   if (boost::ends_with(filename, ".ini") && filename.length() > 4) {
@@ -106,52 +110,106 @@ void Config::ParseConfigFile(const std::string &filename, IniSetting::Map &ini,
 }
 
 void Config::ParseIniFile(const std::string &filename) {
-  IniSetting::Map ini = IniSetting::Map::object;;
+  IniSettingMap ini = IniSettingMap();
   Config::ParseIniFile(filename, ini, false);
 }
 
-void Config::ParseIniFile(const std::string &filename, IniSetting::Map &ini,
+void Config::ParseIniFile(const std::string &filename, IniSettingMap &ini,
                           const bool constants_only /* = false */) {
     std::ifstream ifs(filename);
-    const std::string str((std::istreambuf_iterator<char>(ifs)),
-                          std::istreambuf_iterator<char>());
-    Config::SetParsedIni(ini, str, filename, constants_only);
+    std::string str((std::istreambuf_iterator<char>(ifs)),
+                    std::istreambuf_iterator<char>());
+    std::string with_includes;
+    Config::ReplaceIncludesWithIni(filename, str, with_includes);
+    Config::SetParsedIni(ini, with_includes, filename, constants_only);
+}
+
+void Config::ReplaceIncludesWithIni(const std::string& original_ini_filename,
+                                    const std::string& iniStr,
+                                    std::string& with_includes) {
+  std::istringstream iss(iniStr);
+  std::string line;
+  while (std::getline(iss, line)) {
+    // Handle cases like
+    //   #include           ""
+    //   ##includefoo barbaz"myconfig.ini" how weird is that
+    // Anything that is not a syntactically correct #include "file" after
+    // this pre-processing, will be treated as an ini comment and processed
+    // as such in the ini parser
+    auto pos = line.find_first_not_of(" ");
+    if (pos == std::string::npos ||
+        line.compare(pos, strlen("#include"), "#include") != 0) {
+      // treat as normal ini line, including comment that doesn't start with
+      // #include
+      with_includes += line + "\n";
+      continue;
+    }
+    pos += strlen("#include");
+    auto start = line.find_first_not_of(" ", pos);
+    auto end = line.find_last_not_of(" ");
+    if ((start == std::string::npos || line[start] != '"') ||
+        (end == start || line[end] != '"')) {
+      with_includes += line + "\n"; // treat as normal comment
+      continue;
+    }
+    std::string file = line.substr(start + 1, end - start - 1);
+    const std::string logger_file = file;
+    boost::filesystem::path p(file);
+    if (!p.is_absolute()) {
+      boost::filesystem::path opath(original_ini_filename);
+      p = opath.parent_path()/p;
+    }
+    if (boost::filesystem::exists(p)) {
+      std::ifstream ifs(p.string());
+      const std::string contents((std::istreambuf_iterator<char>(ifs)),
+                                 std::istreambuf_iterator<char>());
+      Config::ReplaceIncludesWithIni(p.string(), contents, with_includes);
+    } else {
+      Logger::Warning("ini include file %s not found", logger_file.c_str());
+    }
+  }
 }
 
 void Config::ParseHdfFile(const std::string &filename, Hdf &hdf) {
   hdf.append(filename);
 }
 
-void Config::SetParsedIni(IniSetting::Map &ini, const std::string confStr,
+void Config::SetParsedIni(IniSettingMap &ini, const std::string confStr,
                           const std::string filename, bool constants_only) {
-  assert(ini != nullptr);
   auto parsed_ini = IniSetting::FromStringAsMap(confStr, filename);
-  for (auto &pair : parsed_ini.items()) {
-    ini[pair.first] = pair.second;
+  for (ArrayIter iter(parsed_ini.toArray()); iter; ++iter) {
+    // most likely a string, but just make sure that we are dealing
+    // with something that can be converted to a string
+    assert(iter.first().isScalar());
+    ini.set(iter.first().toString(), iter.second());
     if (constants_only) {
-      IniSetting::FillInConstant(pair.first.data(), pair.second,
-                                 IniSetting::FollyDynamic());
+      IniSetting::FillInConstant(iter.first().toString().toCppString(),
+                                 iter.second());
     } else {
-      IniSetting::Set(pair.first.data(), pair.second,
-                      IniSetting::FollyDynamic());
+      IniSetting::SetSystem(iter.first().toString().toCppString(),
+                            iter.second());
     }
   }
 }
 
-const char* Config::Get(const IniSetting::Map &ini, const Hdf& config,
+// This method must return a char* which is owned by the IniSettingMap
+// to avoid issues with the lifetime of the char*
+const char* Config::Get(const IniSettingMap &ini, const Hdf& config,
                         const std::string& name /* = "" */,
                         const char *defValue /* = nullptr */,
                         const bool prepend_hhvm /* = true */) {
   auto ini_name = IniName(name, prepend_hhvm);
   Hdf hdf = name != "" ? config[name] : config;
-  auto* value = ini_iterate(ini, ini_name);
-  if (value && value->isString()) {
+  auto value = ini_iterate(ini, ini_name);
+  if (value.isString()) {
     // See generic Get##METHOD below for why we are doing this
-    const char* ini_ret = value->data();
-    const char* hdf_ret = hdf.configGet(value->data());
+    // Note that value is a string, so value.toString() is not
+    // a temporary.
+    const char* ini_ret = value.toString().data();
+    const char* hdf_ret = hdf.configGet(ini_ret);
     if (hdf_ret != ini_ret) {
       ini_ret = hdf_ret;
-      IniSetting::Set(ini_name, ini_ret);
+      IniSetting::SetSystem(ini_name, ini_ret);
     }
     return ini_ret;
   }
@@ -174,10 +232,10 @@ T Config::Get##METHOD(const IniSetting::Map &ini, const Hdf& config, \
   /* If we don't pass a name, then we just use the raw config as-is. */ \
   /* This could happen when we are at a known leaf of a config node. */ \
   Hdf hdf = name != "" ? config[name] : config; \
-  auto* value = ini_iterate(ini, ini_name); \
-  if (value && value->isString()) { \
+  auto value = ini_iterate(ini, ini_name); \
+  if (value.isString()) { \
     T ini_ret, hdf_ret; \
-    ini_on_update(value->data(), ini_ret); \
+    ini_on_update(value.toString(), ini_ret); \
     /* I don't care what the ini_ret was if it isn't equal to what  */ \
     /* is returned back from from an HDF get call, which it will be */ \
     /* if the call just passes back ini_ret because either they are */ \
@@ -186,7 +244,7 @@ T Config::Get##METHOD(const IniSetting::Map &ini, const Hdf& config, \
     hdf_ret = hdf.configGet##METHOD(ini_ret); \
     if (hdf_ret != ini_ret) { \
       ini_ret = hdf_ret; \
-      IniSetting::Set(ini_name, variant_init(ini_ret)); \
+      IniSetting::SetSystem(ini_name, variant_init(ini_ret)); \
     } \
     return ini_ret; \
   } \
@@ -224,9 +282,9 @@ T Config::Get##METHOD(const IniSetting::Map& ini, const Hdf& config, \
   auto ini_name = IniName(name, prepend_hhvm); \
   Hdf hdf = name != "" ? config[name] : config; \
   T ini_ret, hdf_ret; \
-  const folly::dynamic* value = ini_iterate(ini, ini_name); \
-  if (value && (value->isArray() || value->isObject())) { \
-    ini_on_update(*value, ini_ret); \
+  auto value = ini_iterate(ini, ini_name); \
+  if (value.isArray() || value.isObject()) { \
+    ini_on_update(value.toVariant(), ini_ret); \
     /** Make sure that even if we have an ini value, that if we also **/ \
     /** have an hdf value, that it maintains its edge as beating out **/ \
     /** ini                                                          **/ \
@@ -234,8 +292,7 @@ T Config::Get##METHOD(const IniSetting::Map& ini, const Hdf& config, \
       hdf.configGet(hdf_ret); \
       if (hdf_ret != ini_ret) { \
         ini_ret = hdf_ret; \
-        IniSetting::Set(ini_name, ini_get(ini_ret), \
-                        IniSetting::FollyDynamic()); \
+        IniSetting::SetSystem(ini_name, ini_get(ini_ret)); \
       } \
     } \
     return ini_ret; \
@@ -257,6 +314,7 @@ void Config::Bind(T& loc, const IniSetting::Map& ini, const Hdf& config, \
 
 CONTAINER_CONFIG_BODY(ConfigVector, Vector)
 CONTAINER_CONFIG_BODY(ConfigMap, Map)
+CONTAINER_CONFIG_BODY(ConfigMapC, MapC)
 CONTAINER_CONFIG_BODY(ConfigSet, Set)
 CONTAINER_CONFIG_BODY(ConfigSetC, SetC)
 CONTAINER_CONFIG_BODY(ConfigFlatSet, FlatSet)
@@ -297,21 +355,18 @@ void Config::Iterate(std::function<void (const IniSettingMap&,
                      const IniSettingMap &ini, const Hdf& config,
                      const std::string &name,
                      const bool prepend_hhvm /* = true */) {
-  // We shouldn't be passing a leaf here. That's why name is not
-  // optional.
-  assert(!name.empty());
-  Hdf hdf = config[name];
+  Hdf hdf = name.empty() ? config : config[name];
   if (hdf.exists() && !hdf.isEmpty()) {
     for (Hdf c = hdf.firstChild(); c.exists(); c = c.next()) {
       cb(IniSetting::Map::object, c, "");
     }
   } else {
     Hdf empty;
-    auto ini_name = IniName(name, prepend_hhvm);
-    auto* ini_value = ini_iterate(ini, ini_name);
-    if (ini_value && ini_value->isObject()) {
-      for (auto& pair : ini_value->items()) {
-        cb(pair.second, empty, pair.first.data());
+    auto ini_value = name.empty() ? ini :
+      ini_iterate(ini, IniName(name, prepend_hhvm));
+    if (ini_value.isArray()) {
+      for (ArrayIter iter(ini_value.toArray()); iter; ++iter) {
+        cb(iter.second(), empty, iter.first().toString().toCppString());
       }
     }
   }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,6 @@
 #define incl_HPHP_VM_PRECLASS_H_
 
 #include "hphp/runtime/base/atomic-shared-ptr.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/type-string.h"
@@ -255,6 +254,7 @@ struct PreClass : AtomicCountable {
     const StringData* name() const;
     bool is_extends() const;
     bool is_implements() const;
+    bool is_same(const ClassRequirement* other) const;
 
     template<class SerDe>
     typename std::enable_if<SerDe::deserializing>::type serde(SerDe& sd);
@@ -406,16 +406,18 @@ public:
   bool isBuiltin() const;
 
   /*
-   * Check whether a method or property exists on the PreClass.
+   * Check whether a constant, method, or property exists on the PreClass.
    */
+  bool hasConstant(const StringData* cnsName) const;
   bool hasMethod(const StringData* methName) const;
   bool hasProp(const StringData* propName) const;
 
   /*
-   * Look up a method or property on the PreClass.
+   * Look up a constant, method, or property on the PreClass.
    *
-   * @requires: hasMethod(), hasProp(), respectively.
+   * @requires: hasConstant(), hasMethod(), hasProp(), respectively.
    */
+  const Const* lookupConstant(const StringData* cnsName) const;
   Func* lookupMethod(const StringData* methName) const;
   const Prop* lookupProp(const StringData* propName) const;
 

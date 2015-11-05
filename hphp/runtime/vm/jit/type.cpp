@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -178,7 +178,12 @@ ALWAYS_INLINE folly::Optional<Ptr> operator-(Ptr a, Ptr b) {
 
 bool ptr_subtype(Ptr a, Ptr b) {
   if (a == b) return true;
+
+  // Unk is weird but easy to handle, so check for it in a or b before doing
+  // anything else.
+  if (a == Ptr::Unk) return false;
   if (b == Ptr::Unk) return true;
+
   if (b == Ptr::RMemb) {
     return ptr_subtype(a, Ptr::Memb) ||
            a == Ptr::Ref ||
@@ -191,6 +196,7 @@ bool ptr_subtype(Ptr a, Ptr b) {
            a == Ptr::Prop ||
            a == Ptr::Arr;
   }
+
   // All the remaining cases are just the maybe-ref version of each pointer
   // type.  (Equality was handled first.)
   if (has_ref(b)) {
@@ -241,8 +247,8 @@ std::string Type::constValString() const {
     if (!m_intVal) {
       return "Cctx(Cls(nullptr))";
     }
-    const Class* cls = m_cctxVal.cls();
-    return folly::format("Cctx(Cls({}))", cls->name()->data()).str();
+    auto const cls = m_cctxVal.cls();
+    return folly::format("Cctx(Cls({}))", cls->name()).str();
   }
   if (*this <= TTCA) {
     auto name = getNativeFunctionName(m_tcaVal);
@@ -318,6 +324,9 @@ std::string Type::toString() const {
   }
 
   if (m_hasConstVal) {
+    if (*this <= TCls) {
+      return folly::sformat("Cls={}", m_clsVal->name()->data());
+    }
     return folly::format("{}<{}>",
                          dropConstVal().toString(), constValString()).str();
   }
@@ -326,10 +335,10 @@ std::string Type::toString() const {
   std::vector<std::string> parts;
   if (isSpecialized()) {
     if (auto clsSpec = this->clsSpec()) {
-      auto const base = Type(m_bits & kAnyObj, Ptr::Unk).toString();
+      auto const base = Type((m_bits & kAnyObj) | (m_bits & kCls), Ptr::Unk);
       auto const exact = clsSpec.exact() ? "=" : "<=";
       auto const name = clsSpec.cls()->name()->data();
-      auto const partStr = folly::to<std::string>(base, exact, name);
+      auto const partStr = folly::to<std::string>(base.toString(), exact, name);
 
       parts.push_back(partStr);
       t -= TAnyObj;
@@ -376,7 +385,7 @@ bool Type::checkValid() const {
   // Note: be careful, the TFoo objects aren't all constructed yet in this
   // function.
   if (m_extra) {
-    assertx((!(m_bits & kAnyObj) || !(m_bits & kAnyArr)) &&
+    assertx((!(m_bits & kAnyObj) || !(m_bits & kAnyArr) || !(m_bits & kCls)) &&
            "Conflicting specialization");
   }
   // Never create such a thing like PtrToFooBottom.
@@ -461,7 +470,7 @@ Type Type::specialize(TypeSpec spec, bits_t killable /* = kTop */) const {
   // Remove the bits corresponding to any Bottom specializations---the
   // specializations intersected to zero, so the type component is impossible.
   if (spec.clsSpec() == ClassSpec::Bottom) {
-    bits &= ~(kAnyObj & killable);
+    bits &= ~((kCls | kAnyObj) & killable);
     cls_okay = false;
   }
   if (spec.arrSpec() == ArraySpec::Bottom) {
@@ -478,6 +487,90 @@ Type Type::specialize(TypeSpec spec, bits_t killable /* = kTop */) const {
   if (arr_okay && spec.arrSpec()) return Type(generic, spec.arrSpec());
 
   return *this;
+}
+
+// Return true if the array satisfies requirement on the ArraySpec.
+static bool arrayFitsSpec(const ArrayData* arr, const ArraySpec spec) {
+  if (spec == ArraySpec::Top) return true;
+
+  if (auto const spec_kind = spec.kind()) {
+    if (arr->kind() == spec_kind) return true;
+  }
+
+  if (auto const rat_type = spec.type()) {
+    using A = RepoAuthType::Array;
+    if (arr->empty() && rat_type->emptiness() != A::Empty::No) return true;
+    if (arr->isVectorData()) {
+      switch (rat_type->tag()) {
+        case A::Tag::Packed:
+          if (arr->size() != rat_type->size()) break;
+          // fall through
+        case A::Tag::PackedN: {
+          int64_t k = 0;
+          for ( ; k < arr->size(); ++k) {
+            auto const specElemType =
+              rat_type->tag() == A::Tag::Packed ? rat_type->packedElem(k)
+                                                : rat_type->elemType();
+            if (!tvMatchesRepoAuthType(*(arr->get(k).asTypedValue()),
+                                       specElemType)) {
+              break;
+            }
+          }
+          if (k == arr->size()) return true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (arr->isStruct()) {
+    if (StructArray::asStructArray(arr)->shape() == spec.shape()) return true;
+  }
+
+  return false;
+}
+
+bool Type::operator<=(Type rhs) const {
+  auto const& lhs = *this;
+
+  // Check for any members in lhs.m_bits that aren't in rhs.m_bits.
+  if ((lhs.m_bits & rhs.m_bits) != lhs.m_bits) {
+    return false;
+  }
+
+  // Check for Bottom; all the remaining cases assume `lhs' is not Bottom.
+  if (lhs.m_bits == kBottom) return true;
+
+  // If `rhs' is a constant, we must be the same constant.
+  if (rhs.m_hasConstVal) {
+    assertx(!rhs.isUnion());
+    return lhs.m_hasConstVal && lhs.m_extra == rhs.m_extra;
+  }
+
+  // If `rhs' could be a pointer, we must have a subtype relation in pointer
+  // kinds or we're not a subtype.  (If `lhs' can't be a pointer, we found out
+  // above when we intersected the bits.)  If neither can be a pointer, it's an
+  // invariant that `m_ptrKind' will be Ptr::Unk so this will pass.
+  if (lhs.ptrKind() != rhs.ptrKind() &&
+      !ptr_subtype(lhs.ptrKind(), rhs.ptrKind())) {
+    return false;
+  }
+
+  if (!rhs.isSpecialized()) {
+    return true;
+  }
+
+  if (lhs.hasConstVal(TArr)) {
+    // Arrays can be specialized in different ways, here we check if the
+    // constant array fits the kind()/type() of the specialization of rhs, if
+    // any.
+    auto const lhs_arr = lhs.arrVal();
+    auto const rhs_as = rhs.arrSpec();
+    return arrayFitsSpec(lhs_arr, rhs_as);
+  }
+
+  // Compare specializations only if `rhs' is specialized.
+  return lhs.spec() <= rhs.spec();
 }
 
 Type Type::operator|(Type rhs) const {
@@ -574,7 +667,7 @@ Type Type::operator-(Type rhs) const {
   // If these specializations would be subtracted out of lhs's specializations,
   // the finalization below will take care of re-eliminating it.
   if (rhs.arrSpec()) bits |= (lhs.m_bits & rhs.m_bits & kAnyArr);
-  if (rhs.clsSpec()) bits |= (lhs.m_bits & rhs.m_bits & kAnyObj);
+  if (rhs.clsSpec()) bits |= (lhs.m_bits & rhs.m_bits & (kAnyObj | kCls));
 
   // Stop looking at pointers, as it is already taken care of in `lhsPtr'.
   bits &= ~TPtrToGen.m_bits;
@@ -744,5 +837,39 @@ Type boxType(Type t) {
 }
 
 //////////////////////////////////////////////////////////////////////
+
+static Type relaxCell(Type t, DataTypeCategory cat) {
+  assertx(t <= TCell);
+
+  switch (cat) {
+    case DataTypeGeneric:
+      return TGen;
+
+    case DataTypeCountness:
+      return !t.maybe(TCounted) ? TUncounted : t.unspecialize();
+
+    case DataTypeCountnessInit:
+      if (t <= TUninit) return TUninit;
+      return (!t.maybe(TCounted) && !t.maybe(TUninit))
+        ? TUncountedInit : t.unspecialize();
+
+    case DataTypeSpecific:
+      return t.unspecialize();
+
+    case DataTypeSpecialized:
+      assertx(t.isSpecialized());
+      return t;
+  }
+
+  not_reached();
+}
+
+Type relaxType(Type t, DataTypeCategory cat) {
+  always_assert_flog(t <= TGen && t != TBottom, "t = {}", t);
+  if (cat == DataTypeGeneric) return TGen;
+  auto const relaxed =
+    (t & TCell) <= TBottom ? TBottom : relaxCell(t & TCell, cat);
+  return t <= TCell ? relaxed : relaxed | TBoxedInitCell;
+}
 
 }}

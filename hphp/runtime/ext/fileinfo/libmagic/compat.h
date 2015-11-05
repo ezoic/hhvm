@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -28,10 +28,10 @@
 
 #define PCRE_CASELESS 0x00000001
 #define PCRE_MULTILINE 0x00000002
-#define emalloc HPHP::smart_malloc
-#define ecalloc HPHP::smart_calloc
-#define efree HPHP::smart_free
-#define erealloc HPHP::smart_realloc
+#define emalloc HPHP::req::malloc
+#define ecalloc HPHP::req::calloc
+#define efree HPHP::req::free
+#define erealloc HPHP::req::realloc
 #define php_stream HPHP::File
 
 inline char *estrndup(const char *s, unsigned int length) {

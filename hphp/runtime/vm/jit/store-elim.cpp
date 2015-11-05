@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -210,7 +210,8 @@ struct TrackedStore {
   bool same(const TrackedStore& other) const {
     return kind() == other.kind() && m_ptr.ptr() == other.m_ptr.ptr();
   }
-  friend bool operator>=(const TrackedStore& a, const TrackedStore& b) {
+  friend DEBUG_ONLY bool operator>=(const TrackedStore& a,
+                                    const TrackedStore& b) {
     return a.kind() >= b.kind();
   }
   size_t hash() const {
@@ -295,6 +296,7 @@ struct Global {
   // Block states are indexed by block->id().  These are only meaningful after
   // we do dataflow.
   StateVector<Block,BlockState> blockStates;
+  jit::vector<IRInstruction*> reStores;
   bool needsReflow{false};
 };
 
@@ -307,6 +309,8 @@ struct Local {
   ALocBits mayStore;   // Things that may be written in the block
   ALocBits avlLoc;     // Copied to BlockAnalysis::avlLoc
   ALocBits delLoc;     // Copied to BlockAnalysis::delLoc
+
+  ALocBits reStores;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -351,14 +355,14 @@ bool isDeadSet(Local& env, const ALocBits& bits) {
   return (~env.antLoc & bits).none();
 }
 
-void removeDead(Local& env, IRInstruction& inst) {
+bool removeDead(Local& env, IRInstruction& inst, bool trash) {
   BISECTOR(store_delete);
-  if (!store_delete.go()) return;
+  if (!store_delete.go()) return false;
 
   FTRACE(4, "      dead (removed)\n");
 
   IRInstruction* dbgInst = nullptr;
-  if (RuntimeOption::EvalHHIRGenerateAsserts) {
+  if (trash && RuntimeOption::EvalHHIRGenerateAsserts) {
     switch (inst.op()) {
     case StStk:
       dbgInst = env.global.unit.gen(
@@ -389,7 +393,9 @@ void removeDead(Local& env, IRInstruction& inst) {
   auto pos = block->erase(&inst);
   if (dbgInst) {
     block->insert(pos, dbgInst);
+    return false;
   }
+  return true;
 }
 
 void addLoadSet(Local& env, const ALocBits& bits) {
@@ -399,6 +405,7 @@ void addLoadSet(Local& env, const ALocBits& bits) {
 }
 
 void addAllLoad(Local& env) {
+  FTRACE(4, "           load: -1\n");
   env.mayLoad.set();
   env.antLoc.reset();
 }
@@ -410,12 +417,22 @@ void mustStore(Local& env, int bit) {
     env.delLoc[bit] = 1;
   }
   env.antLoc[bit] = 1;
+  env.mayStore[bit] = 0;
+  env.reStores[bit] = 0;
 }
 
 void mustStoreSet(Local& env, const ALocBits& bits) {
   FTRACE(4, "      mustStore: {}\n", show(bits));
   env.delLoc |= bits & ~(env.antLoc | env.mayLoad);
   env.antLoc |= bits;
+  env.mayStore &= ~bits;
+  env.reStores &= ~bits;
+}
+
+void killSet(Local& env, const ALocBits& bits) {
+  FTRACE(4, "           kill: {}\n", show(bits));
+  env.mayLoad &= ~bits;
+  mustStoreSet(env, bits);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -429,14 +446,15 @@ void mayStore(Local& env, AliasClass acls) {
   auto const mayStore = env.global.ainfo.may_alias(canon);
   FTRACE(4, "       mayStore: {}\n", show(mayStore));
   env.mayStore |= mayStore;
+  env.reStores &= ~mayStore;
 }
 
-void mustStore(Local& env, AliasClass acls) {
+void kill(Local& env, AliasClass acls) {
   auto const canon = canonicalize(acls);
-  auto const kill = env.global.ainfo.expand(canon);
-  mustStoreSet(env, kill);
-  mayStore(env, acls);
+  killSet(env, env.global.ainfo.expand(canon));
 }
+
+//////////////////////////////////////////////////////////////////////
 
 folly::Optional<uint32_t> pure_store_bit(Local& env, AliasClass acls) {
   if (auto const meta = env.global.ainfo.find(canonicalize(acls))) {
@@ -456,19 +474,34 @@ void visit(Local& env, IRInstruction& inst) {
     effects,
     [&] (IrrelevantEffects) {},
     [&] (UnknownEffects)    { addAllLoad(env); env.mayStore.set(); },
-    [&] (PureLoad l)        { load(env, l.src); },
-    [&] (GeneralEffects l)  { load(env, l.loads);
-                              mayStore(env, l.stores);
-                              mustStore(env, l.kills); },
+    [&] (PureLoad l)        {
+      if (auto bit = pure_store_bit(env, l.src)) {
+        if (env.reStores[*bit]) {
+          FTRACE(4, "Killing self-store: {}\n",
+                 env.global.reStores[*bit]->toString());
+          removeDead(env, *env.global.reStores[*bit], false);
+        }
+      }
+      load(env, l.src);
+    },
+    [&] (GeneralEffects l)  {
+      load(env, l.loads);
+      mayStore(env, l.stores);
+      kill(env, l.kills);
+    },
 
     [&] (ReturnEffects l) {
       if (inst.is(InlineReturn)) {
         // Returning from an inlined function.  This adds nothing to gen, but
         // kills frame and stack locations for the callee.
         auto const fp = inst.src(0);
-        auto const killSet = env.global.ainfo.per_frame_bits[fp];
-        mustStoreSet(env, killSet);
-        mustStore(env, l.kills);
+        killSet(env, env.global.ainfo.per_frame_bits[fp]);
+        kill(env, l.kills);
+        return;
+      }
+
+      if (inst.is(InlineReturnNoFrame)) {
+        kill(env, l.kills);
         return;
       }
 
@@ -477,13 +510,13 @@ void visit(Local& env, IRInstruction& inst) {
       // function return---so mark everything read before we start killing
       // things.
       addAllLoad(env);
-      mustStoreSet(env, env.global.ainfo.all_frame);
-      mustStore(env, l.kills);
+      killSet(env, env.global.ainfo.all_frame);
+      kill(env, l.kills);
     },
 
     [&] (ExitEffects l) {
       load(env, l.live);
-      mustStore(env, l.kills);
+      kill(env, l.kills);
     },
 
     /*
@@ -497,22 +530,43 @@ void visit(Local& env, IRInstruction& inst) {
       load(env, AFrameAny);  // Not necessary for some builtin calls, but it
                              // depends which builtin...
       load(env, l.stack);
-      mustStore(env, l.kills);
+      kill(env, l.kills);
     },
 
     [&] (PureStore l) {
       if (auto bit = pure_store_bit(env, l.dst)) {
         if (isDead(env, *bit)) {
-          removeDead(env, inst);
-        } else {
-          if (!env.antLoc[*bit] &&
-              !env.mayLoad[*bit] &&
-              !env.mayStore[*bit]) {
-            env.avlLoc[*bit] = 1;
-            set_movable_store(env, *bit, inst);
+          if (!removeDead(env, inst, true)) {
+            mayStore(env, l.dst);
+            mustStore(env, *bit);
           }
+          return;
         }
+        if (!env.antLoc[*bit] &&
+            !env.mayLoad[*bit] &&
+            !env.mayStore[*bit]) {
+          env.avlLoc[*bit] = 1;
+          set_movable_store(env, *bit, inst);
+        }
+        mayStore(env, l.dst);
         mustStore(env, *bit);
+        if (l.value->inst()->block() != inst.block()) return;
+        auto const le = memory_effects(*l.value->inst());
+        auto pl = boost::get<PureLoad>(&le);
+        if (!pl) return;
+        auto lbit = pure_store_bit(env, pl->src);
+        if (!lbit || *lbit != *bit) return;
+        /*
+         * The source of the store is a load from the same address, which is
+         * also in this block. If there's no interference, we can kill this
+         * store. We won't know until we see the load though.
+         */
+        if (env.global.reStores.size() <= *bit) {
+          env.global.reStores.resize(*bit + 1);
+        }
+        env.global.reStores[*bit] = &inst;
+        env.reStores[*bit] = 1;
+        return;
       }
       mayStore(env, l.dst);
     },
@@ -524,7 +578,7 @@ void visit(Local& env, IRInstruction& inst) {
         // eliminate this instruction.  We can also count all of them as
         // redefined.
         if (isDeadSet(env, it->second)) {
-          removeDead(env, inst);
+          if (removeDead(env, inst, true)) return;
         } else {
           auto avlLoc = it->second & ~(env.antLoc | env.mayLoad |
                                        env.mayStore);
@@ -533,7 +587,9 @@ void visit(Local& env, IRInstruction& inst) {
             env.avlLoc |= avlLoc;
           }
         }
+        mayStore(env, l.stk);
         mustStoreSet(env, it->second);
+        return;
       }
       mayStore(env, l.stk);
     }
@@ -938,6 +994,15 @@ TrackedStore combine_ts(Global& genv, uint32_t id,
 
   auto sf1 = findSpillFrame(genv, s1);
   auto sf2 = findSpillFrame(genv, s2);
+
+  // t7621182 Don't merge different spillframes for now,
+  // because code-gen doesn't handle phi'ing an Obj and a
+  // Cls.
+  if (sf1 || sf2) {
+    // we already know they aren't the same
+    return TrackedStore::BadVal();
+  }
+
   if (!sf1 != !sf2 || (sf1 && *sf1 != *sf2)) {
     // They need to both be spill frames affecting
     // the same addresses, or both not be spill frames.

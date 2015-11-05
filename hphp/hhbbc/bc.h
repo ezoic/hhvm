@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -193,7 +193,7 @@ namespace bc {
 #define IMM_NAME_RATA(n)    rat
 #define IMM_NAME_AA(n)      arr##n
 #define IMM_NAME_BA(n)      target
-#define IMM_NAME_OA_IMPL(n) subop
+#define IMM_NAME_OA_IMPL(n) subop##n
 #define IMM_NAME_OA(type)   IMM_NAME_OA_IMPL
 #define IMM_NAME_VSA(n)     keys
 
@@ -304,11 +304,17 @@ namespace bc {
 #define POP_C_MMANY uint32_t numPop() const { return 1 + numVecPops(mvec); } \
                     Flavor popFlavor(uint32_t) const { not_reached(); }
 
-#define POP_R_MMANY uint32_t numPop() const { return 1 + numVecPops(mvec); } \
+#define POP_R_MMANY POP_C_MMANY
+#define POP_V_MMANY POP_C_MMANY
+
+#define POP_MFINAL  uint32_t numPop() const { return arg1; } \
                     Flavor popFlavor(uint32_t) const { not_reached(); }
 
-#define POP_V_MMANY uint32_t numPop() const { return 1 + numVecPops(mvec); } \
-                    Flavor popFlavor(uint32_t) const { not_reached(); }
+#define POP_C_MFINAL uint32_t numPop() const { return arg1 + 1; } \
+                     Flavor popFlavor(uint32_t) const { not_reached(); }
+
+#define POP_R_MFINAL POP_C_MFINAL
+#define POP_V_MFINAL POP_C_MFINAL
 
 #define POP_CMANY   uint32_t numPop() const { return arg1; }  \
                     Flavor popFlavor(uint32_t i) const {      \
@@ -338,32 +344,22 @@ namespace bc {
                       return Flavor::CVU;                     \
                     }
 
-#define PUSH_UV  if (i == 0) return TUninit
-#define PUSH_CV  if (i == 0) return TInitCell
-#define PUSH_CUV if (i == 0) return TCell
-#define PUSH_AV  if (i == 0) return TCls
-#define PUSH_VV  if (i == 0) return TRef
-#define PUSH_FV  if (i == 0) return TInitGen
-#define PUSH_RV  if (i == 0) return TInitGen
+#define POP_IDX_A  uint32_t numPop() const { return arg2 + 1; } \
+                   Flavor popFlavor(uint32_t i) const {         \
+                     return i == arg2 ? Flavor::C : Flavor::A;  \
+                   }
 
-#define PUSH_NOV          uint32_t numPush() const { return 0; } \
-                          Type pushType(uint32_t i) const { not_reached(); }
+#define PUSH_NOV          uint32_t numPush() const { return 0; }
 
-#define PUSH_ONE(x)       uint32_t numPush() const { return 1; }  \
-                          Type pushType(uint32_t i) const {       \
-                            PUSH_##x; not_reached();              \
-                          }
+#define PUSH_ONE(x)       uint32_t numPush() const { return 1; }
 
-#define PUSH_TWO(x, y)    uint32_t numPush() const { return 2; }    \
-                          Type pushType(uint32_t i) const {         \
-                            PUSH_##x; --i; PUSH_##y; not_reached(); \
-                          }
+#define PUSH_TWO(x, y)    uint32_t numPush() const { return 2; }
 
-#define PUSH_INS_1(...)   uint32_t numPush() const { return 1; }        \
-                          Type pushType(uint32_t i) const { not_reached(); }
+#define PUSH_INS_1(...)   uint32_t numPush() const { return 1; }
 
-#define PUSH_INS_2(...)   uint32_t numPush() const { return 1; }        \
-                          Type pushType(uint32_t i) const { not_reached(); }
+#define PUSH_INS_2(...)   uint32_t numPush() const { return 1; }
+
+#define PUSH_IDX_A        uint32_t numPush() const { return arg2; }
 
 #define O(opcode, imms, inputs, outputs, flags) \
   struct opcode {                               \
@@ -398,14 +394,7 @@ OPCODES
 #undef PUSH_TWO
 #undef PUSH_INS_1
 #undef PUSH_INS_2
-
-#undef PUSH_UV
-#undef PUSH_CV
-#undef PUSH_CUV
-#undef PUSH_AV
-#undef PUSH_VV
-#undef PUSH_FV
-#undef PUSH_RV
+#undef PUSH_IDX_A
 
 #undef POP_UV
 #undef POP_CV
@@ -422,11 +411,16 @@ OPCODES
 #undef POP_C_MMANY
 #undef POP_R_MMANY
 #undef POP_V_MMANY
+#undef POP_MFINAL
+#undef POP_C_MFINAL
+#undef POP_R_MFINAL
+#undef POP_V_MFINAL
 #undef POP_CMANY
 #undef POP_SMANY
 #undef POP_FMANY
 #undef POP_CVMANY
 #undef POP_CVUMANY
+#undef POP_IDX_A
 
 #undef IMM_TY_MA
 #undef IMM_TY_BLA

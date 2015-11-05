@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,7 +20,6 @@
 
 #include "hphp/util/logger.h"
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/data-walker.h"
 #include "hphp/runtime/base/apc-handle.h"
 #include "hphp/runtime/base/apc-handle-defs.h"
@@ -74,7 +73,7 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
     assert(key.isString());
     const Variant& value = it.secondRef();
     if (!value.isNull()) {
-      auto val = APCHandle::Create(value, false, true, true);
+      auto val = APCHandle::Create(value, false, APCHandleLevel::Inner, true);
       prop->val = val.handle;
       size += val.size;
     } else {
@@ -119,7 +118,7 @@ APCObject::~APCObject() {
 
 void APCObject::Delete(APCHandle* handle) {
   if (handle->isSerializedObj()) {
-    delete APCString::fromHandle(handle);
+    APCString::Delete(APCString::fromHandle(handle));
     return;
   }
 
@@ -142,12 +141,12 @@ APCHandle::Pair APCObject::MakeAPCObject(APCHandle* obj, const Variant& value) {
   if (features.isCircular || features.hasSerializable) {
     return {nullptr, 0};
   }
-  auto tmp = APCHandle::Create(value, false, true, true);
+  auto tmp = APCHandle::Create(value, false, APCHandleLevel::Inner, true);
   tmp.handle->setObjAttempted();
   return tmp;
 }
 
-Variant APCObject::MakeObject(const APCHandle* handle) {
+Variant APCObject::MakeLocalObject(const APCHandle* handle) {
   if (handle->isSerializedObj()) {
     auto const serObj = APCString::fromHandle(handle)->getStringData();
     return apc_unserialize(serObj->data(), serObj->size());

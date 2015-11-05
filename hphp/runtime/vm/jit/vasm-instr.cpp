@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -36,12 +36,10 @@ const char* vinst_names[] = {
 bool isBlockEnd(const Vinstr& inst) {
   switch (inst.op) {
     // service request-y things
-    case Vinstr::bindcall:
-    case Vinstr::contenter:
     case Vinstr::bindjcc1st:
     case Vinstr::bindjmp:
     case Vinstr::fallback:
-    case Vinstr::svcreq:
+    case Vinstr::retransopt:
     // control flow
     case Vinstr::jcc:
     case Vinstr::jcci:
@@ -51,18 +49,22 @@ bool isBlockEnd(const Vinstr& inst) {
     case Vinstr::jmpi:
     case Vinstr::phijmp:
     case Vinstr::phijcc:
+    case Vinstr::tailcallstub:
+    case Vinstr::callphp:
+    case Vinstr::tailcallphp:
+    // exception edges
+    case Vinstr::unwind:
+    case Vinstr::vinvoke:
+    case Vinstr::vcallarray:
+    case Vinstr::contenter:
     // terminal
     case Vinstr::ud2:
-    case Vinstr::unwind:
-    case Vinstr::vcallstub:
-    case Vinstr::vinvoke:
     case Vinstr::ret:
-    case Vinstr::vretm:
-    case Vinstr::vret:
+    case Vinstr::stubret:
+    case Vinstr::phpret:
     case Vinstr::leavetc:
     case Vinstr::fallthru:
     // arm specific
-    case Vinstr::hcunwind:
     case Vinstr::cbcc:
     case Vinstr::tbcc:
     case Vinstr::brk:

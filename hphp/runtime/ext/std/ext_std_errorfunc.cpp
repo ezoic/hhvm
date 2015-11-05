@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -18,8 +18,9 @@
 
 #include <iostream>
 
-#include <folly/Likely.h>
 #include <folly/Format.h>
+#include <folly/Likely.h>
+#include <folly/Random.h>
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/exceptions.h"
@@ -84,6 +85,10 @@ Array HHVM_FUNCTION(debug_backtrace, int64_t options /* = 1 */,
  */
 Array HHVM_FUNCTION(hphp_debug_caller_info) {
   return g_context->getCallerInfo();
+}
+
+int64_t HHVM_FUNCTION(hphp_debug_backtrace_hash) {
+  return g_context->getDebugBacktraceHash();
 }
 
 void HHVM_FUNCTION(debug_print_backtrace, int64_t options /* = 0 */,
@@ -241,45 +246,81 @@ void HHVM_FUNCTION(hphp_clear_unflushed) {
 }
 
 bool HHVM_FUNCTION(trigger_error, const String& error_msg,
-                                  int error_type /* = k_E_USER_NOTICE */) {
-  std::string msg = error_msg.data();
+                   int error_type /* = k_E_USER_NOTICE */) {
+  std::string msg = error_msg.data(); // not toCppString()
   if (UNLIKELY(g_context->getThrowAllErrors())) {
     throw Exception(folly::sformat("throwAllErrors: {}", error_type));
   }
   if (error_type == k_E_USER_ERROR) {
     g_context->handleError(msg, error_type, true,
-                       ExecutionContext::ErrorThrowMode::IfUnhandled,
-                       "\nFatal error: ");
-  } else if (error_type == k_E_USER_WARNING) {
+                           ExecutionContext::ErrorThrowMode::IfUnhandled,
+                           "\nFatal error: ");
+    return true;
+  }
+  if (error_type == k_E_USER_WARNING) {
     g_context->handleError(msg, error_type, true,
-                       ExecutionContext::ErrorThrowMode::Never,
-                       "\nWarning: ");
-  } else if (error_type == k_E_USER_NOTICE) {
+                           ExecutionContext::ErrorThrowMode::Never,
+                           "\nWarning: ");
+    return true;
+  }
+  if (error_type == k_E_USER_NOTICE) {
     g_context->handleError(msg, error_type, true,
-                       ExecutionContext::ErrorThrowMode::Never,
-                       "\nNotice: ");
-  } else if (error_type == k_E_USER_DEPRECATED) {
+                           ExecutionContext::ErrorThrowMode::Never,
+                           "\nNotice: ");
+    return true;
+  }
+  if (error_type == k_E_USER_DEPRECATED) {
     g_context->handleError(msg, error_type, true,
-                       ExecutionContext::ErrorThrowMode::Never,
-                       "\nDeprecated: ");
-  } else {
-    ActRec* fp = g_context->getStackFrame();
-    if (fp->m_func->isBuiltin() && error_type == k_E_ERROR) {
+                           ExecutionContext::ErrorThrowMode::Never,
+                           "\nDeprecated: ");
+    return true;
+  }
+  if (error_type == k_E_STRICT) {
+    // So that we can raise strict warnings for mismatched
+    // params in FCallBuiltin
+    raise_strict_warning(msg);
+    return true;
+  }
+
+  ActRec* fp = g_context->getStackFrame();
+
+  if (fp->m_func->isNative() &&
+      fp->m_func->nativeFuncPtr() == (BuiltinFunction)HHVM_FN(trigger_error)) {
+    fp = g_context->getOuterVMFrame(fp);
+  }
+  if (fp && fp->m_func->isBuiltin()) {
+    if (error_type == k_E_ERROR) {
       raise_error_without_first_frame(msg);
-    } else if (fp->m_func->isBuiltin() && error_type == k_E_WARNING) {
+      return true;
+    }
+    if (error_type == k_E_WARNING) {
       raise_warning_without_first_frame(msg);
-    } else if (fp->m_func->isBuiltin() && error_type == k_E_NOTICE) {
+      return true;
+    }
+    if (error_type == k_E_NOTICE) {
       raise_notice_without_first_frame(msg);
-    } else if (fp->m_func->isBuiltin() && error_type == k_E_DEPRECATED) {
+      return true;
+    }
+    if (error_type == k_E_DEPRECATED) {
       raise_deprecated_without_first_frame(msg);
-    } else if (fp->m_func->isBuiltin() && error_type == k_E_RECOVERABLE_ERROR) {
+      return true;
+    }
+    if (error_type == k_E_RECOVERABLE_ERROR) {
       raise_recoverable_error_without_first_frame(msg);
-    } else {
-    raise_warning("Invalid error type specified");
-    return false;
+      return true;
     }
   }
-  return true;
+  raise_warning("Invalid error type specified");
+  return false;
+}
+
+bool HHVM_FUNCTION(trigger_sampled_error, const String& error_msg,
+                   int sample_rate,
+                   int error_type /* = k_E_USER_NOTICE */) {
+  if (!folly::Random::oneIn(sample_rate)) {
+    return true;
+  }
+  return HHVM_FN(trigger_error)(error_msg, error_type);
 }
 
 bool HHVM_FUNCTION(user_error, const String& error_msg,
@@ -292,6 +333,7 @@ bool HHVM_FUNCTION(user_error, const String& error_msg,
 void StandardExtension::initErrorFunc() {
   HHVM_FE(debug_backtrace);
   HHVM_FE(hphp_debug_caller_info);
+  HHVM_FE(hphp_debug_backtrace_hash);
   HHVM_FE(debug_print_backtrace);
   HHVM_FE(error_get_last);
   HHVM_FE(error_log);
@@ -304,6 +346,7 @@ void StandardExtension::initErrorFunc() {
   HHVM_FE(hphp_throw_fatal_error);
   HHVM_FE(hphp_clear_unflushed);
   HHVM_FE(trigger_error);
+  HHVM_FE(trigger_sampled_error);
   HHVM_FE(user_error);
 
 #define INTCONST(v) Native::registerConstant<KindOfInt64> \

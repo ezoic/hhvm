@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,9 +8,9 @@
  *
  *)
 
+open Core
 open ClientEnv
 open Utils
-module Json = Hh_json
 
 let compare_pos pos1 pos2 =
   let char_start1, char_end1 = Pos.info_raw pos1 in
@@ -36,13 +36,6 @@ let map_patches_to_filename acc res =
   | Some lst -> SMap.add fn (res :: lst) acc
   | None -> SMap.add fn [res] acc
 
-let read_file_to_string fn = 
-  let ic = open_in fn in
-  let len = in_channel_length ic in
-  let buf = Buffer.create len in
-  Buffer.add_channel buf ic len;
-  Buffer.contents buf
-
 let write_string_to_file fn str =
   let oc = open_out fn in
   output_string oc str;
@@ -59,8 +52,7 @@ let write_patches_to_buffer buf original_content patch_list =
     Buffer.add_string buf str_to_write;
     i := !i + size
   in
-  
-  List.iter begin fun res ->
+  List.iter patch_list begin fun res ->
     let pos = get_pos res in
     let char_start, char_end = Pos.info_raw pos in
     add_original_content (char_start - 1);
@@ -72,11 +64,11 @@ let write_patches_to_buffer buf original_content patch_list =
           i := char_end
       | ServerRefactor.Remove _ ->
           i := char_end
-  end patch_list;
+  end;
   add_original_content (String.length original_content - 1)
 
 let apply_patches_to_file fn patch_list =
-  let old_content = read_file_to_string fn in
+  let old_content = Sys_utils.cat fn in
   let buf = Buffer.create (String.length old_content) in
   let patch_list = List.sort compare_result patch_list in
   write_patches_to_buffer buf old_content patch_list;
@@ -105,22 +97,24 @@ let patch_to_json res =
   let pos = get_pos res in
   let char_start, char_end = Pos.info_raw pos in
   let line, start, end_ = Pos.info_pos pos in
-  Json.JAssoc [ "char_start",  Json.JInt char_start;
-                "char_end",    Json.JInt char_end;
-                "line",        Json.JInt line;
-                "col_start",   Json.JInt start;
-                "col_end",     Json.JInt end_;
-                "patch_type",  Json.JString type_;
-                "replacement", Json.JString replacement;
-              ]
+  Hh_json.JSON_Object [
+      "char_start",  Hh_json.int_ char_start;
+      "char_end",    Hh_json.int_ char_end;
+      "line",        Hh_json.int_ line;
+      "col_start",   Hh_json.int_ start;
+      "col_end",     Hh_json.int_ end_;
+      "patch_type",  Hh_json.JSON_String type_;
+      "replacement", Hh_json.JSON_String replacement;
+  ]
 
 let print_patches_json file_map =
   let entries = SMap.fold begin fun fn patch_list acc ->
-    Json.JAssoc [ "filename", Json.JString fn;
-                  "patches",  Json.JList (List.map patch_to_json patch_list);
-                ] :: acc
+    Hh_json.JSON_Object [
+        "filename", Hh_json.JSON_String fn;
+        "patches",  Hh_json.JSON_Array (List.map patch_list patch_to_json);
+    ] :: acc
   end file_map [] in
-  print_endline (Json.json_to_string (Json.JList entries))
+  print_endline (Hh_json.json_to_string (Hh_json.JSON_Array entries))
 
 let go conn args =
   try
@@ -136,7 +130,7 @@ let go conn args =
 
     let refactor_type = input_line stdin in
     let command = match refactor_type with
-    | "1" -> 
+    | "1" ->
       let class_name = input_prompt "Enter class name: " in
       let new_name = input_prompt "Enter a new name for this class: " in
       ServerRefactor.ClassRename (class_name, new_name)
@@ -151,9 +145,10 @@ let go conn args =
           input_prompt ("Enter a new name for this method: "^class_name^"::") in
       ServerRefactor.MethodRename (class_name, method_name, new_name)
     | _ -> raise Exit in
-    
+
     let patches = ServerCommand.rpc conn @@ ServerRpc.REFACTOR command in
-    let file_map = List.fold_left map_patches_to_filename SMap.empty patches in
+    let file_map = List.fold_left patches
+      ~f:map_patches_to_filename ~init:SMap.empty in
     if args.output_json
     then print_patches_json file_map
     else apply_patches file_map

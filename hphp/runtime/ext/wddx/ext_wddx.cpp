@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -150,7 +150,7 @@ String WddxPacket::getWddxEncoded(const String& varType,
                                   const String& varValue,
                                   const String& varName,
                                   bool hasVarTag) {
-  if (varType.compare("NULL") == 0) {
+  if (varType.compare("NULL") == 0 || varType.compare("null") == 0) {
     return wrapValue("<null/>", "", "", varName, hasVarTag);
   }
   if (varType.compare("boolean") == 0) {
@@ -193,9 +193,9 @@ String WddxPacket::wrapValue(const String& start,
 // helpers
 
 void find_var_recursive(const TypedValue* tv,
-                        const SmartPtr<WddxPacket>& wddxPacket) {
+                        const req::ptr<WddxPacket>& wddxPacket) {
   if (tvIsString(tv)) {
-    String var_name = tvCastToString(tv);
+    String var_name{tvCastToString(tv)};
     wddxPacket->add_var(var_name, true);
   }
   if (tv->m_type == KindOfArray) {
@@ -207,7 +207,7 @@ void find_var_recursive(const TypedValue* tv,
 
 static TypedValue* add_vars_helper(ActRec* ar) {
   int start_index = 1;
-  Resource packet_id = getArg<KindOfResource>(ar, 0);
+  Resource packet_id{getArg<KindOfResource>(ar, 0)};
   auto wddxPacket = cast<WddxPacket>(packet_id);
 
   for (int i = start_index; i < ar->numArgs(); i++) {
@@ -218,7 +218,7 @@ static TypedValue* add_vars_helper(ActRec* ar) {
 }
 
 static TypedValue* serialize_vars_helper(ActRec* ar) {
-  auto wddxPacket = makeSmartPtr<WddxPacket>(empty_string_variant_ref,
+  auto wddxPacket = req::make<WddxPacket>(empty_string_variant_ref,
                                              true, true);
   int start_index = 0;
   for (int i = start_index; i < ar->numArgs(); i++) {
@@ -245,12 +245,12 @@ static String HHVM_FUNCTION(wddx_packet_end, const Resource& packet_id) {
 }
 
 static Resource HHVM_FUNCTION(wddx_packet_start, const Variant& comment) {
-  return Resource(makeSmartPtr<WddxPacket>(comment, true, false));
+  return Resource(req::make<WddxPacket>(comment, true, false));
 }
 
 static String HHVM_FUNCTION(wddx_serialize_value, const Variant& var,
                             const Variant& comment) {
-  auto wddxPacket = makeSmartPtr<WddxPacket>(comment, false, false);
+  auto wddxPacket = req::make<WddxPacket>(comment, false, false);
   wddxPacket->serialize_value(var);
   return wddxPacket->packet_end();
 }

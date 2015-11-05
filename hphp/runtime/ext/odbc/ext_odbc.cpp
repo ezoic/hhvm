@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -14,8 +14,6 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-
-#ifdef HAVE_UODBC
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
@@ -33,7 +31,7 @@
 namespace HPHP {
 
 template<class T>
-static SmartPtr<T> safe_cast(const Resource& res) {
+static req::ptr<T> safe_cast(const Resource& res) {
   auto ptr = dyn_cast_or_null<T>(res);
   if (!ptr) {
     raise_warning("supplied argument is not a valid ODBC resource");
@@ -329,7 +327,7 @@ ODBCCursor::~ODBCCursor() {
   SQLFreeStmt(hdl_stmt_, SQL_CLOSE);
   SQLFreeHandle(SQL_HANDLE_STMT, hdl_stmt_);
   if (is_buffer_bound) {
-    smart_free(buffer_);
+    req::free(buffer_);
   }
 }
 
@@ -338,7 +336,7 @@ void ODBCCursor::sweep()
   SQLFreeStmt(hdl_stmt_, SQL_CLOSE);
   SQLFreeHandle(SQL_HANDLE_STMT, hdl_stmt_);
   if (is_buffer_bound) {
-    smart_free(buffer_);
+    req::free(buffer_);
   }
 }
 
@@ -372,7 +370,7 @@ bool ODBCCursor::prepare_query(const String& query)
 
   // store information about data types the db is expecting
   for (int i=1; i <= params_size_; i++) {
-    params_.append(Variant(makeSmartPtr<ODBCParam>(hdl_stmt_, i)));
+    params_.append(Variant(req::make<ODBCParam>(hdl_stmt_, i)));
   }
   assert(params_.size() == params_size_);
   return true;
@@ -382,8 +380,12 @@ bool ODBCCursor::exec_prepared_query(const Array params)
 {
   SYNC_VM_REGS_SCOPED();
 
-  SQLCHAR* input[params_size_];
+  req::vector<SQLCHAR*> input;
+  input.reserve(params_size_);
   int64_t num_rows;
+  SCOPE_EXIT {
+    for (auto p : input) req::free(p);
+  };
 
   for (int i=0; i < params_size_; i++) {
     const Array &cur_array = params[i].toArray();
@@ -391,7 +393,7 @@ bool ODBCCursor::exec_prepared_query(const Array params)
     num_rows = cur_array.size();
 
     // allocate buffer we'll pass to odbc
-    input[i] = (SQLCHAR*)smart_malloc(num_rows * param->col_size);
+    input.push_back((SQLCHAR*)req::malloc(num_rows * param->col_size));
 
     // copy each element of our input array to the buffer
     for (int j=0; j < num_rows; j++) {
@@ -424,10 +426,6 @@ bool ODBCCursor::exec_prepared_query(const Array params)
     return false;
   }
 
-  for (int i=0; i < params_size_; i++) {
-    smart_free(input[i]);
-  }
-
   set_num_cols();
   return true;
 }
@@ -438,11 +436,11 @@ bool ODBCCursor::bind_buffer()
 
   // retrieve info about columns
   for (int i_col=1; i_col <= columns_count_; i_col++) {
-    auto column = makeSmartPtr<ODBCColumn>(hdl_stmt_, i_col);
+    auto column = req::make<ODBCColumn>(hdl_stmt_, i_col);
     row_size += column->total_column_size();
     columns_.append(Variant(std::move(column)));
   }
-  buffer_ = (SQLPOINTER)smart_malloc(row_size * per_fetch_rows);
+  buffer_ = (SQLPOINTER)req::malloc(row_size * per_fetch_rows);
 
   // since this buffer can be quite big
   if (buffer_ == nullptr) {
@@ -690,7 +688,7 @@ void ODBCLink::close()
 
 Variant ODBCLink::exec(const String& query)
 {
-  auto cursor = makeSmartPtr<ODBCCursor>(hdl_dbconn_);
+  auto cursor = req::make<ODBCCursor>(hdl_dbconn_);
 
   if (!cursor->exec_query(query)) {
     raise_warning("SQL error: [%s] %s",
@@ -703,7 +701,7 @@ Variant ODBCLink::exec(const String& query)
 
 Variant ODBCLink::prepare(const String& query)
 {
-  auto cursor = makeSmartPtr<ODBCCursor>(hdl_dbconn_);
+  auto cursor = req::make<ODBCCursor>(hdl_dbconn_);
 
   if (!cursor->prepare_query(query)) {
     return false;
@@ -799,7 +797,7 @@ bool HHVM_FUNCTION(odbc_commit, const Resource& link)
 Variant HHVM_FUNCTION(odbc_connect, const String& dsn, const String& username,
     const String& password, const Variant& cursor_type /* = 0 */)
 {
-  auto odbc_link = makeSmartPtr<ODBCLink>();
+  auto odbc_link = req::make<ODBCLink>();
 
   if (!odbc_link->connect(dsn, username, password)) {
     return false;
@@ -898,5 +896,3 @@ static class ODBCExtension final : public Extension {
 } s_odbc_extension;
 
 }
-
-#endif // HAVE_UODBC

@@ -628,6 +628,8 @@ class Framework {
           $rdi,
           RecursiveIteratorIterator::CHILD_FIRST
         );
+        /* HH_FIXME[4110] SPL iterators are a pile of untypable poo, and we have
+         * slightly the wrong types in our hhi files, but it's a PITA to fix. */
         foreach ($rii as $path => $info) {
           $path = $info->getRealPath();
           if (!$info->isDir()) {
@@ -676,8 +678,9 @@ class Framework {
     }
 
     // Get current branch/hash information
-    $git_head_file =$this->install_root."/.git/HEAD";
-    $git_head_info = trim(file_get_contents($git_head_file));
+    $git_head_info = trim(
+      exec("cd ".escapeshellarg($this->install_root)." && git rev-parse HEAD")
+    );
 
     // The commit hash has changed and we need to download new code
     if ($git_head_info !== $this->git_commit) {
@@ -832,6 +835,8 @@ class Framework {
       $rdit,
       RecursiveIteratorIterator::CHILD_FIRST
     );
+    /* HH_FIXME[4110] SPL iterators are a pile of untypable poo, and we have
+     * slightly the wrong types in our hhi files, but it's a PITA to fix. */
     foreach ($riit as $name => $fileinfo) {
       if (($pos = strpos($name, '.disabled.hhvm')) !== false) {
         $new_name = substr($name, 0, $pos);

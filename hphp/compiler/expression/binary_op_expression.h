@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -31,7 +31,6 @@ public:
 
   DECLARE_EXPRESSION_VIRTUAL_FUNCTIONS;
   ExpressionPtr preOptimize(AnalysisResultConstPtr ar) override;
-  bool isTemporary() const override;
   int getLocalEffects() const override;
   bool isLiteralString() const override;
   std::string getLiteralString() const override;
@@ -49,9 +48,8 @@ public:
   ExpressionPtr foldRightAssoc(AnalysisResultConstPtr ar);
 
   ExpressionPtr unneededHelper() override;
-  bool canonCompare(ExpressionPtr e) const override;
 
-  static int getConcatList(ExpressionPtrVec &ev, ExpressionPtr exp,
+  static int getConcatList(std::vector<ExpressionPtr>& ev, ExpressionPtr exp,
                            bool &hasVoid);
   bool isAssignmentOp() const { return m_assign; }
 

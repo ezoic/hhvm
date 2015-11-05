@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -124,6 +124,7 @@ struct NameValueTable : private boost::noncopyable {
    * we shouldn't be running destructors.
    */
   void leak();
+  bool leaked() const { return !m_table; }
 
   /*
    * Set the slot for the supplied name to `val', allocating it if
@@ -189,7 +190,7 @@ public:
   template<class F> void scan(F& mark) const {
     // TODO #6511877 need to access ActRec::scan() here.
     //m_fp->scan(mark);
-    if (!m_table) return;
+    if (leaked()) return;
     for (unsigned i = 0, n = m_tabMask+1; i < n; ++i) {
       m_table[i].scan(mark);
     }

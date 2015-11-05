@@ -7,30 +7,23 @@ list(APPEND HEADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/version.h")
 if(NOT LINUX)
   list(REMOVE_ITEM CXX_SOURCES
        ${CMAKE_CURRENT_SOURCE_DIR}/vm/debug/elfwriter.cpp)
+  list(REMOVE_ITEM HEADER_SOURCES
+       ${CMAKE_CURRENT_SOURCE_DIR}/vm/debug/elfwriter.h)
 endif()
 
 if(NOT ENABLE_FASTCGI)
-  foreach (file ${CXX_SOURCES})
-    if (${file} MATCHES "/fastcgi/")
-      list(REMOVE_ITEM CXX_SOURCES ${file})
-    endif()
-  endforeach(file ${CXX_SOURCES})
+  HHVM_REMOVE_MATCHES_FROM_LISTS(CXX_SOURCES HEADER_SOURCES
+    MATCHES "/fastcgi/")
 endif()
 
 if(NOT ENABLE_PROXYGEN_SERVER)
-  foreach (file ${CXX_SOURCES})
-    if (${file} MATCHES "/proxygen/")
-      list(REMOVE_ITEM CXX_SOURCES ${file})
-    endif()
-  endforeach(file ${CXX_SOURCES})
+  HHVM_REMOVE_MATCHES_FROM_LISTS(CXX_SOURCES HEADER_SOURCES
+    MATCHES "/proxygen/")
 endif()
 
 if(NOT HAVE_CUSTOM_LIBEVENT)
-  foreach (file ${CXX_SOURCES})
-    if(${file} MATCHES "/server/libevent-")
-      list(REMOVE_ITEM CXX_SOURCES ${file})
-    endif()
-  endforeach(file ${CXX_SOURES})
+  HHVM_REMOVE_MATCHES_FROM_LISTS(CXX_SOURCES HEADER_SOURCES
+    MATCHES "/server/libevent-")
 endif()
 
 add_custom_command(
@@ -43,9 +36,17 @@ add_custom_command(
   COMMENT "Generating HHIR opcode table"
   VERBATIM)
 
+add_precompiled_header(
+  "${HPHP_HOME}/hphp/pch/hphp_runtime_static.h"
+  "${HPHP_HOME}/hphp/pch/hphp_runtime_static.cpp"
+  CXX_SOURCES
+)
+
 ADD_LIBRARY(hphp_runtime_static STATIC
-            ${CXX_SOURCES} ${C_SOURCES} ${ASM_SOURCES}
+            ${CXX_SOURCES} ${C_SOURCES} ${ASM_SOURCES} ${HEADER_SOURCES}
             "ir-opcode-generated.h")
+auto_source_group("hphp_runtime_static" "${CMAKE_CURRENT_SOURCE_DIR}"
+  ${ASM_SOURCES} ${C_SOURCES} ${CXX_SOURCES} ${HEADER_SOURCES})
 SET_TARGET_PROPERTIES(hphp_runtime_static PROPERTIES OUTPUT_NAME "hphp_runtime")
 SET_TARGET_PROPERTIES(hphp_runtime_static PROPERTIES PREFIX "lib")
 SET_TARGET_PROPERTIES(hphp_runtime_static PROPERTIES CLEAN_DIRECT_OUTPUT 1)

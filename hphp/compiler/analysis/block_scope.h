@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,9 @@
 #include "hphp/util/bits.h"
 #include "hphp/util/lock.h"
 
+#include <boost/noncopyable.hpp>
 #include <tbb/concurrent_hash_map.h>
+
 #include <list>
 #include <memory>
 #include <set>
@@ -51,11 +53,7 @@ typedef hphp_hash_map<BlockScopeRawPtr, int,
 typedef hphp_hash_set<BlockScopeRawPtr,
                       smart_pointer_hash<BlockScopeRawPtr>
                       > BlockScopeRawPtrHashSet;
-typedef tbb::concurrent_hash_map<BlockScopeRawPtr, int,
-                                 smart_pointer_hash<BlockScopeRawPtr> >
-        ConcurrentBlockScopeRawPtrIntHashMap;
 
-typedef std::vector<BlockScopeRawPtr> BlockScopeRawPtrVec;
 typedef std::list<BlockScopeRawPtr>   BlockScopeRawPtrQueue;
 typedef std::vector<BlockScopeRawPtrFlagsHashMap::
                     value_type*> BlockScopeRawPtrFlagsVec;
@@ -63,8 +61,6 @@ typedef std::pair< BlockScopeRawPtr, int* >
         BlockScopeRawPtrFlagsPtrPair;
 typedef std::vector< std::pair< BlockScopeRawPtr, int* > >
         BlockScopeRawPtrFlagsPtrVec;
-
-typedef SimpleMutex InferTypesMutex;
 
 /**
  * Base class of ClassScope and FunctionScope.
@@ -81,49 +77,13 @@ public:
 
   enum UseKinds {
     /* Callers */
-    UseKindCallerInline   = 0x1,
     UseKindCallerParam    = 0x1 << 1,
     UseKindCallerReturn   = 0x1 << 2,
-    UseKindCaller         = (UseKindCallerInline |
-                             UseKindCallerParam  |
+    UseKindCaller         = (UseKindCallerParam  |
                              UseKindCallerReturn),
 
     /* Static references */
     UseKindStaticRef      = 0x1 << 3,
-
-    /* 16 bits of Non static references */
-    UseKindNonStaticRef0  = 0x1 << 4,
-    UseKindNonStaticRef1  = 0x1 << 5,
-    UseKindNonStaticRef2  = 0x1 << 6,
-    UseKindNonStaticRef3  = 0x1 << 7,
-    UseKindNonStaticRef4  = 0x1 << 8,
-    UseKindNonStaticRef5  = 0x1 << 9,
-    UseKindNonStaticRef6  = 0x1 << 10,
-    UseKindNonStaticRef7  = 0x1 << 11,
-    UseKindNonStaticRef8  = 0x1 << 12,
-    UseKindNonStaticRef9  = 0x1 << 13,
-    UseKindNonStaticRef10 = 0x1 << 14,
-    UseKindNonStaticRef11 = 0x1 << 15,
-    UseKindNonStaticRef12 = 0x1 << 16,
-    UseKindNonStaticRef13 = 0x1 << 17,
-    UseKindNonStaticRef14 = 0x1 << 18,
-    UseKindNonStaticRef15 = 0x1 << 19,
-    UseKindNonStaticRef   = (UseKindNonStaticRef0  |
-                             UseKindNonStaticRef1  |
-                             UseKindNonStaticRef2  |
-                             UseKindNonStaticRef3  |
-                             UseKindNonStaticRef4  |
-                             UseKindNonStaticRef5  |
-                             UseKindNonStaticRef6  |
-                             UseKindNonStaticRef7  |
-                             UseKindNonStaticRef8  |
-                             UseKindNonStaticRef9  |
-                             UseKindNonStaticRef10 |
-                             UseKindNonStaticRef11 |
-                             UseKindNonStaticRef12 |
-                             UseKindNonStaticRef13 |
-                             UseKindNonStaticRef14 |
-                             UseKindNonStaticRef15),
 
     /* Constants */
     UseKindConstRef       = 0x1 << 20,
@@ -135,19 +95,6 @@ public:
     UseKindAny            = (unsigned)-1
   };
 
-  /* Assert the size and bit-consecutiveness of UseKindNonStaticRef */
-  static_assert(BitCount<UseKindNonStaticRef>::value == 16,
-                "UseKindNonStaticRef should have 16 bits set");
-  static_assert(BitPhase<UseKindNonStaticRef>::value <= 2,
-                "UseKindNonStaticRef set bits should be consecutive");
-
-  static int GetNonStaticRefUseKind(unsigned int hash) {
-    int res = ((int)UseKindNonStaticRef0) << (hash % 16);
-    assert(res >= ((int)UseKindNonStaticRef0) &&
-           res <= ((int)UseKindNonStaticRef15));
-    return res;
-  }
-
   enum Marks {
     MarkWaitingInQueue,
     MarkProcessingDeps,
@@ -158,23 +105,13 @@ public:
     MarkProcessed
   };
 
-  class ScopeCompare {
-  public:
-    bool operator()(const BlockScopeRawPtr &p1,
-                    const BlockScopeRawPtr &p2) const {
-      return cmp(p1,p2) < 0;
-    }
-    int cmp(const BlockScopeRawPtr &p1, const BlockScopeRawPtr &p2) const;
-  };
-  typedef std::set<BlockScopeRawPtr, ScopeCompare> BlockScopeSet;
-  friend class ScopeCompare;
-
+  BlockScope(const BlockScope&) = delete;
+  BlockScope& operator=(const BlockScope&) = delete;
   BlockScope(const std::string &name, const std::string &docComment,
              StatementPtr stmt, KindOf kind);
   virtual ~BlockScope() {}
   bool is(KindOf kind) const { return kind == m_kind;}
-  const std::string &getName() const { return m_name;}
-  void setName(const std::string name) { m_name = name;}
+  const std::string &getScopeName() const { return m_scopeName;}
   virtual bool isBuiltin() const { return false; }
   StatementPtr getStmt() const { return m_stmt;}
   VariableTableConstPtr getVariables() const { return m_variables;}
@@ -201,12 +138,6 @@ public:
   void incLoopNestedLevel();
   void decLoopNestedLevel();
   int getLoopNestedLevel() const { return m_loopNestedLevel;}
-
-  /**
-   * Helpers for parsing class functions and variables.
-   */
-  ModifierExpressionPtr setModifiers(ModifierExpressionPtr modifiers);
-  ModifierExpressionPtr getModifiers() { return m_modifiers;}
 
   void setClassInfoAttribute(int flag) {
     m_attributeClassInfo |= flag;
@@ -285,8 +216,7 @@ public:
   int selfUser() const { return m_selfUser; }
 
 protected:
-  std::string m_originalName;
-  std::string m_name;
+  std::string m_scopeName;
   int m_attributeClassInfo;
   std::string m_docComment;
   StatementPtr m_stmt;
@@ -296,8 +226,6 @@ protected:
   BlockScopeRawPtr m_outerScope;
 
   int m_loopNestedLevel;
-  ModifierExpressionPtr m_modifiers;
-  StatementListPtr m_includes;
   int m_pass;
   int m_updated;
   int m_runId;

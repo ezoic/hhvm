@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -50,22 +50,8 @@ template<class F> void MixedArray::scan(F& mark) const {
   if (isZombie()) return;
   auto data = this->data();
   for (unsigned i = 0, n = m_used; i < n; i++) {
-    auto& e = data[i];
-    if (MixedArray::isTombstone(e.data.m_type)) continue;
-    if (e.hasStrKey()) mark(e.skey);
-    mark(e.data);
+    data[i].scan(mark);
   }
-}
-
-ALWAYS_INLINE
-MixedArray* getArrayFromMixedData(const MixedArray::Elm* elms) {
-  // Note: changes to this scheme will require changes in the JIT for
-  // LdColArray.
-  auto a = const_cast<MixedArray*>(
-    reinterpret_cast<const MixedArray*>(elms) - 1
-  );
-  assert(mixedData(a) == elms);
-  return a;
 }
 
 inline ArrayData::~ArrayData() {
@@ -92,6 +78,7 @@ bool MixedArray::isFull() const {
 ALWAYS_INLINE
 void MixedArray::InitSmall(MixedArray* a, RefCount count, uint32_t size,
                            int64_t nextIntKey) {
+  assert(count != 0);
   // Intentionally initialize hash table before header.
 #ifdef __x86_64__
   static_assert(MixedArray::Empty == -1, "");
@@ -104,7 +91,7 @@ void MixedArray::InitSmall(MixedArray* a, RefCount count, uint32_t size,
     : : "r"(a) : "xmm0"
   );
 #else
-  auto const hash = a->hashTab();
+  auto const hash = mixedHash(mixedData(a), MixedArray::SmallScale);
   auto const emptyVal = int64_t{MixedArray::Empty};
   reinterpret_cast<int64_t*>(hash)[0] = emptyVal;
   reinterpret_cast<int64_t*>(hash)[1] = emptyVal;
@@ -156,17 +143,17 @@ MixedArray::copyElmsNextUnsafe(MixedArray* to, const MixedArray* from,
   bcopy32_inline(&(to->m_nextKI), &(from->m_nextKI), sizeof(Elm) * nElems + 32);
 }
 
-extern int32_t* warnUnbalanced(size_t n, int32_t* ei);
+extern int32_t* warnUnbalanced(MixedArray*, size_t n, int32_t* ei);
 
 ALWAYS_INLINE int32_t*
 MixedArray::findForNewInsertCheckUnbalanced(int32_t* table, size_t mask,
-                                            size_t h0) const {
+                                            size_t h0) {
   assert(!isPacked());
   uint32_t balanceLimit = RuntimeOption::MaxArrayChain;
   for (uint32_t i = 1, probe = h0;; ++i) {
     auto ei = &table[probe & mask];
     if (!validPos(*ei)) {
-      return LIKELY(i <= balanceLimit) ? ei : warnUnbalanced(i, ei);
+      return LIKELY(i <= balanceLimit) ? ei : warnUnbalanced(this, i, ei);
     }
     probe += i;
     assertx(i <= mask);
@@ -443,13 +430,13 @@ uint32_t computeScaleFromSize(uint32_t n) {
 }
 
 ALWAYS_INLINE
-MixedArray* smartAllocArray(uint32_t scale) {
+MixedArray* reqAllocArray(uint32_t scale) {
   auto const allocBytes = computeAllocBytes(scale);
   return static_cast<MixedArray*>(MM().objMalloc(allocBytes));
 }
 
 ALWAYS_INLINE
-MixedArray* mallocArray(uint32_t scale) {
+MixedArray* staticAllocArray(uint32_t scale) {
   auto const allocBytes = computeAllocBytes(scale);
   return static_cast<MixedArray*>(std::malloc(allocBytes));
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,12 +29,11 @@
 #include "hphp/runtime/base/zend-printf.h"
 #include "hphp/runtime/base/zend-string.h"
 
+#include "hphp/runtime/ext/stream/ext_stream.h"
 #include "hphp/runtime/ext/stream/ext_stream-user-filters.h"
 
 #include "hphp/runtime/server/static-content-cache.h"
 #include "hphp/runtime/server/virtual-host.h"
-
-#include "hphp/system/constants.h"
 
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/util/logger.h"
@@ -73,12 +72,11 @@ int __thread s_pcloseRet;
 const int File::CHUNK_SIZE = FileData::CHUNK_SIZE;
 const int File::USE_INCLUDE_PATH = 1;
 
-String File::TranslatePathKeepRelative(const String& filename) {
+String File::TranslatePathKeepRelative(const char* filename, uint32_t size) {
   // canonicalize asserts that we don't have nulls
-  String canonicalized = FileUtil::canonicalize(filename);
-  if (ThreadInfo::s_threadInfo->m_reqInjectionData.hasSafeFileAccess()) {
-    auto const& allowedDirectories = ThreadInfo::s_threadInfo->
-      m_reqInjectionData.getAllowedDirectories();
+  String canonicalized = FileUtil::canonicalize(filename, size);
+  if (RID().hasSafeFileAccess()) {
+    auto const& allowedDirectories = RID().getAllowedDirectoriesProcessed();
     auto it = std::upper_bound(allowedDirectories.begin(),
                                allowedDirectories.end(), canonicalized,
                                [](const String& val, const std::string& dir) {
@@ -93,7 +91,7 @@ String File::TranslatePathKeepRelative(const String& filename) {
     }
 
     // disallow access with an absolute path
-    if (canonicalized.charAt(0) == '/') {
+    if (FileUtil::isAbsolutePath(canonicalized.slice())) {
       return empty_string();
     }
 
@@ -108,11 +106,17 @@ String File::TranslatePathKeepRelative(const String& filename) {
 }
 
 String File::TranslatePath(const String& filename) {
-  if (filename.charAt(0) != '/') {
+  if (filename.empty()) {
+    // Special case: an empty string should continue to be an empty string.
+    // Otherwise it would be canonicalized to CWD, which is inconsistent with
+    // PHP and most filesystem utilities.
+    return filename;
+  } else if (!FileUtil::isAbsolutePath(filename.slice())) {
     String cwd = g_context->getCwd();
     return TranslatePathKeepRelative(cwd + "/" + filename);
+  } else {
+    return TranslatePathKeepRelative(filename);
   }
-  return TranslatePathKeepRelative(filename);
 }
 
 String File::TranslatePathWithFileCache(const String& filename) {
@@ -147,9 +151,9 @@ bool File::IsVirtualFile(const String& filename) {
     StaticContentCache::TheFileCache->fileExists(filename.data(), false);
 }
 
-SmartPtr<File> File::Open(const String& filename, const String& mode,
+req::ptr<File> File::Open(const String& filename, const String& mode,
                           int options /* = 0 */,
-                          const SmartPtr<StreamContext>& context /* = null */) {
+                          const req::ptr<StreamContext>& context /* = null */) {
   Stream::Wrapper *wrapper = Stream::getWrapperFromURI(filename);
   if (!wrapper) return nullptr;
   if (filename.find('\0') >= 0) return nullptr;
@@ -189,9 +193,9 @@ File::~File() {
 }
 
 void File::sweep() {
-  // Clear non-smart state without deleting `this`. Therefore assumes
-  // `this` has been smart allocated. Note that the derived class'
-  // sweep() is responsible for closing m_fd and any other non-smart
+  // Clear non-request-local state without deleting `this`. Therefore assumes
+  // `this` has been request-heap allocated. Note that the derived class'
+  // sweep() is responsible for closing m_fd and any other non-request
   // resources it might have allocated.
   assert(!valid());
   File::closeImpl();
@@ -482,23 +486,23 @@ bool File::stat(struct stat *sb) {
   return false;
 }
 
-void File::appendReadFilter(const SmartPtr<StreamFilter>& filter) {
+void File::appendReadFilter(const req::ptr<StreamFilter>& filter) {
   m_readFilters.push_back(filter);
 }
 
-void File::appendWriteFilter(const SmartPtr<StreamFilter>& filter) {
+void File::appendWriteFilter(const req::ptr<StreamFilter>& filter) {
   m_writeFilters.push_back(filter);
 }
 
-void File::prependReadFilter(const SmartPtr<StreamFilter>& filter) {
+void File::prependReadFilter(const req::ptr<StreamFilter>& filter) {
   m_readFilters.push_front(filter);
 }
 
-void File::prependWriteFilter(const SmartPtr<StreamFilter>& filter) {
+void File::prependWriteFilter(const req::ptr<StreamFilter>& filter) {
   m_writeFilters.push_front(filter);
 }
 
-bool File::removeFilter(const SmartPtr<StreamFilter>& filter) {
+bool File::removeFilter(const req::ptr<StreamFilter>& filter) {
   for (auto it = m_readFilters.begin(); it != m_readFilters.end(); ++it) {
     if (*it == filter) {
       m_readFilters.erase(it);
@@ -507,12 +511,12 @@ bool File::removeFilter(const SmartPtr<StreamFilter>& filter) {
   }
   for (auto it = m_writeFilters.begin(); it != m_writeFilters.end(); ++it) {
     if (*it == filter) {
-      std::list<SmartPtr<StreamFilter>> closing_filters;
+      std::list<req::ptr<StreamFilter>> closing_filters;
       closing_filters.push_back(filter);
       String result(applyFilters(empty_string_ref,
                                  closing_filters,
                                  /* closing = */ true));
-      std::list<SmartPtr<StreamFilter>> later_filters;
+      std::list<req::ptr<StreamFilter>> later_filters;
       auto dupit(it);
       for (++dupit; dupit != m_writeFilters.end(); ++dupit) {
         later_filters.push_back(*dupit);
@@ -560,7 +564,7 @@ String File::getWrapperType() const {
   if (!m_wrapperType || m_wrapperType->empty()) {
     return o_getClassName();
   }
-  return m_wrapperType;
+  return String{m_wrapperType};
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -752,10 +756,10 @@ const String& File::o_getResourceName() const {
 // csv functions
 
 int64_t File::writeCSV(const Array& fields, char delimiter_char /* = ',' */,
-                     char enclosure_char /* = '"' */) {
+                     char enclosure_char /* = '"' */,
+                     char escape_char /* = '\' */) {
   int line = 0;
   int count = fields.size();
-  const char escape_char = '\\';
   StringBuffer csvline(1024);
 
   for (ArrayIter iter(fields); iter; ++iter) {
@@ -1054,18 +1058,18 @@ String File::applyFilters(const String& buffer,
   if (buffer.empty() && !closing) {
     return buffer;
   }
-  SmartPtr<BucketBrigade> in;
-  SmartPtr<BucketBrigade> out;
+  req::ptr<BucketBrigade> in;
+  req::ptr<BucketBrigade> out;
 
   if (buffer.empty()) {
-    out = makeSmartPtr<BucketBrigade>();
+    out = req::make<BucketBrigade>();
   } else {
-    out = makeSmartPtr<BucketBrigade>(buffer);
+    out = req::make<BucketBrigade>(buffer);
   }
 
   for (const auto& filter : filters) {
     in = out;
-    out = makeSmartPtr<BucketBrigade>();
+    out = req::make<BucketBrigade>();
 
     auto result = filter->invokeFilter(in, out, closing);
     // PSFS_ERR_FATAL doesn't raise a fatal in Zend - appears to be

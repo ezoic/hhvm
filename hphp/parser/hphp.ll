@@ -2,6 +2,7 @@
 #include "hphp/parser/scanner.h"
 #include "hphp/system/systemlib.h"
 #include <cassert>
+#include <cctype>
 
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wnull-conversion"
@@ -102,6 +103,7 @@ static int getNextTokenType(int t) {
     case T_IS_NOT_IDENTICAL:
     case T_IS_SMALLER_OR_EQUAL:
     case T_IS_GREATER_OR_EQUAL:
+    case T_SPACESHIP:
     case T_PLUS_EQUAL:
     case T_MINUS_EQUAL:
     case T_MUL_EQUAL:
@@ -163,20 +165,6 @@ static int getNextTokenType(int t) {
     case T_XHP_REQUIRED:
     case T_ENUM:
     case T_ARRAY:
-    case T_FROM:
-    case T_IN:
-    case T_WHERE:
-    case T_JOIN:
-    case T_ON:
-    case T_EQUALS:
-    case T_INTO:
-    case T_LET:
-    case T_ORDERBY:
-    case T_ASCENDING:
-    case T_DESCENDING:
-    case T_SELECT:
-    case T_GROUP:
-    case T_BY:
       return NextTokenType::TypeListMaybe;
     case T_SUPER:
     case T_XHP_ATTRIBUTE:
@@ -463,6 +451,7 @@ BACKQUOTE_CHARS     ("{"*([^$`\\{]|("\\"{ANY_CHAR}))|{BACKQUOTE_LITERAL_DOLLAR})
 <ST_IN_SCRIPTING>"!="|"<>"            { RETSTEP(T_IS_NOT_EQUAL);}
 <ST_IN_SCRIPTING>"<="                 { RETSTEP(T_IS_SMALLER_OR_EQUAL);}
 <ST_IN_SCRIPTING>">="                 { RETSTEP(T_IS_GREATER_OR_EQUAL);}
+<ST_IN_SCRIPTING>"<=>"                { RETSTEP(T_SPACESHIP);}
 <ST_IN_SCRIPTING>"+="                 { RETSTEP(T_PLUS_EQUAL);}
 <ST_IN_SCRIPTING>"-="                 { RETSTEP(T_MINUS_EQUAL);}
 <ST_IN_SCRIPTING>"*="                 { RETSTEP(T_MUL_EQUAL);}
@@ -487,22 +476,6 @@ BACKQUOTE_CHARS     ("{"*([^$`\\{]|("\\"{ANY_CHAR}))|{BACKQUOTE_LITERAL_DOLLAR})
 <ST_IN_SCRIPTING>"type"               { HH_ONLY_KEYWORD(T_UNRESOLVED_TYPE); }
 <ST_IN_SCRIPTING>"newtype"            { HH_ONLY_KEYWORD(T_UNRESOLVED_NEWTYPE); }
 <ST_IN_SCRIPTING>"await"              { HH_ONLY_KEYWORD(T_AWAIT);}
-<ST_IN_SCRIPTING>"from"/{WHITESPACE_AND_COMMENTS}\$[a-zA-Z0-9_\x7f-\xff] {
-  HH_ONLY_KEYWORD(T_FROM);
-}
-<ST_IN_SCRIPTING>"where"              { HH_ONLY_KEYWORD(T_WHERE); }
-<ST_IN_SCRIPTING>"join"               { HH_ONLY_KEYWORD(T_JOIN); }
-<ST_IN_SCRIPTING>"in"                 { HH_ONLY_KEYWORD(T_IN); }
-<ST_IN_SCRIPTING>"on"                 { HH_ONLY_KEYWORD(T_ON); }
-<ST_IN_SCRIPTING>"equals"             { HH_ONLY_KEYWORD(T_EQUALS); }
-<ST_IN_SCRIPTING>"into"               { HH_ONLY_KEYWORD(T_INTO); }
-<ST_IN_SCRIPTING>"let"                { HH_ONLY_KEYWORD(T_LET); }
-<ST_IN_SCRIPTING>"orderby"            { HH_ONLY_KEYWORD(T_ORDERBY); }
-<ST_IN_SCRIPTING>"ascending"          { HH_ONLY_KEYWORD(T_ASCENDING); }
-<ST_IN_SCRIPTING>"descending"         { HH_ONLY_KEYWORD(T_DESCENDING); }
-<ST_IN_SCRIPTING>"select"             { HH_ONLY_KEYWORD(T_SELECT); }
-<ST_IN_SCRIPTING>"group"              { HH_ONLY_KEYWORD(T_GROUP); }
-<ST_IN_SCRIPTING>"by"                 { HH_ONLY_KEYWORD(T_BY); }
 <ST_IN_SCRIPTING>"async"/{WHITESPACE_AND_COMMENTS}[a-zA-Z0-9_\x7f-\xff(${] {
   HH_ONLY_KEYWORD(T_ASYNC);
 }
@@ -667,7 +640,8 @@ BACKQUOTE_CHARS     ("{"*([^$`\\{]|("\\"{ANY_CHAR}))|{BACKQUOTE_LITERAL_DOLLAR})
         return '}';
 }
 
-<ST_LOOKING_FOR_VARNAME>{LABEL} {
+<ST_LOOKING_FOR_VARNAME>{LABEL}[[}] {
+        yyless(yyleng - 1);
         SETTOKEN(T_STRING_VARNAME);
         // Change state to IN_SCRIPTING; current state will be popped
         // when we encounter '}'
@@ -787,7 +761,7 @@ BACKQUOTE_CHARS     ("{"*([^$`\\{]|("\\"{ANY_CHAR}))|{BACKQUOTE_LITERAL_DOLLAR})
         return T_HASHBANG;
 }
 
-<INITIAL>(([^<#]|"<"[^?%s<]|"#"[^!]){1,400})|"<s"|"<" {
+<INITIAL>(([^<#]|"<"[^?%s<]){1,400})|"<s"|"<"|"#" {
         SETTOKEN(T_INLINE_HTML);
         BEGIN(ST_IN_SCRIPTING);
         yy_push_state(ST_IN_HTML, yyscanner);
@@ -1231,8 +1205,9 @@ BACKQUOTE_CHARS     ("{"*([^$`\\{]|("\\"{ANY_CHAR}))|{BACKQUOTE_LITERAL_DOLLAR})
 
   YYCURSOR--;
 
-  // The rules that lead to this state all consume an end-of-line.
-  bool lookingForEndLabel = true;
+  // T_START_HEREDOC has a trailing newline, so we can start looking
+  // for the ending label right away
+  bool lookingForEndLabel = _scanner->lastToken() == T_START_HEREDOC;
 
   while (refillResult == EOB_ACT_CONTINUE_SCAN) {
     while (YYCURSOR < YYLIMIT) {

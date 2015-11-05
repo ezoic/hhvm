@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -35,7 +35,7 @@ namespace HPHP {
 struct TVAccessor {
   typedef const TypedValue& ElmT;
   bool isInt(ElmT elm) const { return elm.m_type == KindOfInt64; }
-  bool isStr(ElmT elm) const { return IS_STRING_TYPE(elm.m_type); }
+  bool isStr(ElmT elm) const { return isStringType(elm.m_type); }
   int64_t getInt(ElmT elm) const { return elm.m_data.num; }
   StringData* getStr(ElmT elm) const { return elm.m_data.pstr; }
   Variant getValue(ElmT elm) const { return tvAsCVarRef(&elm); }
@@ -52,14 +52,14 @@ template<typename E> struct AssocKeyAccessor {
       return getInt(elm);
     }
     assert(isStr(elm));
-    return getStr(elm);
+    return Variant{getStr(elm)};
   }
 };
 
 template<typename E> struct AssocValAccessor {
   typedef const E& ElmT;
   bool isInt(ElmT elm) const { return elm.data.m_type == KindOfInt64; }
-  bool isStr(ElmT elm) const { return IS_STRING_TYPE(elm.data.m_type); }
+  bool isStr(ElmT elm) const { return isStringType(elm.data.m_type); }
   int64_t getInt(ElmT elm) const { return elm.data.m_data.num; }
   StringData* getStr(ElmT elm) const { return elm.data.m_data.pstr; }
   Variant getValue(ElmT elm) const { return tvAsCVarRef(&elm.data); }
@@ -95,8 +95,8 @@ struct IntElmCompare {
     } else {
       bufLeft[20] = '\0';
       auto sl = conv_10(iLeft, &bufLeft[20]);
-      sLeft = sl.ptr;
-      lenLeft = sl.len;
+      sLeft = sl.data();
+      lenLeft = sl.size();
     }
     const StringData* sdRight = String::GetIntegerStringData(iRight);
     if (sdRight) {
@@ -105,8 +105,8 @@ struct IntElmCompare {
     } else {
       bufRight[20] = '\0';
       auto sl = conv_10(iRight, &bufRight[20]);
-      sRight = sl.ptr;
-      lenRight = sl.len;
+      sRight = sl.data();
+      lenRight = sl.size();
     }
     if (sort_flags == SORT_STRING) {
       return ascending ?
@@ -329,9 +329,9 @@ struct ElmUCompare {
       int64_t lval; double dval;
       auto dt = ret.getStringData()->isNumericWithVal(lval, dval, 0);
 
-      if (IS_INT_TYPE(dt)) {
+      if (isIntType(dt)) {
         return lval > 0;
-      } else if (IS_DOUBLE_TYPE(dt)) {
+      } else if (isDoubleType(dt)) {
         return dval > 0;
       }
     }

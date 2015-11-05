@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "hphp/runtime/base/header-kind.h"
 #include "hphp/util/assertions.h"
 
 namespace HPHP {
@@ -33,166 +34,127 @@ namespace HPHP {
  * Using 8-bit values generates shorter cmp instructions while still being
  * far enough from 0 to be safe.
  */
-constexpr size_t UncountedBitPos = 31;
 constexpr int32_t UncountedValue = -128;
 constexpr int32_t StaticValue = -127; // implies UncountedValue
 constexpr int32_t RefCountMaxRealistic = (1 << 30) - 1;
 
-static_assert((uint32_t)UncountedValue & (1uL << UncountedBitPos),
-              "Check UncountedValue and UncountedBitPos");
-static_assert((uint32_t)StaticValue & (1uL << UncountedBitPos),
-              "Check StaticValue and UncountedBitPos");
-
-/*
- * Check that the refcount is realistic, and not the static flag
- */
-inline bool check_refcount_ns(int32_t count) {
-  return (uint32_t)count <= (uint32_t)RefCountMaxRealistic;
+template<class T, Counted CNT>
+bool HeaderWord<T,CNT>::checkCount() const {
+  return count >= 1 ||
+         (CNT == Counted::Maybe &&
+          (count == UncountedValue || count == StaticValue));
 }
 
-/*
- * Real count values should always be less than or equal to
- * RefCountMaxRealistic, and asserting this will also catch
- * common malloc freed-memory patterns (e.g. 0x5a5a5a5a and smart
- * allocator's 0x6a6a6a6a).
- */
-inline bool check_refcount(int32_t count) {
-  return count <= StaticValue || check_refcount_ns(count);
+template<class T, Counted CNT>
+bool HeaderWord<T,CNT>::isRefCounted() const {
+  return CNT == Counted::Always || count >= 0;
 }
 
-/*
- * As above, but additionally check for non-zero
- */
-inline bool check_refcount_nz(int32_t count) {
-  return count <= StaticValue || check_refcount_ns(count - 1);
+template<class T, Counted CNT>
+bool HeaderWord<T,CNT>::hasMultipleRefs() const {
+  assert(checkCount());
+  return uint32_t(count) > 1; // treat Static/Uncounted as large positive counts
 }
 
-/*
- * As above, but additionally check for greater-than-zero
- */
-inline bool check_refcount_ns_nz(int32_t count) {
-  return check_refcount_ns(count - 1);
+template<class T, Counted CNT>
+bool HeaderWord<T,CNT>::hasExactlyOneRef() const {
+  assert(checkCount());
+  return count == 1;
+}
+
+template<class T, Counted CNT>
+void HeaderWord<T,CNT>::incRefCount() const {
+  assert(checkCount() || count == 0 /* due to static init order */);
+  if (isRefCounted()) ++count;
+}
+
+template<class T, Counted CNT>
+void HeaderWord<T,CNT>::decRefCount() const {
+  assert(checkCount());
+  if (isRefCounted()) --count;
+}
+
+template<class T, Counted CNT>
+bool HeaderWord<T,CNT>::decWillRelease() const {
+  return !hasMultipleRefs();
+}
+
+template<class T, Counted CNT> ALWAYS_INLINE
+bool HeaderWord<T,CNT>::decReleaseCheck() {
+  assert(checkCount());
+  if (count == 1) return true;
+  if (CNT == Counted::Always || count > 1) --count;
+  return false;
+}
+
+template<class T, Counted CNT> ALWAYS_INLINE
+bool HeaderWord<T,CNT>::isStatic() const {
+  assert(checkCount());
+  return CNT == Counted::Maybe && count == StaticValue;
+}
+
+template<class T, Counted CNT> ALWAYS_INLINE
+bool HeaderWord<T,CNT>::isUncounted() const {
+  assert(checkCount());
+  return CNT == Counted::Maybe && count == UncountedValue;
 }
 
 /**
- * Ref-counted types have a count field at FAST_REFCOUNT_OFFSET
+ * Ref-counted types have a HeaderWord field at HeaderOffset,
  * and define counting methods with these macros.
  */
-#define IMPLEMENT_COUNTABLE_METHODS_NO_STATIC                           \
-  RefCount getCount() const {                                           \
-    assert(check_refcount(m_hdr.count));                                \
-    return m_hdr.count;                                                 \
+
+#define IMPLEMENT_COUNTABLE_METHODS                                     \
+  bool checkCount() const {                                             \
+    assert(kindIsValid());                                              \
+    return m_hdr.checkCount();                                          \
   }                                                                     \
-                                                                        \
   bool isRefCounted() const {                                           \
-    assert(check_refcount(m_hdr.count));                                \
-    return m_hdr.count >= 0;                                            \
+    assert(kindIsValid());                                              \
+    return m_hdr.isRefCounted();                                        \
   }                                                                     \
-                                                                        \
   bool hasMultipleRefs() const {                                        \
-    assert(check_refcount(m_hdr.count));                                \
-    return (uint32_t)m_hdr.count > 1;                                   \
+    assert(kindIsValid());                                              \
+    return m_hdr.hasMultipleRefs();                                     \
   }                                                                     \
-                                                                        \
   bool hasExactlyOneRef() const {                                       \
-    assert(check_refcount(m_hdr.count));                                \
-    return (uint32_t)m_hdr.count == 1;                                  \
+    assert(kindIsValid());                                              \
+    return m_hdr.hasExactlyOneRef();                                    \
   }                                                                     \
-                                                                        \
+  bool cowCheck() const {                                               \
+    return m_hdr.hasMultipleRefs();                                     \
+  }                                                                     \
   void incRefCount() const {                                            \
     assert(!MemoryManager::sweeping());                                 \
-    assert(check_refcount(m_hdr.count));                                \
-    if (isRefCounted()) { ++m_hdr.count; }                              \
+    assert(kindIsValid());                                              \
+    m_hdr.incRefCount();                                                \
   }                                                                     \
-                                                                        \
-  void setRefCount(RefCount count) {                                    \
-    assert(count == StaticValue || !MemoryManager::sweeping());         \
-    assert(check_refcount(m_hdr.count));                                \
-    m_hdr.count = count;                                                \
-    assert(check_refcount(m_hdr.count));                                \
-  }                                                                     \
-                                                                        \
-  RefCount decRefCount() const {                                        \
+  void decRefCount() const {                                            \
     assert(!MemoryManager::sweeping());                                 \
-    assert(check_refcount_nz(m_hdr.count));                             \
-    return isRefCounted() ? --m_hdr.count : m_hdr.count;                \
+    assert(kindIsValid());                                              \
+    m_hdr.decRefCount();                                                \
+  }                                                                     \
+  bool decWillRelease() const {                                         \
+    assert(kindIsValid());                                              \
+    return m_hdr.decWillRelease();                                      \
   }                                                                     \
   ALWAYS_INLINE bool decReleaseCheck() {                                \
     assert(!MemoryManager::sweeping());                                 \
-    assert(check_refcount_nz(m_hdr.count));                             \
-    if (m_hdr.count == 1) return true;                                  \
-    if (m_hdr.count > 1) --m_hdr.count;                                 \
-    return false;                                                       \
+    assert(kindIsValid());                                              \
+    return m_hdr.decReleaseCheck();                                     \
   }                                                                     \
   ALWAYS_INLINE void decRefAndRelease() {                               \
+    assert(kindIsValid());                                              \
     if (decReleaseCheck()) release();                                   \
+  }                                                                     \
+  bool isStatic() const {                                               \
+    assert(kindIsValid());                                              \
+    return m_hdr.isStatic();                                            \
+  }                                                                     \
+  bool isUncounted() const {                                            \
+    assert(kindIsValid());                                              \
+    return m_hdr.isUncounted();                                         \
   }
 
-#define IMPLEMENT_COUNTABLE_METHODS             \
-  void setStatic() const {                      \
-    assert(check_refcount(m_hdr.count));        \
-    m_hdr.count = StaticValue;                  \
-  }                                             \
-  bool isStatic() const {                       \
-    return m_hdr.count == StaticValue;          \
-  }                                             \
-  void setUncounted() const {                   \
-    assert(check_refcount(m_hdr.count));        \
-    m_hdr.count = UncountedValue;               \
-  }                                             \
-  bool isUncounted() const {                    \
-    return m_hdr.count == UncountedValue;       \
-  }                                             \
-  IMPLEMENT_COUNTABLE_METHODS_NO_STATIC
-
-#define IMPLEMENT_COUNTABLENF_METHODS_NO_STATIC         \
-  RefCount getCount() const {                           \
-    assert(check_refcount_ns(m_hdr.count));             \
-    return m_hdr.count;                                 \
-  }                                                     \
-                                                        \
-  bool isRefCounted() const { return true; }            \
-                                                        \
-  bool hasMultipleRefs() const {                        \
-    assert(check_refcount_ns(m_hdr.count));             \
-    return m_hdr.count > 1;                             \
-  }                                                     \
-                                                        \
-  bool hasExactlyOneRef() const {                       \
-    assert(check_refcount(m_hdr.count));                \
-    return m_hdr.count == 1;                            \
-  }                                                     \
-                                                        \
-  void incRefCount() const {                            \
-    assert(!MemoryManager::sweeping());                 \
-    assert(check_refcount_ns(m_hdr.count));             \
-    ++m_hdr.count;                                      \
-  }                                                     \
-                                                        \
-  RefCount decRefCount() const {                        \
-    assert(!MemoryManager::sweeping());                 \
-    assert(check_refcount_ns_nz(m_hdr.count));          \
-    return --m_hdr.count;                               \
-  }                                                     \
-                                                        \
-  void setRefCount(RefCount count) {                    \
-    assert(!MemoryManager::sweeping());                 \
-    assert(check_refcount_ns(m_hdr.count));             \
-    m_hdr.count = count;                                \
-    assert(check_refcount_ns(m_hdr.count));             \
-  }                                                     \
-                                                        \
-  ALWAYS_INLINE bool decRefAndRelease() {               \
-    assert(!MemoryManager::sweeping());                 \
-    assert(check_refcount_ns_nz(m_hdr.count));          \
-    if (!--m_hdr.count) {                               \
-      release();                                        \
-      return true;                                      \
-    }                                                   \
-    return false;                                       \
-  }
-
-///////////////////////////////////////////////////////////////////////////////
 }
-
 #endif // incl_HPHP_COUNTABLE_H_

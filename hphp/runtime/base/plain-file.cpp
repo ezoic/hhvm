@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -295,30 +295,30 @@ void BuiltinFiles::requestShutdown() {
 
 const Variant& BuiltinFiles::GetSTDIN() {
   if (g_builtin_files->m_stdin.isNull()) {
-    auto f = makeSmartPtr<BuiltinFile>(stdin);
+    auto f = req::make<BuiltinFile>(stdin);
     g_builtin_files->m_stdin = f;
-    f->o_setId(1);
-    assert(f->o_getId() == 1);
+    f->setId(1);
+    assert(f->getId() == 1);
   }
   return g_builtin_files->m_stdin;
 }
 
 const Variant& BuiltinFiles::GetSTDOUT() {
   if (g_builtin_files->m_stdout.isNull()) {
-    auto f = makeSmartPtr<BuiltinFile>(stdout);
+    auto f = req::make<BuiltinFile>(stdout);
     g_builtin_files->m_stdout = f;
-    f->o_setId(2);
-    assert(f->o_getId() == 2);
+    f->setId(2);
+    assert(f->getId() == 2);
   }
   return g_builtin_files->m_stdout;
 }
 
 const Variant& BuiltinFiles::GetSTDERR() {
   if (g_builtin_files->m_stderr.isNull()) {
-    auto f = makeSmartPtr<BuiltinFile>(stderr);
+    auto f = req::make<BuiltinFile>(stderr);
     g_builtin_files->m_stderr = f;
-    f->o_setId(3);
-    assert(f->o_getId() == 3);
+    f->setId(3);
+    assert(f->getId() == 3);
   }
   return g_builtin_files->m_stderr;
 }

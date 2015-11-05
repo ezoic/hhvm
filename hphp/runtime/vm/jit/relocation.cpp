@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,10 +20,12 @@
 
 #include "hphp/runtime/base/arch.h"
 #include "hphp/runtime/base/zend-string.h"
-#include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/vm/blob-helper.h"
+#include "hphp/runtime/vm/treadmill.h"
+
+#include "hphp/runtime/vm/jit/align.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
-#include "hphp/runtime/vm/jit/back-end-x64.h"
+#include "hphp/runtime/vm/jit/service-requests.h"
 
 #include "hphp/tools/hfsort/jitsort.h"
 
@@ -118,7 +120,7 @@ void postProcess(TransRelocInfo&& tri, void* paramPtr) {
       auto it = deadStubs.lower_bound(tri.coldStart);
       while (it != deadStubs.end() && *it < tri.coldEnd) {
         x64::adjustForRelocation(rel, coldStart, *it);
-        coldStart = *it + mcg->backEnd().reusableStubSize();
+        coldStart = *it + svcreq::stub_size();
         ++it;
       }
     }
@@ -179,7 +181,7 @@ struct TransRelocInfoHelper {
   std::vector<IncomingBranch::Opaque> incomingBranches;
   std::vector<uint32_t> addressImmediates;
   std::vector<uint64_t> codePointers;
-  std::vector<std::pair<uint32_t, std::pair<int,int>>> alignFixups;
+  std::vector<std::pair<uint32_t,std::pair<Alignment,AlignContext>>> alignFixups;
 
   template<class SerDe> void serde(SerDe& sd) {
     sd
@@ -210,8 +212,7 @@ struct TransRelocInfoHelper {
       tri.fixups.m_codePointers.insert((TCA*)cp);
     }
     for (auto v : alignFixups) {
-      tri.fixups.m_alignFixups.emplace(v.first + code.base(),
-                                         v.second);
+      tri.fixups.m_alignFixups.emplace(v.first + code.base(), v.second);
     }
     return tri;
   }
@@ -220,7 +221,7 @@ struct TransRelocInfoHelper {
 void relocateStubs(TransLoc& loc, TCA frozenStart, TCA frozenEnd,
                    RelocationInfo& rel, CodeCache& cache,
                    CodeGenFixups& fixups) {
-  auto const stubSize = mcg->backEnd().reusableStubSize();
+  auto const stubSize = svcreq::stub_size();
 
   for (auto addr : fixups.m_reusedStubs) {
     if (!loc.contains(addr)) continue;
@@ -315,6 +316,9 @@ void liveRelocate(int time) {
     break;
   case Arch::ARM:
     // Relocation is not supported on arm.
+    return;
+  case Arch::PPC64:
+    // Relocation is not implemented on ppc64.
     return;
   }
 
@@ -723,7 +727,7 @@ bool relocateNewTranslation(TransLoc& loc, CodeCache& cache,
     auto clearRange = [](TCA start, TCA end) {
       CodeBlock cb;
       cb.init(start, end - start, "Dead code");
-      Asm a {cb};
+      X64Assembler a {cb};
       while (cb.available() >= 2) a.ud2();
       if (cb.available() > 0) a.int3();
       always_assert(!cb.available());

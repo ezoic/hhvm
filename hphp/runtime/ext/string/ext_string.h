@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -22,16 +22,40 @@
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/base/zend-printf.h"
-#include "hphp/runtime/base/bstring.h"
+#include "hphp/util/bstring.h"
+#ifndef _MSC_VER
 #include <langinfo.h>
+#endif
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // transformations and manipulations
 
 extern const HPHP::StaticString k_HPHP_TRIM_CHARLIST;
-extern const int64_t k_STR_PAD_RIGHT;
-extern const int64_t k_ENT_COMPAT;
+
+constexpr int64_t k_ENT_HTML_QUOTE_NONE = 0;
+constexpr int64_t k_ENT_HTML_QUOTE_SINGLE = 1;
+constexpr int64_t k_ENT_HTML_QUOTE_DOUBLE = 2;
+constexpr int64_t k_ENT_HTML_IGNORE_ERRORS = 4;
+constexpr int64_t k_ENT_HTML_SUBSTITUTE_ERRORS = 8;
+constexpr int64_t k_ENT_HTML_DOC_TYPE_MASK = (16|32);
+constexpr int64_t k_ENT_HTML_DOC_HTML401 = 0;
+constexpr int64_t k_ENT_HTML_DOC_XML1 = 16;
+constexpr int64_t k_ENT_HTML_DOC_XHTML = 32;
+constexpr int64_t k_ENT_HTML_DOC_HTML5 = (16|32);
+constexpr int64_t k_ENT_HTML_SUBSTITUTE_DISALLOWED_CHARS = 128;
+constexpr int64_t k_ENT_FB_UTF8 = 32768;
+constexpr int64_t k_ENT_FB_UTF8_ONLY = 65536;
+
+constexpr int64_t k_ENT_QUOTES = k_ENT_HTML_QUOTE_DOUBLE |
+                                 k_ENT_HTML_QUOTE_SINGLE;
+
+constexpr int64_t k_HTML_SPECIALCHARS = 0;
+constexpr int64_t k_HTML_ENTITIES = 1;
+
+constexpr int64_t k_STR_PAD_LEFT  = 0;
+constexpr int64_t k_STR_PAD_RIGHT = 1;
+constexpr int64_t k_STR_PAD_BOTH  = 2;
 
 String HHVM_FUNCTION(addcslashes,
                      const String& str,
@@ -122,31 +146,31 @@ String HHVM_FUNCTION(str_pad,
                      int pad_type = k_STR_PAD_RIGHT);
 String HHVM_FUNCTION(str_repeat,
                      const String& input,
-                     int multiplier);
+                     int64_t multiplier);
 
 ///////////////////////////////////////////////////////////////////////////////
 // encoding/decoding
 
 String HHVM_FUNCTION(html_entity_decode,
                      const String& str,
-                     int quote_style = k_ENT_COMPAT,
+                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
                      const String& charset = "UTF-8");
 String HHVM_FUNCTION(htmlentities,
                      const String& str,
-                     int quote_style = k_ENT_COMPAT,
+                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
                      const String& charset = "UTF-8",
                      bool double_encode = true);
 String HHVM_FUNCTION(htmlspecialchars_decode,
                      const String& str,
-                     int quote_style = k_ENT_COMPAT);
+                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE);
 String HHVM_FUNCTION(htmlspecialchars,
                      const String& str,
-                     int quote_style = k_ENT_COMPAT,
+                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
                      const String& charset = "UTF-8",
                      bool double_encode = true);
 String HHVM_FUNCTION(fb_htmlspecialchars,
                      const String& str,
-                     int quote_style = k_ENT_COMPAT,
+                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
                      const String& charset = "ISO-8859-1",
                      const Variant& extra = empty_array_ref);
 String HHVM_FUNCTION(quoted_printable_encode,
@@ -180,7 +204,7 @@ String HHVM_FUNCTION(convert_cyr_string,
                      const String& to);
 Array HHVM_FUNCTION(get_html_translation_table,
                     int table = 0,
-                    int quote_style = k_ENT_COMPAT,
+                    int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
                     const String& encoding = "UTF-8");
 String HHVM_FUNCTION(hebrev,
                      const String& hebrew_text,
@@ -213,7 +237,7 @@ Variant f_vsprintf(const String& format,
 
 Variant sscanfImpl(const String& str,
                    const String& format,
-                   const std::vector<Variant*>& args);
+                   const req::vector<Variant*>& args);
 TypedValue* HHVM_FN(sscanf)(ActRec* ar);
 String HHVM_FUNCTION(chr, const Variant& ascii);
 int64_t HHVM_FUNCTION(ord,

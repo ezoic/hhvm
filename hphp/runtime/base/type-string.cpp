@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -46,7 +46,7 @@ static const StringData* convert_integer_helper(int64_t n) {
   char tmpbuf[21];
   tmpbuf[20] = '\0';
   auto sl = conv_10(n, &tmpbuf[20]);
-  return makeStaticString(sl.ptr, sl.len);
+  return makeStaticString(sl);
 }
 
 void String::PreConvertInteger(int64_t n) {
@@ -95,13 +95,13 @@ StringData* buildStringData(int n) {
   return StringData::Make(sl, CopyString);
 }
 
-SmartPtr<StringData> String::buildString(int n) {
+req::ptr<StringData> String::buildString(int n) {
   const StringData* sd = GetIntegerStringData(n);
   if (sd) {
     assert(sd->isStatic());
-    return SmartPtr<StringData>::attach(const_cast<StringData*>(sd));
+    return req::ptr<StringData>::attach(const_cast<StringData*>(sd));
   }
-  return SmartPtr<StringData>::attach(buildStringData(n));
+  return req::ptr<StringData>::attach(buildStringData(n));
 }
 
 String::String(int n) : m_str(buildString(n)) { }
@@ -114,13 +114,13 @@ StringData* buildStringData(int64_t n) {
   return StringData::Make(sl, CopyString);
 }
 
-SmartPtr<StringData> String::buildString(int64_t n) {
+req::ptr<StringData> String::buildString(int64_t n) {
   const StringData* sd = GetIntegerStringData(n);
   if (sd) {
     assert(sd->isStatic());
-    return SmartPtr<StringData>::attach(const_cast<StringData*>(sd));
+    return req::ptr<StringData>::attach(const_cast<StringData*>(sd));
   }
-  return SmartPtr<StringData>::attach(buildStringData(n));
+  return req::ptr<StringData>::attach(buildStringData(n));
 }
 
 String::String(int64_t n) : m_str(buildString(n)) { }
@@ -153,12 +153,21 @@ String::String(Variant&& src) : String(src.toString()) { }
 
 String String::substr(int start, int length /* = 0x7FFFFFFF */,
                       bool nullable /* = false */) const {
-  StringSlice r = slice();
+  auto r = slice();
   // string_substr_check() will update start & length to a legal range.
-  if (string_substr_check(r.len, start, length)) {
-    return String(r.ptr + start, length, CopyString);
+  if (string_substr_check(r.size(), start, length)) {
+    if (start == 0 && length >= r.size()) {
+      return *this;
+    }
+
+    // No length check covers 'start == r.size()' due to string_substr_check
+    if (length == 0) {
+      return empty_string();
+    }
+
+    return String(r.data() + start, length, CopyString);
   }
-  return nullable ? String() : String("", 0, CopyString);
+  return nullable ? String() : empty_string();
 }
 
 int String::find(char ch, int pos /* = 0 */,
@@ -242,13 +251,13 @@ char String::charAt(int pos) const {
 // assignments
 
 String& String::operator=(const char* s) {
-  m_str = SmartPtr<StringData>::attach(
+  m_str = req::ptr<StringData>::attach(
     s ? StringData::Make(s, CopyString) : nullptr);
   return *this;
 }
 
 String& String::operator=(const std::string& s) {
-  m_str = SmartPtr<StringData>::attach(
+  m_str = req::ptr<StringData>::attach(
     StringData::Make(s.c_str(), s.size(), CopyString));
   return *this;
 }
@@ -264,34 +273,34 @@ String& String::operator=(Variant&& var) {
 ///////////////////////////////////////////////////////////////////////////////
 // concatenation and increments
 
-String &String::operator+=(const char* s) {
+String& String::operator+=(const char* s) {
   if (s && *s) {
     if (empty()) {
-      m_str = SmartPtr<StringData>::attach(StringData::Make(s, CopyString));
-    } else if (m_str->hasExactlyOneRef()) {
-      auto const tmp = m_str->append(StringSlice(s, strlen(s)));
+      m_str = req::ptr<StringData>::attach(StringData::Make(s, CopyString));
+    } else if (!m_str->cowCheck()) {
+      auto const tmp = m_str->append(folly::StringPiece{s});
       if (UNLIKELY(tmp != m_str)) {
-        m_str = SmartPtr<StringData>::attach(tmp);
+        m_str = req::ptr<StringData>::attach(tmp);
       }
     } else {
       m_str =
-        SmartPtr<StringData>::attach(StringData::Make(m_str.get(), s));
+        req::ptr<StringData>::attach(StringData::Make(m_str.get(), s));
     }
   }
   return *this;
 }
 
-String &String::operator+=(const String& str) {
+String& String::operator+=(const String& str) {
   if (!str.empty()) {
     if (empty()) {
       m_str = str.m_str;
-    } else if (m_str->hasExactlyOneRef()) {
+    } else if (!m_str->cowCheck()) {
       auto tmp = m_str->append(str.slice());
       if (UNLIKELY(tmp != m_str)) {
-        m_str = SmartPtr<StringData>::attach(tmp);
+        m_str = req::ptr<StringData>::attach(tmp);
       }
     } else {
-      m_str = SmartPtr<StringData>::attach(
+      m_str = req::ptr<StringData>::attach(
         StringData::Make(m_str.get(), str.slice())
       );
     }
@@ -299,30 +308,34 @@ String &String::operator+=(const String& str) {
   return *this;
 }
 
-String& String::operator+=(const StringSlice& slice) {
+String& String::operator+=(const std::string& str) {
+  return (*this += folly::StringPiece{str});
+}
+
+String& String::operator+=(folly::StringPiece slice) {
   if (slice.size() == 0) {
     return *this;
   }
-  if (m_str && m_str->hasExactlyOneRef()) {
+  if (m_str && !m_str->cowCheck()) {
     auto const tmp = m_str->append(slice);
     if (UNLIKELY(tmp != m_str)) {
-      m_str = SmartPtr<StringData>::attach(tmp);
+      m_str = req::ptr<StringData>::attach(tmp);
     }
     return *this;
   }
   if (empty()) {
-    m_str = SmartPtr<StringData>::attach(
+    m_str = req::ptr<StringData>::attach(
       StringData::Make(slice.begin(), slice.size(), CopyString));
     return *this;
   }
-  m_str = SmartPtr<StringData>::attach(
+  m_str = req::ptr<StringData>::attach(
     StringData::Make(m_str.get(), slice)
   );
   return *this;
 }
 
-String& String::operator+=(const MutableSlice& slice) {
-  return (*this += StringSlice(slice.begin(), slice.size()));
+String& String::operator+=(folly::MutableStringPiece slice) {
+  return (*this += folly::StringPiece{slice.begin(), slice.size()});
 }
 
 String&& operator+(String&& lhs, const char* rhs) {
@@ -502,41 +515,6 @@ bool String::operator<(const Variant& v) const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// input/output
-
-void String::serialize(VariableSerializer *serializer) const {
-  if (m_str) {
-    serializer->write(m_str->data(), m_str->size());
-  } else {
-    serializer->writeNull();
-  }
-}
-
-void String::unserialize(VariableUnserializer *uns,
-                         char delimiter0 /* = '"' */,
-                         char delimiter1 /* = '"' */) {
-  int64_t size = uns->readInt();
-  if (size >= RuntimeOption::MaxSerializedStringSize) {
-    throw Exception("Size of serialized string (%d) exceeds max", int(size));
-  }
-  if (size < 0) {
-    throw Exception("Size of serialized string (%d) must not be negative",
-                    int(size));
-  }
-
-  uns->expectChar(':');
-  uns->expectChar(delimiter0);
-
-  auto px = SmartPtr<StringData>::attach(StringData::Make(int(size)));
-  auto const buf = px->bufferSlice();
-  assert(size <= buf.len);
-  uns->read(buf.ptr, size);
-  px->setSize(size);
-  m_str = std::move(px);
-  uns->expectChar(delimiter1);
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // debugging
 
 void String::dump() const {
@@ -569,7 +547,7 @@ StaticString& StaticString::operator=(const StaticString &str) {
 }
 
 const StaticString
-  s_NULL("NULL"),
+  s_null("null"),
   s_boolean("boolean"),
   s_integer("integer"),
   s_double("double"),
@@ -582,7 +560,7 @@ const StaticString
 StaticString getDataTypeString(DataType t) {
   switch (t) {
     case KindOfUninit:
-    case KindOfNull:       return s_NULL;
+    case KindOfNull:       return s_null;
     case KindOfBoolean:    return s_boolean;
     case KindOfInt64:      return s_integer;
     case KindOfDouble:     return s_double;

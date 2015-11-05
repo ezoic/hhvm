@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,11 +39,7 @@ namespace HPHP { namespace jit {
 //////////////////////////////////////////////////////////////////////
 
 struct ExnStackState {
-  FPInvOffset spOffset;
-  FPInvOffset syncedSpLevel;
-  uint32_t stackDeficit;
-  EvalStack evalStack;
-  SSATmp* sp;
+  FPInvOffset syncedSpLevel{0};
 };
 
 /*
@@ -109,25 +105,22 @@ struct IRBuilder {
    * You can keep using them until we find time to remove them.
    */
   IRUnit& unit() const { return m_unit; }
+  FrameStateMgr& fs() { return m_state; }
   BCMarker curMarker() const { return m_curMarker; }
   const Func* curFunc() const { return m_state.func(); }
   FPInvOffset spOffset() { return m_state.spOffset(); }
   SSATmp* sp() const { return m_state.sp(); }
   SSATmp* fp() const { return m_state.fp(); }
-  uint32_t stackDeficit() const { return m_state.stackDeficit(); }
-  void incStackDeficit() { m_state.incStackDeficit(); }
-  void clearStackDeficit() { m_state.clearStackDeficit(); }
-  void setStackDeficit(uint32_t d) { m_state.setStackDeficit(d); }
-  void syncEvalStack() { m_state.syncEvalStack(); }
-  EvalStack& evalStack() { return m_state.evalStack(); }
   FPInvOffset syncedSpLevel() const { return m_state.syncedSpLevel(); }
   bool thisAvailable() const { return m_state.thisAvailable(); }
   void setThisAvailable() { m_state.setThisAvailable(); }
+  const jit::deque<FPIInfo>& fpiStack() const { return m_state.fpiStack(); }
   Type localType(uint32_t id, TypeConstraint tc);
   Type stackType(IRSPOffset, TypeConstraint tc);
-  Type predictedInnerType(uint32_t id);
-  Type predictedLocalType(uint32_t id);
-  Type predictedStackType(IRSPOffset);
+  Type predictedLocalType(uint32_t id) const;
+  Type predictedInnerType(uint32_t id) const;
+  Type predictedStackType(IRSPOffset) const;
+  Type predictedStackInnerType(IRSPOffset) const;
   SSATmp* localValue(uint32_t id, TypeConstraint tc);
   SSATmp* stackValue(IRSPOffset offset, TypeConstraint tc);
   TypeSourceSet localTypeSources(uint32_t id) const {
@@ -137,7 +130,6 @@ struct IRBuilder {
     return m_state.stackTypeSources(offset);
   }
   bool frameMaySpanCall() const { return m_state.frameMaySpanCall(); }
-  Type stackInnerTypePrediction(IRSPOffset) const;
   const PostConditions& postConds(Block* b) const {
     return m_state.postConds(b);
   }
@@ -181,7 +173,7 @@ public:
   /*
    * Create a new block corresponding to bytecode control flow.
    */
-  Block* makeBlock(Offset offset);
+  Block* makeBlock(SrcKey sk);
 
   /*
    * Clear the map from bytecode offsets to Blocks.
@@ -190,14 +182,14 @@ public:
 
   /*
    * Checks whether or not there's a block associated with the given
-   * bytecode offset.
+   * SrcKey offset.
    */
-  bool hasBlock(Offset offset) const;
+  bool hasBlock(SrcKey sk) const;
 
   /*
-   * Set the block associated with the given offset in the offset->block map.
+   * Set the block associated with the given offset in the SrcKey->block map.
    */
-  void setBlock(Offset offset, Block* block);
+  void setBlock(SrcKey sk, Block* block);
 
   /*
    * Get the block that we're currently emitting code to.
@@ -297,6 +289,7 @@ private:
   SSATmp* preOptimizeCastStk(IRInstruction*);
   SSATmp* preOptimizeCoerceStk(IRInstruction*);
   SSATmp* preOptimizeLdStk(IRInstruction*);
+  SSATmp* preOptimizeLdMBase(IRInstruction*);
   SSATmp* preOptimize(IRInstruction*);
 
 private:
@@ -319,13 +312,7 @@ private:
    */
   jit::vector<BlockState> m_savedBlocks;
   Block* m_curBlock;
-  ExnStackState m_exnStack{
-    FPInvOffset{0},
-    FPInvOffset{0},
-    0,
-    EvalStack{},
-    nullptr
-  };
+  ExnStackState m_exnStack;
 
   bool m_enableSimplification{false};
   bool m_constrainGuards;
@@ -333,10 +320,7 @@ private:
   GuardConstraints m_constraints;
 
   // Keep track of blocks created to support bytecode control flow.
-  //
-  // TODO(t3730559): Offset is used here since it's passed from
-  // emitJmp*, but SrcKey might be better in case of inlining.
-  jit::flat_map<Offset,Block*> m_offsetToBlockMap;
+  jit::flat_map<SrcKey,Block*> m_skToBlockMap;
 
   // Keeps the block to branch to (if any) in case a guard fails.
   // This holds nullptr if the guard failures should perform a service
@@ -364,6 +348,10 @@ struct BlockPusher {
  private:
   IRBuilder& m_irb;
 };
+
+//////////////////////////////////////////////////////////////////////
+
+bool typeMightRelax(const SSATmp* tmp);
 
 //////////////////////////////////////////////////////////////////////
 

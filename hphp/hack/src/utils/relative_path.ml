@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Core
 open Utils
 
 type prefix =
@@ -71,10 +72,18 @@ let create prefix s =
   let prefix_s = path_of_prefix prefix in
   let prefix_len = String.length prefix_s in
   if not (str_starts_with s prefix_s)
-  then raise (Failure (Printf.sprintf "%s is not a prefix of %s" prefix_s s));
+  then begin
+    Printf.eprintf "%s is not a prefix of %s" prefix_s s;
+    assert_false_log_backtrace ();
+  end;
   prefix, String.sub s prefix_len (String.length s - prefix_len)
 
 let concat prefix s = prefix, s
 
 let relativize_set prefix m =
   SSet.fold (fun k a -> Set.add (create prefix k) a) m Set.empty
+
+let set_of_list xs =
+  List.fold_left xs
+    ~f:(fun acc x -> Set.add x acc)
+    ~init:Set.empty

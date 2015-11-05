@@ -10,8 +10,7 @@
  */
 
 trait DynamicYield {
-  public function __call(string $name, array $args = array()) {
-  }
+  public function __call(string $name, array $args = array()) {}
 }
 
 function prep<T>(Awaitable<T> $awaitable): T {
@@ -75,6 +74,6 @@ function buck(): int {
 }
 
 function goose(): Awaitable<string> {
-  /* HH_FIXME[4128]: gen-via-get */
+  /* HH_FIXME[4053]: gen-via-get no longer works */
   return (new Foo())->genAnotherString();
 }

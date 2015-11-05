@@ -16,7 +16,6 @@
 
 #include "hphp/runtime/base/thread-safe-setlocale.h"
 #include <string.h>
-#include <langinfo.h>
 #include <math.h>
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/request-local.h"
@@ -55,17 +54,19 @@ IMPLEMENT_THREAD_LOCAL(struct lconv, g_thread_safe_localeconv_data);
 static const locale_t s_null_locale = (locale_t) 0;
 
 ThreadSafeLocaleHandler::ThreadSafeLocaleHandler() {
-  m_category_locale_map = {
 #define FILL_IN_CATEGORY_LOCALE_MAP(category) \
   {category, category ## _MASK, #category, ""}
+  m_category_locale_map = {
       FILL_IN_CATEGORY_LOCALE_MAP(LC_CTYPE),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_NUMERIC),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_TIME),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_COLLATE),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_MONETARY),
+      #ifndef _MSC_VER
       FILL_IN_CATEGORY_LOCALE_MAP(LC_MESSAGES),
+      #endif
       FILL_IN_CATEGORY_LOCALE_MAP(LC_ALL),
-      #ifndef __APPLE__
+      #if !defined(__APPLE__) && !defined(_MSC_VER)
       FILL_IN_CATEGORY_LOCALE_MAP(LC_PAPER),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_NAME),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_ADDRESS),
@@ -73,10 +74,16 @@ ThreadSafeLocaleHandler::ThreadSafeLocaleHandler() {
       FILL_IN_CATEGORY_LOCALE_MAP(LC_MEASUREMENT),
       FILL_IN_CATEGORY_LOCALE_MAP(LC_IDENTIFICATION),
       #endif
-    #undef FILL_IN_CATEGORY_LOCALE_MAP
   };
+#undef FILL_IN_CATEGORY_LOCALE_MAP
 
+#ifdef _MSC_VER
+  _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+  ::setlocale(LC_ALL, "C");
+#else
   m_locale = s_null_locale;
+#endif
+
   reset();
 }
 
@@ -85,12 +92,16 @@ ThreadSafeLocaleHandler::~ThreadSafeLocaleHandler() {
 }
 
 void ThreadSafeLocaleHandler::reset() {
+#ifdef _MSC_VER
+  ::setlocale(LC_ALL, "C");
+#else
   if (m_locale != s_null_locale) {
     freelocale(m_locale);
     m_locale = s_null_locale;
   }
 
   uselocale(LC_GLOBAL_LOCALE);
+#endif
 }
 
 const char* ThreadSafeLocaleHandler::actuallySetLocale(
@@ -111,6 +122,15 @@ const char* ThreadSafeLocaleHandler::actuallySetLocale(
     return nullptr;
   }
 
+#ifdef _MSC_VER
+  // Windows doesn't accept POSIX as a valid
+  // locale, use C instead.
+  if (!strcmp(locale_cstr, "POSIX"))
+    locale_cstr = "C";
+
+  if (::setlocale(category, locale_cstr) == nullptr)
+    return nullptr;
+#else
   locale_t new_locale = newlocale(
     m_category_locale_map[category].category_mask,
     locale_cstr,
@@ -123,6 +143,7 @@ const char* ThreadSafeLocaleHandler::actuallySetLocale(
 
   m_locale = new_locale;
   uselocale(m_locale);
+#endif
 
   if (category == LC_ALL) {
     if (strchr(locale_cstr, ';') != nullptr) {
@@ -164,7 +185,7 @@ const char* ThreadSafeLocaleHandler::actuallySetLocale(
          */
         for (auto &i : m_category_locale_map) {
           if (i.category_str == key) {
-            i.locale_str = value;
+            i.locale_str = value ? value : "";
             break;
           }
         }
@@ -184,7 +205,16 @@ const char* ThreadSafeLocaleHandler::actuallySetLocale(
   return locale_cstr;
 }
 
-#ifdef __APPLE__
+#ifdef _MSC_VER
+struct lconv* ThreadSafeLocaleHandler::localeconv() {
+  // We've setup locales to be thread local, so this is no
+  // problem at all.
+  struct lconv *ptr = g_thread_safe_localeconv_data.get();
+  struct lconv *l = ::localeconv();
+  memcpy(ptr, l, sizeof(struct lconv));
+  return ptr;
+}
+#elif defined(__APPLE__)
 struct lconv* ThreadSafeLocaleHandler::localeconv() {
   // BSD/OS X has localeconv_l, which actually returns data held onto by the
   // locale itself -- and since that's thread-local (since this object instance
@@ -273,6 +303,7 @@ void ThreadSafeLocaleHandler::generate_LC_ALL_String() {
 
 }
 
+#ifndef _MSC_VER
 extern "C" char* setlocale(int category, const char* locale) {
   /* The returned char* is exactly what was passed in. */
   return const_cast<char*>
@@ -282,3 +313,4 @@ extern "C" char* setlocale(int category, const char* locale) {
 extern "C" struct lconv* localeconv() {
   return HPHP::g_thread_safe_locale_handler->localeconv();
 }
+#endif

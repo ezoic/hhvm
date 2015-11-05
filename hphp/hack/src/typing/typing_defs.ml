@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,7 +8,7 @@
  *
  *)
 
-
+open Core
 open Utils
 
 module Reason = Typing_reason
@@ -54,6 +54,14 @@ and _ ty_ =
   (* Name of class, name of type const, remaining names of type consts *)
   | Taccess : taccess_type -> decl ty_
 
+  (* The type of the various forms of "array":
+   * Tarray (None, None)         => "array"
+   * Tarray (Some ty, None)      => "array<ty>"
+   * Tarray (Some ty1, Some ty2) => "array<ty1, ty2>"
+   * Tarray (None, Some ty)      => [invalid]
+   *)
+  | Tarray : decl ty option * decl ty option -> decl ty_
+
   (*========== Following Types Exist in Both Phases ==========*)
   (* "Any" is the type of a variable with a missing annotation, and "mixed" is
    * the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
@@ -80,14 +88,6 @@ and _ ty_ =
   | Tany
   | Tmixed
 
-  (* The type of the various forms of "array":
-   * Tarray (None, None)         => "array"
-   * Tarray (Some ty, None)      => "array<ty>"
-   * Tarray (Some ty1, Some ty2) => "array<ty1, ty2>"
-   * Tarray (None, Some ty)      => [invalid]
-   *)
-  | Tarray : 'phase ty option * 'phase ty option -> 'phase ty_
-
   (* Nullable, called "option" in the ML parlance. *)
   | Toption : 'phase ty -> 'phase ty_
 
@@ -105,31 +105,8 @@ and _ ty_ =
 
   (* Whether all fields of this shape are known, types of each of the
    * known arms.
-   *
-   * Example: local shape constructed using "shape" keyword has all the fields
-   * known:
-   *
-   *   $s = shape('x' => 4, 'y' => 4);
-   *
-   * It has fields 'x' and 'y' and definitely no other fields. On the other
-   * hand, shape types that come from typehints may (due to structural
-   * subtyping of shapes) have some other, unlisted fields:
-   *
-   *   type s = shape('x' => int);
-   *
-   *   function f(s $s) {
-   *   }
-   *
-   *   f(shape('x' => 4, 'y' => 5));
-   *
-   * The call to f is valid because of structural subtyping - shapes are
-   * permitted to "forget" fields. But the 'y' field still exists at runtime,
-   * and we cannot say inside the body of $f that we know that 'x' is the only
-   * field. This is relevant when deciding if it's safe to omit optional fields
-   * - if shape fields are not fully known, even optional fields have to be
-   * explicitly set/unset.
    *)
-  | Tshape : bool * ('phase ty Nast.ShapeMap.t) -> 'phase ty_
+  | Tshape : shape_fields_known * ('phase ty Nast.ShapeMap.t) -> 'phase ty_
 
   (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
 
@@ -140,30 +117,30 @@ and _ ty_ =
    *)
   | Tvar : Ident.t -> locl ty_
 
-  (* The type of an opaque type alias ("newtype"), outside of the file where it
-   * was defined. They are "opaque", which means that they only unify with
+  (* The type of an opaque type (e.g. a "newtype" outside of the file where it
+   * was defined). They are "opaque", which means that they only unify with
    * themselves. However, it is possible to have a constraint that allows us to
    * relax this. For example:
    *
-   * newtype my_type as int = ...
+   *   newtype my_type as int = ...
    *
    * Outside of the file where the type was defined, this translates to:
    *
-   * Tabstract ((pos, "my_type"), [], Some (Tprim Tint))
+   *   Tabstract (AKnewtype (pos, "my_type", []), Some (Tprim Tint))
    *
    * Which means that my_type is abstract, but is subtype of int as well.
    *
    * We also create abstract types for generic parameters of a function, i.e.
    *
-   *  function foo<T>(T $x): void {
-   *    // Body
-   *  }
+   *   function foo<T>(T $x): void {
+   *     // Body
+   *   }
    *
-   *  The type 'T' will be represented as an abstract type when type checking
-   *  the body of 'foo'.
+   * The type 'T' will be represented as an abstract type when type checking
+   * the body of 'foo'.
    *
-   *  Finally abstract types are also derived from the 'this' type and
-   *  accessing type constants on it, resulting in a dependent type.
+   * Finally abstract types are also derived from the 'this' type and
+   * accessing type constants on it, resulting in a dependent type.
    *)
   | Tabstract : abstract_kind * locl ty option -> locl ty_
 
@@ -234,12 +211,35 @@ and _ ty_ =
   (* An instance of a class or interface, ty list are the arguments *)
   | Tclass : Nast.sid * locl ty list -> locl ty_
 
+  (* Localized version of Tarray *)
+  | Tarraykind : array_kind -> locl ty_
+
+and array_kind =
+  (* Those three types directly correspond to their decl level counterparts:
+   * array, array<_> and array<_, _> *)
+  | AKany
+  | AKvec of locl ty
+  | AKmap of locl ty * locl ty
+  (* This is a type created when we see array() literal *)
+  | AKempty
+  (* Array "used like a shape" - initialized and indexed with keys that are
+   * only string/class constants *)
+  | AKshape of (locl ty * locl ty) Nast.ShapeMap.t
+  (* Array "used like a tuple" - initialized without keys and indexed with
+   * integers that are within initialized range *)
+  | AKtuple of (locl ty) IMap.t
+
 (* An abstract type derived from either a newtype, a type parameter, or some
  * dependent type
  *)
 and abstract_kind =
+    (* newtype foo<T1, T2> ... *)
   | AKnewtype of string * locl ty list
+    (* enum foo ... *)
+  | AKenum of string
+    (* <T super C> ; None if 'as' constrained *)
   | AKgeneric of string * locl ty option
+    (* see dependent_type *)
   | AKdependent of dependent_type
 
 (* A dependent type consists of a base kind which indicates what the type is
@@ -258,7 +258,7 @@ and dependent_type =
   (* Type that is the subtype of the late bound type within a class. *)
   [ `this
   (* The late bound type within a class. It is the type of 'new static()' and
-   * '$this'. This is different than the 'this' type. The 'this' type isn't
+   * '$this'. This is different from the 'this' type. The 'this' type isn't
    * quite strong enough in some cases. It means you are a subtype of the late
    * bound class, but there are instances where you need the exact type.
    * We may not need both since the only way to make something of type 'this'
@@ -283,6 +283,36 @@ and dependent_type =
   ] * string list
 
 and taccess_type = decl ty * Nast.sid list
+
+(* Local shape constructed using "shape" keyword has all the fields
+ * known:
+ *
+ *   $s = shape('x' => 4, 'y' => 4);
+ *
+ * It has fields 'x' and 'y' and definitely no other fields. On the other
+ * hand, shape types that come from typehints may (due to structural
+ * subtyping of shapes) have some other, unlisted fields:
+ *
+ *   type s = shape('x' => int);
+ *
+ *   function f(s $s) {
+ *   }
+ *
+ *   f(shape('x' => 4, 'y' => 5));
+ *
+ * The call to f is valid because of structural subtyping - shapes are
+ * permitted to "forget" fields. But the 'y' field still exists at runtime,
+ * and we cannot say inside the body of $f that we know that 'x' is the only
+ * field. This is relevant when deciding if it's safe to omit optional fields
+ * - if shape fields are not fully known, even optional fields have to be
+ * explicitly set/unset.
+ *
+ * We also track in additional map of FieldsPartiallyKnown names of fields
+ * that are known to not exist (because they were explicitly unset).
+ *)
+and shape_fields_known =
+  | FieldsFullyKnown
+  | FieldsPartiallyKnown of Pos.t Nast.ShapeMap.t
 
 (* The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
@@ -392,6 +422,12 @@ type expand_env = {
 
 type ety = expand_env * locl ty
 
+let has_expanded {type_expansions; _} x =
+  List.exists type_expansions begin function
+    | (_, x') when x = x' -> true
+    | _ -> false
+  end
+
 (* The identifier for this *)
 let this = Ident.make "$this"
 
@@ -402,13 +438,16 @@ module AbstractKind = struct
   let to_string = function
     | AKnewtype (name, _) -> name
     | AKgeneric (name, _) -> name
+    | AKenum name -> "enum "^(Utils.strip_ns name)
     | AKdependent (dt, ids) ->
        let dt =
          match dt with
          | `this -> SN.Typehints.this
          | `static -> "<"^SN.Classes.cStatic^">"
          | `cls c -> c
-         | `expr i -> "<expr#"^string_of_int i^">" in
+         | `expr i ->
+             let display_id = Reason.get_expr_display_id i in
+             "<expr#"^string_of_int display_id^">" in
        String.concat "::" (dt::ids)
 end
 

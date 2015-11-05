@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -34,9 +34,10 @@
 #include <folly/ScopeGuard.h>
 #include <folly/Memory.h>
 
-#include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
+#include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/vm/func-emitter.h"
+#include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 
@@ -118,25 +119,22 @@ std::set<Offset> findBasicBlocks(const FuncEmitter& fe) {
   auto offset = fe.base;
   for (;;) {
     auto const bc = fe.ue().bc();
-    auto const pc = reinterpret_cast<const Op*>(bc + offset);
+    auto const pc = bc + offset;
     auto const nextOff = offset + instrLen(pc);
     auto const atLast = nextOff == fe.past;
-    auto const breaksBB = instrIsNonCallControlFlow(*pc) ||
-      instrFlags(*pc) & TF;
+    auto const op = peek_op(pc);
+    auto const breaksBB = instrIsNonCallControlFlow(op) || instrFlags(op) & TF;
 
     if (breaksBB && !atLast) {
       markBlock(nextOff);
     }
 
-    if (isSwitch(*pc)) {
+    if (isSwitch(op)) {
       foreachSwitchTarget(pc, [&] (Offset delta) {
         markBlock(offset + delta);
       });
     } else {
-      auto const target = instrJumpTarget(
-        reinterpret_cast<const Op*>(bc),
-        offset
-      );
+      auto const target = instrJumpTarget(bc, offset);
       if (target != InvalidAbsoluteOffset) markBlock(target);
     }
 
@@ -359,6 +357,10 @@ template<class T> T decode(PC& pc) {
   return ret;
 }
 
+template<class T> void decode(PC& pc, T& val) {
+  val = decode<T>(pc);
+}
+
 template<class FindBlock>
 void populate_block(ParseUnitState& puState,
                     const FuncEmitter& fe,
@@ -489,8 +491,8 @@ void populate_block(ParseUnitState& puState,
 #define IMM_BA(n)      assert(next == past); \
                        auto target = findBlock(  \
                          opPC + decode<Offset>(pc) - ue.bc());
-#define IMM_OA_IMPL(n) decode<uint8_t>(pc);
-#define IMM_OA(type)   auto subop = (type)IMM_OA_IMPL
+#define IMM_OA_IMPL(n) subop##n; decode(pc, subop##n);
+#define IMM_OA(type)   type IMM_OA_IMPL
 #define IMM_VSA(n)     auto keys = decode_stringvec();
 
 #define IMM_NA
@@ -512,7 +514,6 @@ void populate_block(ParseUnitState& puState,
 #define O(opcode, imms, inputs, outputs, flags)       \
   case Op::opcode:                                    \
     {                                                 \
-      ++pc;                                           \
       auto b = Bytecode {};                           \
       b.op = Op::opcode;                              \
       b.srcLoc = srcLoc;                              \
@@ -529,8 +530,7 @@ void populate_block(ParseUnitState& puState,
   assert(pc != past);
   do {
     auto const opPC = pc;
-    auto const pop  = reinterpret_cast<const Op*>(pc);
-    auto const next = pc + instrLen(pop);
+    auto const next = pc + instrLen(opPC);
     assert(next <= past);
 
     auto const srcLoc = match<php::SrcLoc>(
@@ -559,10 +559,11 @@ void populate_block(ParseUnitState& puState,
       }
     );
 
-    switch (*pop) { OPCODES }
+    auto const op = decode_op(pc);
+    switch (op) { OPCODES }
 
     if (next == past) {
-      if (instrAllowsFallThru(*pop)) {
+      if (instrAllowsFallThru(op)) {
         blk.fallthrough = findBlock(next - ue.bc());
       }
     }

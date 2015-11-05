@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -34,7 +34,9 @@
 
 #include "hphp/runtime/ext/apc/ext_apc.h"
 #include "hphp/runtime/ext/json/ext_json.h"
+#ifdef ENABLE_EXTENSION_MYSQL
 #include "hphp/runtime/ext/mysql/mysql_stats.h"
+#endif
 #include "hphp/runtime/server/http-request-handler.h"
 #include "hphp/runtime/server/http-server.h"
 #include "hphp/runtime/server/memory-stats.h"
@@ -172,7 +174,6 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "                  requests\n"
         "/check-pl-queued: how many pagelet requests are queued waiting to\n"
         "                  be handled\n"
-        "/check-mem:       report memory quick statistics in log file\n"
         "/check-sql:       report SQL table statistics\n"
         "/check-sat        how many satellite threads are actively handling\n"
         "                  requests and queued waiting to be handled\n"
@@ -533,17 +534,50 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
 
 #ifdef USE_JEMALLOC
     if (mallctl) {
+      assert(mallctlnametomib && mallctlbymib);
       if (cmd == "free-mem") {
         // Purge all dirty unused pages.
-        int err = mallctl("arenas.purge", nullptr, nullptr, nullptr, 0);
+        uint64_t epoch = 1;
+        int err = mallctl("epoch", nullptr, nullptr, &epoch, sizeof(epoch));
         if (err) {
           std::ostringstream estr;
-          estr << "Error " << err << " in mallctl(\"arenas.purge\", ...)"
-            << endl;
+          estr << "Error " << err << " in mallctl(\"epoch\", ...)" << endl;
           transport->sendString(estr.str());
-        } else {
-          transport->sendString("OK\n");
+          break;
         }
+
+        unsigned narenas;
+        size_t sz = sizeof(narenas);
+        err = mallctl("arenas.narenas", &narenas, &sz, nullptr, 0);
+        if (err) {
+          std::ostringstream estr;
+          estr << "Error " << err << " in mallctl(\"arenas.narenas\", ...)"
+               << endl;
+          transport->sendString(estr.str());
+          break;
+        }
+
+        size_t mib[3];
+        size_t miblen = 3;
+        err = mallctlnametomib("arena.0.purge", mib, &miblen);
+        if (err) {
+          std::ostringstream estr;
+          estr << "Error " << err
+               << " in mallctlnametomib(\"arenas.narenas\", ...)" << endl;
+          transport->sendString(estr.str());
+          break;
+        }
+        mib[1] = narenas;
+
+        err = mallctlbymib(mib, miblen, nullptr, nullptr, nullptr, 0);
+        if (err) {
+          std::ostringstream estr;
+          estr << "Error " << err << " in mallctlbymib([\"arena." << narenas
+            << ".purge\"], ...)" << endl;
+          transport->sendString(estr.str());
+          break;
+        }
+        transport->sendString("OK\n");
         break;
       }
       if (cmd == "jemalloc-stats") {
@@ -807,7 +841,9 @@ bool AdminRequestHandler::handleCheckRequest(const std::string &cmd,
   if (cmd == "check-sql") {
     string stats = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
     stats += "<SQL>\n";
+#ifdef ENABLE_EXTENSION_MYSQL
     stats += MySqlStats::ReportStats();
+#endif
     stats += "</SQL>\n";
     transport->sendString(stats);
     return true;
@@ -846,7 +882,7 @@ bool AdminRequestHandler::handleMemoryRequest(const std::string &cmd,
       return true;
   }
   if (cmd == "memory.html" || cmd == "memory.htm") {
-      MemoryStats::GetInstance()->ReportMemory(out, Writer::Format::XML);
+      MemoryStats::GetInstance()->ReportMemory(out, Writer::Format::HTML);
       transport->replaceHeader("Content-Type","application/html");
       transport->sendString(out);
       return true;
@@ -1091,12 +1127,7 @@ bool AdminRequestHandler::handleDumpCacheRequest(const std::string &cmd,
     if (keyOnlyParam == "true" || keyOnlyParam == "1") {
       keyOnly = true;
     }
-    int waitSeconds = transport->getIntParam("waitseconds");
-    if (!waitSeconds) {
-      waitSeconds = RuntimeOption::RequestTimeoutSeconds > 0 ?
-                    RuntimeOption::RequestTimeoutSeconds : 10;
-    }
-    apc_dump("/tmp/apc_dump", keyOnly, false, waitSeconds);
+    apc_dump("/tmp/apc_dump", keyOnly, false);
     transport->sendString("Done");
     return true;
   }
@@ -1113,12 +1144,7 @@ bool AdminRequestHandler::handleDumpCacheRequest(const std::string &cmd,
       transport->sendString("No APC\n");
       return true;
     }
-    int waitSeconds = transport->getIntParam("waitseconds");
-    if (!waitSeconds) {
-      waitSeconds = RuntimeOption::RequestTimeoutSeconds > 0 ?
-        RuntimeOption::RequestTimeoutSeconds : 10;
-    }
-    apc_dump("/tmp/apc_dump_meta", false, true, waitSeconds);
+    apc_dump("/tmp/apc_dump_meta", false, true);
     transport->sendString("Done");
     return true;
   }

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,11 +8,16 @@
  *
  *)
 
+open Core
+open Utils
+
 (* The reason why something is expected to have a certain type *)
 type t =
   | Rnone
   | Rwitness         of Pos.t
-  | Ridx             of Pos.t (* Used as an index *)
+  | Ridx             of Pos.t * t (* Used as an index into into a vector-like
+                                     array or string. Position of indexing,
+                                     reason for the indexed type *)
   | Ridx_vector      of Pos.t (* Used as an index, in the Vector case *)
   | Rappend          of Pos.t (* Used to append element to an array *)
   | Rfield           of Pos.t (* Array accessed with a static string index *)
@@ -21,6 +26,7 @@ type t =
   | Raccess          of Pos.t
   | Rarith           of Pos.t
   | Rarith_ret       of Pos.t
+  | Rarray_plus_ret  of Pos.t
   | Rstring2         of Pos.t
   | Rcomp            of Pos.t
   | Rconcat          of Pos.t
@@ -57,9 +63,18 @@ type t =
   | Rinstantiate     of t * string * t
   | Rarray_filter    of Pos.t * t
   | Rtype_access     of t * string list * t
-  | Rexpr_dep_type   of t * Pos.t * string
+  | Rexpr_dep_type   of t * Pos.t * expr_dep_type_reason
   | Rnullsafe_op     of Pos.t (* ?-> operator is used *)
   | Rtconst_no_cstr  of Nast.sid
+  | Rused_as_map     of Pos.t
+  | Rused_as_shape   of Pos.t
+
+and expr_dep_type_reason =
+  | ERexpr of int
+  | ERstatic
+  | ERclass of string
+  | ERparent of string
+  | ERself of string
 
 (* Translate a reason to a (pos, string) list, suitable for error_l. This
  * previously returned a string, however the need to return multiple lines with
@@ -69,7 +84,10 @@ let rec to_string prefix r =
   match r with
   | Rnone              -> [(p, prefix)]
   | Rwitness         _ -> [(p, prefix)]
-  | Ridx             _ -> [(p, prefix ^ " because this is used as an index")]
+  | Ridx (_, r2)       ->
+      [(p, prefix)] @
+      [(if r2 = Rnone then p else to_pos r2),
+        "This can only be indexed with integers"]
   | Ridx_vector      _ -> [(p, prefix ^ ". Only int can be used to index into a Vector.")]
   | Rappend          _ -> [(p, prefix ^ " because a value is appended to it")]
   | Rfield           _ -> [(p, prefix ^ " because one of its field is accessed")]
@@ -78,6 +96,7 @@ let rec to_string prefix r =
   | Raccess          _ -> [(p, prefix ^ " because one of its elements is accessed")]
   | Rarith           _ -> [(p, prefix ^ " because this is used in an arithmetic operation")]
   | Rarith_ret       _ -> [(p, prefix ^ " because this is the result of an arithmetic operation")]
+  | Rarray_plus_ret  _ -> [(p, prefix ^ " because this is the result of adding arrays")]
   | Rstring2         _ -> [(p, prefix ^ " because this is used in a string")]
   | Rcomp            _ -> [(p, prefix ^ " because this is the result of a comparison")]
   | Rconcat          _ -> [(p, prefix ^ " because this is used in a string concatenation")]
@@ -150,22 +169,25 @@ let rec to_string prefix r =
       array<Tk, Tv>, and Container<Tv> to array<arraykey, Tv>. \
       Single argument calls additionally remove nullability from Tv.")]
   | Rtype_access (r_orig, expansions, r_expanded) ->
+      let expand_prefix =
+        if List.length expansions = 1 then
+          "  resulting from expanding the type constant "
+        else
+          "  resulting from expanding a type constant as follows:\n    " in
       (to_string prefix r_orig) @
-      (to_string
-        ("  resulting from expanding a type constant as follows:\n    "
-        ^String.concat " -> " expansions)
-        r_expanded
-      )
-  | Rexpr_dep_type (r, p, n) ->
-      (p, "  where '"^n^"' is a reference to this expression") ::
-      (to_string prefix r)
+      (to_string (expand_prefix^String.concat " -> " expansions) r_expanded)
+  | Rexpr_dep_type (r, p, e) ->
+      (to_string prefix r) @ [p, "  "^expr_dep_type_reason_string e]
   | Rtconst_no_cstr (_, n) ->
-     [(p, prefix ^ " because the type constant "^n^" has no constraints")]
+      [(p, prefix ^ " because the type constant "^n^" has no constraints")]
+  | Rused_as_map _ -> [(p, prefix ^ " because it is used as map here")]
+  | Rused_as_shape _ ->
+      [(p, prefix ^ " because it is used as shape-like array here")]
 
 and to_pos = function
   | Rnone     -> Pos.none
   | Rwitness   p -> p
-  | Ridx   p -> p
+  | Ridx (p, _) -> p
   | Ridx_vector p -> p
   | Rappend   p -> p
   | Rfield   p -> p
@@ -174,6 +196,7 @@ and to_pos = function
   | Raccess   p -> p
   | Rarith       p -> p
   | Rarith_ret   p -> p
+  | Rarray_plus_ret p -> p
   | Rstring2     p -> p
   | Rcomp        p -> p
   | Rconcat      p -> p
@@ -213,6 +236,36 @@ and to_pos = function
   | Rexpr_dep_type (r, _, _) -> to_pos r
   | Rnullsafe_op p -> p
   | Rtconst_no_cstr (p, _) -> p
+  | Rused_as_map p -> p
+  | Rused_as_shape p -> p
+
+(* This is a mapping from internal expression ids to a standardized int.
+ * Used for outputting cleaner error messages to users
+ *)
+and expr_display_id_map = ref IMap.empty
+and get_expr_display_id id =
+  let map = !expr_display_id_map in
+  match IMap.get id map with
+  | Some n -> n
+  | None ->
+      let n = (IMap.cardinal map) + 1 in
+      expr_display_id_map := IMap.add id n map;
+      n
+
+and expr_dep_type_reason_string = function
+  | ERexpr id ->
+      let did = get_expr_display_id id in
+      "where '<expr#"^string_of_int did^">' is a reference to this expression"
+  | ERstatic ->
+      "where '<static>' refers to the late bound type of the enclosing class"
+  | ERclass c ->
+      "where the class '"^(strip_ns c)^"' was referenced here"
+  | ERparent p ->
+      "where the class '"^(strip_ns p)^"' (the parent of the enclosing) \
+       class was referenced here"
+  | ERself c ->
+      "where the class '"^(strip_ns c)^"' was referenced here via the keyword \
+       'self'"
 
 type ureason =
   | URnone
@@ -300,21 +353,15 @@ let string_of_ureason = function
      "The assigned type of this type constant is inconsistent with its parent"
 
 let compare r1 r2 =
-  match r1, r2 with
-  | Rnone, Rnone             -> 0
-  | Rnone, _                 -> 1
-  | _, Rnone                 -> -1
-  | Rlost_info _, Rlost_info _ -> 0
-  | Rlost_info _, _          -> -1
-  | _, Rlost_info _          -> 1
-  | Rwitness p1, Rwitness p2 -> compare p1 p2
-  | Rwitness _, _            -> -1
-  | _, Rwitness _            -> 1
-  | Rforeach _, Rforeach _   -> 0
-  | Rforeach _, _            -> 1
-  | _, Rforeach _            -> -1
-  | _                        -> compare (to_pos r1) (to_pos r2)
-
+  let get_pri = function
+    | Rnone -> 0
+    | Rforeach _ -> 1
+    | Rwitness _ -> 3
+    | Rused_as_shape _ | Rappend _ | Rused_as_map _ -> 4
+    | Rlost_info _ -> 5
+    | _ ->  2 in
+  let d = (get_pri r2) - (get_pri r1) in
+  if d <> 0 then d else compare (to_pos r1) (to_pos r2)
 let none = Rnone
 
 (*****************************************************************************)
@@ -322,11 +369,5 @@ let none = Rnone
 (*****************************************************************************)
 
 let explain_generic_constraint p_inst reason name error =
-  match reason with
-  | Rtype_access (_, _, _) | Rexpr_dep_type _ ->
-      let msgl =
-        to_string ("Considering the constraint on '"^name^"'") reason in
-      Errors.explain_type_constant msgl error
-  | reason ->
-      let pos = to_pos reason in
-      Errors.explain_constraint p_inst pos name error
+  let pos = to_pos reason in
+  Errors.explain_constraint p_inst pos name error

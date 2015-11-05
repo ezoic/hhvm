@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,6 +7,7 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
+open Core
 open Typing_defs
 
 module Reason = Typing_reason
@@ -25,7 +26,7 @@ let enforce_not_awaitable env p ty =
   | r, Tclass ((_, awaitable), _) when
       awaitable = SN.Classes.cAwaitable ->
     Errors.discarded_awaitable p (Reason.to_pos r)
-  | _, (Tany | Tmixed | Tarray (_, _) | Tprim _ | Toption _
+  | _, (Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _
     | Tanon (_, _) | Tunresolved _ | Tobject | Tshape _) -> ()
 
@@ -46,15 +47,15 @@ let rec overload_extract_from_awaitable env p opt_ty_maybe =
   | _, Tunresolved tyl ->
     (* If we cannot fold the intersection into a single type, we need to look at
      * all the types *)
-    let env, rtyl = List.fold_right begin fun ty (env, rtyl) ->
+    let env, rtyl = List.fold_right ~f:begin fun ty (env, rtyl) ->
       let env, rty = overload_extract_from_awaitable env p ty in
       (* We have the invariant we'll never have Tunresolved[Tunresolved], but
        * the recursive call above can remove a layer of Awaitable, so we need
        * to flatten any Tunresolved that may have been inside. *)
       TUtils.flatten_unresolved env rty rtyl
-    end tyl (env, []) in
+    end tyl ~init:(env, []) in
     env, (r, Tunresolved rtyl)
-  | _, (Tany | Tmixed | Tarray (_, _) | Tprim _ | Toption _
+  | _, (Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _
     | Tanon (_, _) | Tobject | Tshape _) ->
     let expected_opt_type = r, Toption (r, Tclass ((p, SN.Classes.cAwaitable), [type_var])) in
@@ -64,7 +65,7 @@ let rec overload_extract_from_awaitable env p opt_ty_maybe =
         expected_opt_type, (r, Toption type_var)
       | _, Tany ->
         expected_non_opt_type, (r, Tany)
-      | _, (Tmixed | Tarray (_, _) | Tprim _ | Tvar _ | Tfun _
+      | _, (Tmixed | Tarraykind _ | Tprim _ | Tvar _ | Tfun _
         | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
         | Tunresolved _ | Tobject | Tshape _)->
         expected_non_opt_type, type_var) in
@@ -73,28 +74,46 @@ let rec overload_extract_from_awaitable env p opt_ty_maybe =
   )
 
 let overload_extract_from_awaitable_list env p tyl =
-  List.fold_right begin fun ty (env, rtyl) ->
+  List.fold_right ~f:begin fun ty (env, rtyl) ->
     let env, rty =  overload_extract_from_awaitable env p ty in
     env, rty::rtyl
-  end tyl (env, [])
+  end tyl ~init:(env, [])
+
+let overload_extract_from_awaitable_shape env p fdm =
+  Nast.ShapeMap.map_env begin fun env (tk, tv) ->
+    let env, rtv = overload_extract_from_awaitable env p tv in
+    env, (tk, rtv)
+  end env fdm
+
+let overload_extract_from_awaitable_aktuple env p fields =
+  Utils.IMap.map_env begin fun env ty ->
+    let env, rty = overload_extract_from_awaitable env p ty in
+    env, rty
+  end env fields
 
 let gena env p ty =
   match snd (TUtils.fold_unresolved env ty) with
-  | _, Tarray (None, None) ->
+  | _, Tarraykind (AKany | AKempty) ->
     env, ty
-  | r, Tarray (Some ty1, None) ->
+  | r, Tarraykind (AKvec ty1) ->
     let env, ty1 = overload_extract_from_awaitable env p ty1 in
-    env, (r, Tarray (Some ty1, None))
-  | r, Tarray (Some ty1, Some ty2) ->
+    env, (r, Tarraykind (AKvec ty1))
+  | r, Tarraykind AKmap (ty1, ty2) ->
     let env, ty2 = overload_extract_from_awaitable env p ty2 in
-    env, (r, Tarray (Some ty1, Some ty2))
+    env, (r, Tarraykind (AKmap (ty1, ty2)))
+  | r, Tarraykind AKshape fdm ->
+    let env, fdm = overload_extract_from_awaitable_shape env p fdm in
+    env, (r, Tarraykind (AKshape fdm))
+  | r, Tarraykind AKtuple fields ->
+    let env, fields = overload_extract_from_awaitable_aktuple env p fields in
+    env, (r, Tarraykind (AKtuple fields))
   | r, Ttuple tyl ->
     let env, tyl =
       overload_extract_from_awaitable_list env p tyl in
     env, (r, Ttuple tyl)
   | r, ty ->
     (* Oh well...let's at least make sure it is array-ish *)
-    let expected_ty = r, Tarray (None, None) in
+    let expected_ty = r, Tarraykind AKany in
     let env =
       Errors.try_
         (fun () -> Type.sub_type p Reason.URawait env expected_ty (r, ty))
@@ -117,7 +136,7 @@ let rec gen_array_rec env p ty =
     let env, ety = Env.expand_type env ty in
     match snd (TUtils.fold_unresolved env ety) with
       | _, Ttuple _
-      | _, Tarray _ -> gen_array_rec env p ety
+      | _, Tarraykind _ -> gen_array_rec env p ety
       | r, Tunresolved tyl -> begin
         (* You can run gen_array_rec on heterogeneous arrays, like this one:
          * array(
@@ -129,10 +148,10 @@ let rec gen_array_rec env p ty =
          *
          * In this case the value type in the array will be unresolved; we need
          * to check all the types in the unresolved. *)
-        let env, rtyl = List.fold_right begin fun ty (env, rtyl) ->
+        let env, rtyl = List.fold_right ~f:begin fun ty (env, rtyl) ->
           let env, ty = is_array env ty in
           env, ty::rtyl
-        end tyl (env, []) in
+        end tyl ~init:(env, []) in
         env, (r, Tunresolved rtyl)
       end
       | _, (Tany | Tmixed | Tprim _ | Toption _ | Tvar _
@@ -141,14 +160,26 @@ let rec gen_array_rec env p ty =
            ) -> overload_extract_from_awaitable env p ety
   end in
   match snd (TUtils.fold_unresolved env ty) with
-  | r, Tarray (Some vty, None) ->
+  | r, Tarraykind (AKvec vty) ->
     let env, vty = is_array env vty in
-    env, (r, Tarray (Some vty, None))
-  | r, Tarray (kty, Some vty) ->
+    env, (r, Tarraykind (AKvec vty))
+  | r, Tarraykind (AKmap (kty, vty)) ->
     let env, vty = is_array env vty in
-    env, (r, Tarray (kty, Some vty))
+    env, (r, Tarraykind (AKmap( kty, vty)))
+  | r, Tarraykind (AKshape fdm) ->
+    let env, fdm = Nast.ShapeMap.map_env begin fun env (tk, tv) ->
+      let env, tv = is_array env tv in
+      env, (tk, tv)
+    end env fdm in
+    env, (r, Tarraykind (AKshape fdm))
+  | r, Tarraykind (AKtuple fields) ->
+    let env, fields = Utils.IMap.map_env begin fun env ty ->
+      let env, ty = is_array env ty in
+      env, ty
+    end env fields in
+    env, (r, Tarraykind (AKtuple fields))
   | _, Ttuple tyl -> gen_array_va_rec env p tyl
-  | _, (Tany | Tmixed | Tarray (_, _) | Tprim _ | Toption _
+  | _, (Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract (_, _) | Tclass (_, _)
     | Tanon (_, _) | Tunresolved _ | Tobject | Tshape _
        ) -> gena env p ty
@@ -161,15 +192,15 @@ and gen_array_va_rec env p tyl =
     | r, Toption opt_ty ->
       let env, opt_ty = gen_array_va_rec' env opt_ty in
       env, (r, Toption opt_ty)
-    | _, Tarray _ -> gen_array_rec env p ty
+    | _, Tarraykind _ -> gen_array_rec env p ty
     | _, Ttuple tyl -> genva env p tyl
     | _, (Tany | Tmixed | Tprim _ | Tvar _ | Tfun _
       | Tabstract (_, _) | Tclass (_, _) | Tanon (_, _) | Tunresolved _
       | Tobject | Tshape _) ->
       overload_extract_from_awaitable env p ty) in
 
-  let env, rtyl = List.fold_right begin fun ty (env, rtyl) ->
+  let env, rtyl = List.fold_right ~f:begin fun ty (env, rtyl) ->
     let env, ty = gen_array_va_rec' env ty in
     env, ty::rtyl
-  end tyl (env, []) in
+  end tyl ~init:(env, []) in
   env, (Reason.Rwitness p, Ttuple rtyl)

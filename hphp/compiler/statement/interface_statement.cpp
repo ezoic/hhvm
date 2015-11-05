@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -27,7 +27,6 @@
 #include "hphp/compiler/analysis/variable_table.h"
 #include "hphp/util/text-util.h"
 #include "hphp/compiler/option.h"
-#include "hphp/compiler/code_model_enums.h"
 #include "hphp/compiler/parser/parser.h"
 
 using namespace HPHP;
@@ -41,10 +40,11 @@ InterfaceStatement::InterfaceStatement
  const std::string &docComment, StatementListPtr stmt,
  ExpressionListPtr attrList)
   : Statement(STATEMENT_CONSTRUCTOR_BASE_PARAMETER_VALUES),
-    m_originalName(name), m_base(base),
-    m_docComment(docComment), m_stmt(stmt), m_attrList(attrList) {
-  m_name = toLower(name);
-  if (m_base) m_base->toLower();
+    m_originalName(name),
+    m_base(base),
+    m_docComment(docComment),
+    m_stmt(stmt),
+    m_attrList(attrList) {
 }
 
 InterfaceStatement::InterfaceStatement
@@ -52,11 +52,9 @@ InterfaceStatement::InterfaceStatement
  const std::string &name, ExpressionListPtr base,
  const std::string &docComment, StatementListPtr stmt,
  ExpressionListPtr attrList)
-  : Statement(STATEMENT_CONSTRUCTOR_PARAMETER_VALUES(InterfaceStatement)),
-    m_originalName(name), m_base(base),
-    m_docComment(docComment), m_stmt(stmt), m_attrList(attrList) {
-  m_name = toLower(name);
-  if (m_base) m_base->toLower();
+  : InterfaceStatement(
+    STATEMENT_CONSTRUCTOR_PARAMETER_VALUES(InterfaceStatement),
+    name, base, docComment, stmt, attrList) {
 }
 
 StatementPtr InterfaceStatement::clone() {
@@ -78,28 +76,28 @@ int InterfaceStatement::getRecursiveCount() const {
 
 void InterfaceStatement::onParse(AnalysisResultConstPtr ar,
                                  FileScopePtr scope) {
-  vector<string> bases;
-  if (m_base) m_base->getOriginalStrings(bases);
+  std::vector<std::string> bases;
+  if (m_base) m_base->getStrings(bases);
 
   for (auto &b : bases) {
-    ar->parseOnDemandByClass(toLower(b));
+    ar->parseOnDemandByClass(b);
   }
 
-  StatementPtr stmt = dynamic_pointer_cast<Statement>(shared_from_this());
+  auto stmt = dynamic_pointer_cast<Statement>(shared_from_this());
 
-  vector<UserAttributePtr> attrs;
+  std::vector<UserAttributePtr> attrs;
   if (m_attrList) {
     for (int i = 0; i < m_attrList->getCount(); ++i) {
-      UserAttributePtr a =
-        dynamic_pointer_cast<UserAttribute>((*m_attrList)[i]);
+      auto a = dynamic_pointer_cast<UserAttribute>((*m_attrList)[i]);
       attrs.push_back(a);
     }
   }
 
-  ClassScopePtr classScope
-    (new ClassScope(scope,
-                    ClassScope::KindOf::Interface, m_name, "", bases,
-                    m_docComment, stmt, attrs));
+  auto classScope =
+    std::make_shared<ClassScope>(
+      scope, ClassScope::KindOf::Interface, m_originalName, "", bases,
+      m_docComment, stmt, attrs);
+
   setBlockScope(classScope);
   scope->addClass(ar, classScope);
 
@@ -107,7 +105,7 @@ void InterfaceStatement::onParse(AnalysisResultConstPtr ar,
 
   if (m_stmt) {
     for (int i = 0; i < m_stmt->getCount(); i++) {
-      IParseHandlerPtr ph = dynamic_pointer_cast<IParseHandler>((*m_stmt)[i]);
+      auto ph = dynamic_pointer_cast<IParseHandler>((*m_stmt)[i]);
       ph->onParseRecur(ar, scope, classScope);
     }
     checkArgumentsToPromote(scope, ExpressionListPtr(), T_INTERFACE);
@@ -120,14 +118,12 @@ void InterfaceStatement::checkArgumentsToPromote(
     return;
   }
   for (int i = 0; i < m_stmt->getCount(); i++) {
-    MethodStatementPtr meth =
-      dynamic_pointer_cast<MethodStatement>((*m_stmt)[i]);
-    if (meth && meth->getName() == "__construct") {
+    auto meth = dynamic_pointer_cast<MethodStatement>((*m_stmt)[i]);
+    if (meth && meth->isNamed("__construct")) {
       ExpressionListPtr params = meth->getParams();
       if (params) {
         for (int i = 0; i < params->getCount(); i++) {
-          ParameterExpressionPtr param =
-            dynamic_pointer_cast<ParameterExpression>((*params)[i]);
+          auto param = dynamic_pointer_cast<ParameterExpression>((*params)[i]);
           if (param->getModifier() != 0) {
             if (type == T_TRAIT || type == T_INTERFACE) {
               param->parseTimeFatal(scope,
@@ -155,15 +151,14 @@ int InterfaceStatement::getLocalEffects() const {
 }
 
 std::string InterfaceStatement::getName() const {
-  return string("Interface ") + getScope()->getName();
+  return std::string("Interface ") + m_originalName;
 }
 
 bool InterfaceStatement::checkVolatileBases(AnalysisResultConstPtr ar) {
   ClassScopeRawPtr classScope = getClassScope();
   assert(!classScope->isVolatile());
-  const vector<string> &bases = classScope->getBases();
-  for (vector<string>::const_iterator it = bases.begin();
-       it != bases.end(); ++it) {
+  auto const& bases = classScope->getBases();
+  for (auto it = bases.begin(); it != bases.end(); ++it) {
     ClassScopePtr base = ar->findClass(*it);
     if (base && base->isVolatile()) return true;
   }
@@ -179,10 +174,6 @@ void InterfaceStatement::checkVolatile(AnalysisResultConstPtr ar) {
        classScope->setVolatile();
      }
   }
-  if (classScope->isVolatile()) {
-    classScope->getOuterScope()->getVariables()->
-       setAttribute(VariableTable::NeedGlobalPointer);
-  }
 }
 
 void InterfaceStatement::analyzeProgram(AnalysisResultPtr ar) {
@@ -194,7 +185,7 @@ void InterfaceStatement::analyzeProgram(AnalysisResultPtr ar) {
   checkVolatile(ar);
 
   if (ar->getPhase() != AnalysisResult::AnalyzeAll) return;
-  vector<string> bases;
+  std::vector<std::string> bases;
   if (m_base) m_base->getStrings(bases);
   for (unsigned int i = 0; i < bases.size(); i++) {
     ClassScopePtr cls = ar->findClass(bases[i]);
@@ -248,39 +239,6 @@ StatementPtr InterfaceStatement::preOptimize(AnalysisResultConstPtr ar) {
     checkVolatile(ar);
   }
   return StatementPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void InterfaceStatement::outputCodeModel(CodeGenerator &cg) {
-  auto numProps = 4;
-  if (m_attrList != nullptr) numProps++;
-  if (m_base != nullptr) numProps++;
-  if (!m_docComment.empty()) numProps++;
-
-  cg.printObjectHeader("TypeStatement", numProps);
-  if (m_attrList != nullptr) {
-    cg.printPropertyHeader("attributes");
-    cg.printExpressionVector(m_attrList);
-  }
-  cg.printPropertyHeader("kind");
-  cg.printValue(PHP_INTERFACE);
-  cg.printPropertyHeader("name");
-  cg.printValue(m_originalName);
-  //TODO: type parameters (task 3262469)
-  if (m_base != nullptr) {
-    cg.printPropertyHeader("interfaces");
-    cg.printExpressionVector(m_base);
-  }
-  cg.printPropertyHeader("block");
-  cg.printAsEnclosedBlock(m_stmt);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  if (!m_docComment.empty()) {
-    cg.printPropertyHeader("comments");
-    cg.printValue(m_docComment);
-  }
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

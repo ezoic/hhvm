@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -54,7 +54,7 @@ bool ZipFile::open(const String& filename, const String& mode) {
       raise_warning("Cannot write to this stream type");
       return false;
     }
-    auto file = makeSmartPtr<TempFile>();
+    auto file = req::make<TempFile>();
     while (!m_innerFile->eof()) {
       file->write(m_innerFile->read(File::CHUNK_SIZE));
     }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -23,23 +23,11 @@
 #include "hphp/runtime/base/datetime.h"
 #include "hphp/runtime/base/timezone.h"
 #include "hphp/runtime/base/dateinterval.h"
-#include "hphp/system/constants.h"
+#include "hphp/runtime/ext/std/ext_std_misc.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // class DateTime
-
-extern const StaticString q_DateTime$$ATOM;
-extern const StaticString q_DateTime$$COOKIE;
-extern const StaticString q_DateTime$$ISO8601;
-extern const StaticString q_DateTime$$RFC822;
-extern const StaticString q_DateTime$$RFC850;
-extern const StaticString q_DateTime$$RFC1036;
-extern const StaticString q_DateTime$$RFC1123;
-extern const StaticString q_DateTime$$RFC2822;
-extern const StaticString q_DateTime$$RFC3339;
-extern const StaticString q_DateTime$$RSS;
-extern const StaticString q_DateTime$$W3C;
 
 class DateTimeData {
 public:
@@ -64,11 +52,11 @@ public:
 
   static int64_t getTimestamp(const Object& obj);
   static int64_t getTimestamp(const ObjectData* od);
-  static Object wrap(SmartPtr<DateTime> dt);
-  static SmartPtr<DateTime> unwrap(const Object& datetime);
+  static Object wrap(req::ptr<DateTime> dt);
+  static req::ptr<DateTime> unwrap(const Object& datetime);
   static Class* getClass();
 
-  SmartPtr<DateTime> m_dt;
+  req::ptr<DateTime> m_dt;
   static Class* s_class;
   static const StaticString s_className;
 };
@@ -118,21 +106,6 @@ Array HHVM_METHOD(DateTime, __debuginfo);
 ///////////////////////////////////////////////////////////////////////////////
 // class DateTimeZone
 
-extern const int64_t q_DateTimeZone$$AFRICA;
-extern const int64_t q_DateTimeZone$$AMERICA;
-extern const int64_t q_DateTimeZone$$ANTARCTICA;
-extern const int64_t q_DateTimeZone$$ARCTIC;
-extern const int64_t q_DateTimeZone$$ASIA;
-extern const int64_t q_DateTimeZone$$ATLANTIC;
-extern const int64_t q_DateTimeZone$$AUSTRALIA;
-extern const int64_t q_DateTimeZone$$EUROPE;
-extern const int64_t q_DateTimeZone$$INDIAN;
-extern const int64_t q_DateTimeZone$$PACIFIC;
-extern const int64_t q_DateTimeZone$$UTC;
-extern const int64_t q_DateTimeZone$$ALL;
-extern const int64_t q_DateTimeZone$$ALL_WITH_BC;
-extern const int64_t q_DateTimeZone$$PER_COUNTRY;
-
 class DateTimeZoneData {
 public:
   DateTimeZoneData() {}
@@ -145,13 +118,28 @@ public:
     return m_tz->name();
   }
 
-  static Object wrap(SmartPtr<TimeZone> tz);
-  static SmartPtr<TimeZone> unwrap(const Object& timezone);
+  static Object wrap(req::ptr<TimeZone> tz);
+  static req::ptr<TimeZone> unwrap(const Object& timezone);
   static Class* getClass();
 
-  SmartPtr<TimeZone> m_tz;
+  req::ptr<TimeZone> m_tz;
   static Class* s_class;
   static const StaticString s_className;
+
+  static const int64_t AFRICA = 1;
+  static const int64_t AMERICA = 2;
+  static const int64_t ANTARCTICA = 4;
+  static const int64_t ARCTIC = 8;
+  static const int64_t ASIA = 16;
+  static const int64_t ATLANTIC = 32;
+  static const int64_t AUSTRALIA = 64;
+  static const int64_t EUROPE = 128;
+  static const int64_t INDIAN = 256;
+  static const int64_t PACIFIC = 512;
+  static const int64_t UTC = 1024;
+  static const int64_t ALL = 2047;
+  static const int64_t ALL_WITH_BC = 4095;
+  static const int64_t PER_COUNTRY = 4096;
 };
 
 void HHVM_METHOD(DateTimeZone, __construct,
@@ -180,11 +168,11 @@ public:
     return *this;
   }
 
-  static Object wrap(SmartPtr<DateInterval> di);
-  static SmartPtr<DateInterval> unwrap(const Object& di);
+  static Object wrap(req::ptr<DateInterval> di);
+  static req::ptr<DateInterval> unwrap(const Object& di);
   static Class* getClass();
 
-  SmartPtr<DateInterval> m_di;
+  req::ptr<DateInterval> m_di;
   static Class* s_class;
   static const StaticString s_className;
 };
@@ -223,17 +211,9 @@ Variant HHVM_FUNCTION(gmmktime,
                       int64_t month,
                       int64_t day,
                       int64_t year);
-TypedValue* HHVM_FN(idate)(ActRec* ar);
-TypedValue* HHVM_FN(date)(ActRec* ar);
-TypedValue* HHVM_FN(gmdate)(ActRec* ar);
-TypedValue* HHVM_FN(strftime)(ActRec* ar);
-TypedValue* HHVM_FN(gmstrftime)(ActRec* ar);
-TypedValue* HHVM_FN(getdate)(ActRec* ar);
-TypedValue* HHVM_FN(localtime)(ActRec* ar);
 Variant HHVM_FUNCTION(strptime,
                       const String& date,
                       const String& format);
-TypedValue* HHVM_FN(strtotime)(ActRec* ar);
 
 ///////////////////////////////////////////////////////////////////////////////
 // timezone
@@ -269,18 +249,10 @@ Object HHVM_FUNCTION(date_sub,
 ///////////////////////////////////////////////////////////////////////////////
 // sun
 
-double get_date_default_latitude();
-double get_date_default_longitude();
-double get_date_default_sunset_zenith();
-double get_date_default_sunrise_zenith();
-double get_date_default_gmt_offset();
-
 Array HHVM_FUNCTION(date_sun_info,
                     int64_t ts,
                     double latitude,
                     double longitude);
-TypedValue* HHVM_FN(date_sunrise)(ActRec* ar);
-TypedValue* HHVM_FN(date_sunset)(ActRec* ar);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

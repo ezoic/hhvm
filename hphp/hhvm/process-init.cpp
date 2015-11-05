@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -14,7 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#include "hphp/compiler/analysis/emitter.h"
+#include "hphp/compiler/option.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/program-functions.h"
@@ -46,17 +46,21 @@ namespace HPHP {
 #define resource __resource
 
 #define SYSTEM_CLASS_STRING(cls)                        \
-  const StaticString s_##cls(LITSTR_INIT(STRINGIZE_CLASS_NAME(cls)));
+  const StaticString s_##cls(STRINGIZE_CLASS_NAME(cls));
 SYSTEMLIB_CLASSES(SYSTEM_CLASS_STRING)
 
 #undef resource
 #undef pinitSentinel
 #undef STRINGIZE_CLASS_NAME
 
+void tweak_variant_dtors();
 void ProcessInit() {
   // Create the global mcg object
   jit::mcg = new jit::MCGenerator();
+  // Do not initialize JIT stubs for PPC64 - port under development
+#if !defined(__powerpc64__)
   jit::mcg->initUniqueStubs();
+#endif
 
   // Save the current options, and set things up so that
   // systemlib.php can be read from and stored in the
@@ -73,8 +77,8 @@ void ProcessInit() {
   Option::WholeProgram = false;
 
   rds::requestInit();
-  string hhas;
-  string slib = get_systemlib(&hhas);
+  std::string hhas;
+  auto const slib = get_systemlib(&hhas);
 
   if (slib.empty()) {
     // Die a horrible death.
@@ -174,7 +178,6 @@ void ProcessInit() {
   RuntimeOption::EvalAllowHhas = ah;
   Option::WholeProgram = wp;
 
-  void tweak_variant_dtors();
   tweak_variant_dtors();
 
   folly::SingletonVault::singleton()->registrationComplete();

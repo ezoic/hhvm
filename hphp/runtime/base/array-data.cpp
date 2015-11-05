@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -58,7 +58,7 @@ ArrayData::ScalarArrayKey ArrayData::GetScalarArrayKey(const char* str,
 
 ArrayData::ScalarArrayKey ArrayData::GetScalarArrayKey(ArrayData* arr) {
   VariableSerializer vs(VariableSerializer::Type::Serialize);
-  auto s = vs.serialize(VarNR(arr), true);
+  auto s = vs.serializeValue(VarNR(arr), false /* limit */);
   return GetScalarArrayKey(s.data(), s.size());
 }
 
@@ -78,11 +78,11 @@ ArrayData* ArrayData::GetScalarArray(ArrayData* arr,
     ArrayData* ad;
 
     if (arr->isVectorData() && !arr->isPacked()) {
-      ad = PackedArray::NonSmartConvert(arr);
+      ad = PackedArray::ConvertStatic(arr);
     } else {
-      ad = arr->nonSmartCopy();
+      ad = arr->copyStatic();
     }
-    ad->setStatic();
+    assert(ad->isStatic());
     ad->onSetEvalScalar();
     acc->second = ad;
   }
@@ -140,12 +140,10 @@ static ArrayData* ZAppendThrow(ArrayData* ad, RefData* v, int64_t* key_ptr) {
  *   array doesn't have to copy if it was asked to remove an element
  *   that doesn't exist.
  *
- *   When a function with these semantics returns a new array, the new
- *   array is not yet incref'd (for historical reasons relating to our
- *   smart pointers).  Correctly using functions with these semantics
- *   usually involves checking whether the return value is the same
- *   pointer to be able to conditionally incref it.  TODO(#2926276):
- *   we want to change this to make callsites cheaper.
+ *   When a function with these semantics returns a new array, the new array is
+ *   already incref'd. In a few cases, an existing array (different than the
+ *   source array) may be returned. In this case, the array will already be
+ *   incref'd.
  */
 
 extern const ArrayFunctions g_array_funcs_unmodified = {
@@ -411,9 +409,7 @@ extern const ArrayFunctions g_array_funcs_unmodified = {
    *
    *   Must be called before calling any of the sort routines on an
    *   array. This gives arrays a chance to change to a kind that
-   *   supports sorting. If the original ArrayData is returned, the
-   *   refcount is unchanged; otherwise the returned ArrayData has
-   *   refcount of 0.
+   *   supports sorting.
    */
   DISPATCH(EscalateForSort)
 
@@ -491,14 +487,14 @@ extern const ArrayFunctions g_array_funcs_unmodified = {
   DISPATCH(CopyWithStrongIterators)
 
   /*
-   * ArrayData* NonSmartCopy(const ArrayData*)
+   * ArrayData* CopyStatic(const ArrayData*)
    *
    *   Copy an array, allocating the new array with malloc() instead
    *   of from the request local allocator.  This function does
    *   guarantee the returned array is a new copy---but it may throw a
    *   fatal error if this cannot be accomplished (e.g. for $GLOBALS).
    */
-  DISPATCH(NonSmartCopy)
+  DISPATCH(CopyStatic)
 
   /*
    * ArrayData* Append(ArrayData*, const Variant& v, bool copy)
@@ -537,9 +533,7 @@ extern const ArrayFunctions g_array_funcs_unmodified = {
    *
    *    Performs array addition, logically mutating the first array.
    *    It may return a new array if the array needed to grow, or if
-   *    it needed to COW because hasMultipleRefs was true---in this
-   *    case the new returned array will already have a reference
-   *    count of 1.
+   *    it needed to COW because cowCheck() was true.
    */
   DISPATCH(PlusEq)
 
@@ -548,26 +542,24 @@ extern const ArrayFunctions g_array_funcs_unmodified = {
    *
    *   Perform part of the semantics of the php function array_merge.
    *   (Renumbering keys is not done by this routine currently.)
-   *
-   *   This function always produces a new array with reference count 1.
    */
   DISPATCH(Merge)
 
   /*
    * ArrayData* Pop(ArrayData*, Variant& value);
    *
-   *   Remove the last element from the array and assign it to
-   *   `value'.  This function may return a new (not yet incref'd)
-   *   array if it decided to COW due to hasMultipleRefs().
+   *   Remove the last element from the array and assign it to `value'.  This
+   *   function may return a new array if it decided to COW due to
+   *   cowCheck().
    */
   DISPATCH(Pop)
 
   /*
    * ArrayData* Dequeue(ArrayData*, Variant& value)
    *
-   *   Remove the first element from the array and assign it to
-   *   `value'.  This function may return a new (not yet incref'd)
-   *   array if it decided to COW due to hasMultipleRefs().
+   *   Remove the first element from the array and assign it to `value'.  This
+   *   function may return a new array if it decided to COW due to
+   *   cowCheck().
    */
   DISPATCH(Dequeue)
 
@@ -677,8 +669,12 @@ ArrayData *ArrayData::Create(const Variant& value) {
 
 ArrayData *ArrayData::Create(const Variant& name, const Variant& value) {
   ArrayInit init(1, ArrayInit::Map{});
-  // There is no toKey() call on name.
-  init.set(name, value);
+  DEBUG_ONLY int64_t unused;
+  assertx(name.isString() ?
+         !name.getStringData()->isStrictlyInteger(unused) :
+         name.isInteger());
+
+  init.setValidKey(name, value);
   return init.create();
 }
 
@@ -690,7 +686,11 @@ ArrayData *ArrayData::CreateRef(Variant& value) {
 
 ArrayData *ArrayData::CreateRef(const Variant& name, Variant& value) {
   ArrayInit init(1, ArrayInit::Map{});
-  // There is no toKey() call on name.
+  DEBUG_ONLY int64_t unused;
+  assertx(name.isString() ?
+         !name.getStringData()->isStrictlyInteger(unused) :
+         name.isInteger());
+
   init.setRef(name, value, true);
   return init.create();
 }
@@ -715,8 +715,8 @@ int ArrayData::compare(const ArrayData *v2) const {
     if (!v2->exists(key)) return 1;
     auto value1 = iter.second();
     auto value2 = v2->get(key);
-    if (HPHP::more(value1, value2)) return 1;
-    if (HPHP::less(value1, value2)) return -1;
+    auto cmp = HPHP::compare(value1, value2);
+    if (cmp != 0) return cmp;
   }
 
   return 0;
@@ -818,36 +818,6 @@ Variant ArrayData::each() {
 
 ///////////////////////////////////////////////////////////////////////////////
 // helpers
-
-void ArrayData::serializeImpl(VariableSerializer *serializer) const {
-  serializer->writeArrayHeader(size(), isVectorData());
-  for (ArrayIter iter(this); iter; ++iter) {
-    serializer->writeArrayKey(iter.first());
-    serializer->writeArrayValue(iter.secondRef());
-  }
-  serializer->writeArrayFooter();
-}
-
-void ArrayData::serialize(VariableSerializer *serializer,
-                          bool skipNestCheck /* = false */) const {
-  if (size() == 0) {
-    serializer->writeArrayHeader(0, isVectorData());
-    serializer->writeArrayFooter();
-    return;
-  }
-  if (!skipNestCheck) {
-    if (serializer->incNestedLevel((void*)this)) {
-      serializer->writeOverflow((void*)this);
-    } else {
-      serializeImpl(serializer);
-    }
-    serializer->decNestedLevel((void*)this);
-  } else {
-    // If isObject, the array is temporary and we should not check or save
-    // its pointer.
-    serializeImpl(serializer);
-  }
-}
 
 const Variant& ArrayData::get(const Variant& k, bool error) const {
   assert(IsValidKey(k));

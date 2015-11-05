@@ -21,7 +21,7 @@
 #include "hphp/runtime/base/type-object.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 #include "hphp/runtime/base/collections.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/base/data-walker.h"
 
 namespace HPHP {
@@ -75,10 +75,10 @@ Object createFromSerialized(CollectionType colType, APCHandle* handle) {
 }
 
 APCHandle::Pair APCCollection::Make(const ObjectData* obj,
-                                    bool inner,
+                                    APCHandleLevel level,
                                     bool unserializeObj) {
   auto bail = [&] {
-    return APCObject::MakeSerializedObj(
+    return APCString::MakeSerializedObject(
       apc_serialize(Variant(const_cast<ObjectData*>(obj)))
     );
   };
@@ -89,19 +89,20 @@ APCHandle::Pair APCCollection::Make(const ObjectData* obj,
   /*
    * Create an uncounted array if we can.
    *
-   * If this collection is !inner, then we need to do a full check on this
-   * array for things like circularity.  If we're inner, someone already
-   * checked that, but we want to check for whether it's uncounted to use a
-   * better representation.  For the !inner case, we just delegate to APCArray
-   * below (which will do the full DataWalker pass).
+   * If this collection is an OuterHandle, then we need to do a full check on
+   * this array for things like circularity.  If we're an InnerHandle, someone
+   * already checked that, but we want to check for whether it's uncounted to
+   * use a better representation.  For the OuterHandle case, we just delegate
+   * to APCArray below (which will do the full DataWalker pass).
    */
-  if (inner && apcExtension::UseUncounted && !array->empty()) {
+  if (level == APCHandleLevel::Inner && apcExtension::UseUncounted &&
+      !array->empty()) {
     DataWalker walker(DataWalker::LookupFeature::HasObjectOrResource);
     auto const features = walker.traverseData(const_cast<ArrayData*>(array));
     assert(!features.isCircular);
     if (!features.hasObjectOrResource) {
       return WrapArray(
-        { APCTypedValue::MakeSharedArray(const_cast<ArrayData*>(array)),
+        { APCArray::MakeUncountedArray(const_cast<ArrayData*>(array)),
           getMemSize(array) + sizeof(APCTypedValue) },
         obj->collectionType()
       );
@@ -110,7 +111,7 @@ APCHandle::Pair APCCollection::Make(const ObjectData* obj,
 
   return WrapArray(
     APCArray::MakeSharedArray(const_cast<ArrayData*>(array),
-                              inner,
+                              level,
                               unserializeObj),
     obj->collectionType()
   );

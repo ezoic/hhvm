@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,7 +29,7 @@
 #include "hphp/util/rank.h"
 #include "hphp/util/mutex.h"
 #include "hphp/util/process.h"
-#include "hphp/runtime/ext/ext_system_profiler.h"
+#include "hphp/runtime/base/system-profiler.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/base/string-util.h"
@@ -49,6 +49,7 @@
 
 #ifdef __APPLE__
 #define st_mtim st_mtimespec
+#define st_ctim st_ctimespec
 #endif
 
 namespace HPHP {
@@ -138,7 +139,12 @@ struct CachedUnitWithFree {
 
 struct CachedUnitNonRepo {
   std::shared_ptr<CachedUnitWithFree> cachedUnit;
+#ifdef _MSC_VER
+  time_t mtime;
+#else
   struct timespec mtime;
+  struct timespec ctime;
+#endif
   ino_t ino;
   dev_t devId;
 };
@@ -151,11 +157,13 @@ using NonRepoUnitCache = RankedCHM<
 >;
 NonRepoUnitCache s_nonRepoUnitCache;
 
+#ifndef _MSC_VER
 int64_t timespecCompare(const struct timespec& l,
                         const struct timespec& r) {
   if (l.tv_sec != r.tv_sec) return l.tv_sec - r.tv_sec;
   return l.tv_nsec - r.tv_nsec;
 }
+#endif
 
 bool isChanged(const CachedUnitNonRepo& cu, const struct stat& s) {
   // If the cached unit is null, we always need to consider it out of date (in
@@ -164,15 +172,20 @@ bool isChanged(const CachedUnitNonRepo& cu, const struct stat& s) {
   // open() it.
   return !cu.cachedUnit ||
          cu.cachedUnit->cu.unit == nullptr ||
+#ifdef _MSC_VER
+         cu.mtime - s.st_mtime < 0 ||
+#else
          timespecCompare(cu.mtime, s.st_mtim) < 0 ||
+         timespecCompare(cu.ctime, s.st_ctim) < 0 ||
+#endif
          cu.ino != s.st_ino ||
          cu.devId != s.st_dev;
 }
 
 folly::Optional<String> readFileAsString(const StringData* path) {
   auto const fd = open(path->data(), O_RDONLY);
-  if (!fd) return folly::none;
-  auto file = makeSmartPtr<PlainFile>(fd);
+  if (fd < 0) return folly::none;
+  auto file = req::make<PlainFile>(fd);
   return file->read();
 }
 
@@ -219,8 +232,8 @@ CachedUnit loadUnitNonRepoAuth(StringData* requestedPath,
     makeStaticString(
       // XXX: it seems weird we have to do this even though we already ran
       // resolveVmInclude.
-      (requestedPath->data()[0] == '/'
-        ? requestedPath
+      (FileUtil::isAbsolutePath(requestedPath->toCppString())
+       ?  String{requestedPath}
         : String(SourceRootInfo::GetCurrentSourceRoot()) + StrNR(requestedPath)
       ).get()
     );
@@ -259,7 +272,12 @@ CachedUnit loadUnitNonRepoAuth(StringData* requestedPath,
 
     auto const cu = createUnitFromFile(rpath);
     rpathAcc->second.cachedUnit = std::make_shared<CachedUnitWithFree>(cu);
+#ifdef _MSC_VER
+    rpathAcc->second.mtime      = statInfo.st_mtime;
+#else
     rpathAcc->second.mtime      = statInfo.st_mtim;
+    rpathAcc->second.ctime      = statInfo.st_ctim;
+#endif
     rpathAcc->second.ino        = statInfo.st_ino;
     rpathAcc->second.devId      = statInfo.st_dev;
 
@@ -270,7 +288,12 @@ CachedUnit loadUnitNonRepoAuth(StringData* requestedPath,
     NonRepoUnitCache::accessor pathAcc;
     s_nonRepoUnitCache.insert(pathAcc, path);
     pathAcc->second.cachedUnit = cuptr;
+#ifdef _MSC_VER
+    pathAcc->second.mtime      = statInfo.st_mtime;
+#else
     pathAcc->second.mtime      = statInfo.st_mtim;
+    pathAcc->second.ctime      = statInfo.st_ctim;
+#endif
     pathAcc->second.ino        = statInfo.st_ino;
     pathAcc->second.devId      = statInfo.st_dev;
   }
@@ -343,7 +366,7 @@ bool findFileWrapper(const String& file, void* ctx) {
   // TranslatePath() will canonicalize the path and also check
   // whether the file is in an allowed directory.
   String translatedPath = File::TranslatePathKeepRelative(file);
-  if (file[0] != '/') {
+  if (!FileUtil::isAbsolutePath(file.toCppString())) {
     if (findFile(translatedPath.get(), context->s, context->allow_dir)) {
       context->path = translatedPath;
       return true;
@@ -359,8 +382,9 @@ bool findFileWrapper(const String& file, void* ctx) {
   std::string server_root(SourceRootInfo::GetCurrentSourceRoot());
   if (server_root.empty()) {
     server_root = std::string(g_context->getCwd().data());
-    if (server_root.empty() || server_root[server_root.size() - 1] != '/') {
-      server_root += "/";
+    if (server_root.empty() ||
+        FileUtil::isDirSeparator(server_root[server_root.size() - 1])) {
+      server_root += FileUtil::getDirSeparator();
     }
   }
   String rel_path(FileUtil::relativePath(server_root, translatedPath.data()));
@@ -381,20 +405,37 @@ CachedUnit checkoutFile(StringData* path, const struct stat& statInfo) {
 
 //////////////////////////////////////////////////////////////////////
 
-}
+} // end empty namespace
 
 //////////////////////////////////////////////////////////////////////
 
+const std::string mangleUnitPHP7Options() {
+  // As the list of options increases, we may want to do something smarter here?
+  std::string s;
+  s +=
+      (RuntimeOption::PHP7_IntSemantics ? '1' : '0')
+    + (RuntimeOption::PHP7_LTR_assign ? '1' : '0')
+    + (RuntimeOption::PHP7_NoHexNumerics ? '1' : '0')
+    + (RuntimeOption::PHP7_UVS ? '1' : '0');
+  return s;
+}
+
 std::string mangleUnitMd5(const std::string& fileMd5) {
   std::string t = fileMd5 + '\0'
-    + (RuntimeOption::EnableEmitSwitch ? '1' : '0')
+    + (RuntimeOption::EvalEmitSwitch ? '1' : '0')
+    + (RuntimeOption::EvalEmitNewMInstrs ? '1' : '0')
     + (RuntimeOption::EnableHipHopExperimentalSyntax ? '1' : '0')
     + (RuntimeOption::EnableHipHopSyntax ? '1' : '0')
     + (RuntimeOption::EnableXHP ? '1' : '0')
     + (RuntimeOption::EvalAllowHhas ? '1' : '0')
     + (RuntimeOption::EvalJitEnableRenameFunction ? '1' : '0')
     + (RuntimeOption::IntsOverflowToInts ? '1' : '0')
-    + (RuntimeOption::EvalEnableCallBuiltin ? '1' : '0');
+    + (RuntimeOption::EvalEnableCallBuiltin ? '1' : '0')
+    + RuntimeOption::EvalUseExternalEmitter + '\0'
+    + (RuntimeOption::EvalExternalEmitterFallback ? '1' : '0')
+    + (RuntimeOption::EvalExternalEmitterAllowPartial ? '1' : '0')
+    + (RuntimeOption::AutoprimeGenerators ? '1' : '0')
+    + mangleUnitPHP7Options();
   return string_md5(t.c_str(), t.size());
 }
 
@@ -413,7 +454,7 @@ String resolveVmInclude(StringData* path,
   ctx.s = s;
   ctx.allow_dir = allow_dir;
   void* vpCtx = &ctx;
-  resolve_include(path, currentDir, findFileWrapper, vpCtx);
+  resolve_include(String{path}, currentDir, findFileWrapper, vpCtx);
   // If resolve_include() could not find the file, return NULL
   return ctx.path;
 }
@@ -486,6 +527,7 @@ void preloadRepo() {
   std::atomic<size_t> index{0};
   for (auto worker = 0; worker < numWorkers; ++worker) {
     workers.push_back(std::thread([&] {
+      hphp_thread_init();
       hphp_session_init();
       hphp_context_init();
 
@@ -508,7 +550,6 @@ void preloadRepo() {
       hphp_context_exit();
       hphp_session_exit();
       hphp_thread_exit();
-
     }));
   }
   for (auto& worker : workers) {

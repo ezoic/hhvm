@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -59,14 +59,12 @@ FunctionCall::FunctionCall
 
   if (m_nameExp &&
       m_nameExp->getKindOf() == Expression::KindOfScalarExpression) {
-    assert(m_name.empty());
-    ScalarExpressionPtr c = dynamic_pointer_cast<ScalarExpression>(m_nameExp);
+    assert(m_origName.empty());
+    auto c = dynamic_pointer_cast<ScalarExpression>(m_nameExp);
     m_origName = c->getOriginalLiteralString();
     c->toLower(true /* func call*/);
-    m_name = c->getLiteralString();
   } else {
     m_origName = name;
-    m_name = toLower(name);
   }
 }
 
@@ -75,8 +73,8 @@ void FunctionCall::reset() {
   m_variableArgument = false;
 }
 
-bool FunctionCall::isTemporary() const {
-  return m_funcScope && !m_funcScope->isRefReturn();
+bool FunctionCall::isNamed(const char* name) const {
+  return !strcasecmp(m_origName.c_str(), name);
 }
 
 void FunctionCall::deepCopy(FunctionCallPtr exp) {
@@ -158,7 +156,7 @@ bool FunctionCall::checkUnpackParams() {
 }
 
 void FunctionCall::markRefParams(FunctionScopePtr func,
-                                 const std::string &name) {
+                                 const std::string &fooBarName) {
   ExpressionList &params = *m_params;
   if (func) {
     int mpc = func->getMaxParamCount();
@@ -173,9 +171,9 @@ void FunctionCall::markRefParams(FunctionScopePtr func,
         sym->setCallTimeRef();
       }
     }
-  } else if (Option::WholeProgram && !m_name.empty()) {
+  } else if (Option::WholeProgram && !m_origName.empty()) {
     FunctionScope::FunctionInfoPtr info =
-      FunctionScope::GetFunctionInfo(m_name);
+      FunctionScope::GetFunctionInfo(m_origName);
     if (info) {
       for (int i = params.getCount(); i--; ) {
         if (info->isRefParam(i)) {

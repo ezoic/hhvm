@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -120,6 +120,7 @@ and class_elt =
   | XhpAttr of kind list * hint option * class_var list * bool *
                ((Pos.t * expr list) option)
   | Method of method_
+  | XhpCategory of pstring list
 
 and class_attr =
   | CA_name of id
@@ -283,7 +284,7 @@ and expr_ =
   | Int of pstring
   | Float of pstring
   | String of pstring
-  | String2 of expr list * pstring
+  | String2 of expr list
   | Yield of afield
   | Yield_break
   | Await of expr
@@ -293,6 +294,7 @@ and expr_ =
   | Unop of uop * expr
   | Binop of bop * expr * expr
   | Eif of expr * expr option * expr
+  | NullCoalesce of expr * expr
   | InstanceOf of expr * expr
   | New of expr * expr list * expr list
   (* Traditional PHP-style closure with a use list. Each use element is
@@ -306,7 +308,6 @@ and expr_ =
   | Xml of id * (id * expr) list * expr list
   | Unsafeexpr of expr
   | Import of import_flavor * expr
-  | Ref of expr
 
 and import_flavor =
   | Include
@@ -330,6 +331,7 @@ and uop =
 | Utild
 | Unot | Uplus | Uminus | Uincr
 | Udecr | Upincr | Updecr
+| Uref
 
 and case =
 | Default of block

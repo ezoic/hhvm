@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -50,7 +50,7 @@ bool TestParser::VerifyParser(const char *input, const char *output,
   assert(output);
   if (output2 == nullptr) output2 = output;
 
-  string oldTab = Option::Tab;
+  std::string oldTab = Option::Tab;
   Option::Tab = "";
 
   bool ret = true;

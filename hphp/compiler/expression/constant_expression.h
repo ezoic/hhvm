@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -36,9 +36,6 @@ public:
   DECLARE_BASE_EXPRESSION_VIRTUAL_FUNCTIONS;
   void onParse(AnalysisResultConstPtr ar, FileScopePtr scope) override;
   ExpressionPtr preOptimize(AnalysisResultConstPtr ar) override;
-  bool isTemporary() const override {
-    return isNull() || isBoolean();
-  }
   bool isScalar() const override;
   bool isLiteralNull() const override;
   int getLocalEffects() const override { return NoEffect; }
@@ -47,14 +44,11 @@ public:
     return !m_valid || m_dynamic;
   }
 
-  unsigned getCanonHash() const override;
-  bool canonCompare(ExpressionPtr e) const override;
-
   const std::string &getName() const { return m_name;}
   const std::string &getOriginalName() const { return m_origName;}
   const std::string getNonNSOriginalName() const {
     auto nsPos = m_origName.rfind('\\');
-    if (nsPos == string::npos) {
+    if (nsPos == std::string::npos) {
       return m_origName;
     }
     return m_origName.substr(nsPos + 1);

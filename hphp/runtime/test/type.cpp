@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,7 +23,7 @@
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
-#include "hphp/runtime/vm/jit/guard-relaxation.h"
+#include "hphp/runtime/vm/jit/type-constraint.h"
 #include "hphp/runtime/vm/jit/print.h"
 #include "hphp/runtime/vm/jit/type.h"
 
@@ -180,10 +180,10 @@ TEST(Type, TypeConstraints) {
 }
 
 TEST(Type, RelaxType) {
-  EXPECT_EQ(TGen, relaxType(TBoxedStr, {DataTypeGeneric}));
+  EXPECT_EQ(TGen, relaxType(TBoxedStr, DataTypeGeneric));
   EXPECT_EQ(TBoxedInitCell | TUncounted,
             relaxType(TBoxedObj | TInitNull,
-                      {DataTypeCountness}));
+                      DataTypeCountness));
 
 
   auto tc = TypeConstraint{DataTypeSpecialized};
@@ -191,7 +191,7 @@ TEST(Type, RelaxType) {
   tc.category = DataTypeSpecialized;
   auto type = Type::SubObj(SystemLib::s_IteratorClass);
   EXPECT_EQ("Obj<=Iterator", type.toString());
-  EXPECT_EQ(type, relaxType(type, tc));
+  EXPECT_EQ(type, relaxType(type, tc.category));
 
   EXPECT_EQ(TBoxedInitCell,
             relaxType(TBoxedInitCell, DataTypeCountnessInit));
@@ -288,6 +288,48 @@ TEST(Type, SpecializedObjects) {
   EXPECT_EQ(subB & exactB, exactB);
 
   EXPECT_EQ(TObj, TObj - subA);  // conservative
+  EXPECT_EQ(subA, subA - exactA);  // conservative
+}
+
+TEST(Type, SpecializedClass) {
+  auto const A = SystemLib::s_IteratorClass;
+  auto const B = SystemLib::s_TraversableClass;
+
+  EXPECT_TRUE(A->classof(B));
+
+  auto const cls = TCls;
+  auto const exactA = Type::ExactCls(A);
+  auto const exactB = Type::ExactCls(B);
+  auto const subA = Type::SubCls(A);
+  auto const subB = Type::SubCls(B);
+
+  EXPECT_EQ(exactA.clsSpec().exactCls(), A);
+  EXPECT_EQ(subA.clsSpec().cls(), A);
+  EXPECT_EQ(subA.clsSpec().exactCls(), nullptr);
+
+  EXPECT_LE(exactA, exactA);
+  EXPECT_LE(subA, subA);
+
+  EXPECT_LT(exactA, cls);
+  EXPECT_LT(subA, cls);
+
+  EXPECT_LE(TBottom, exactA);
+  EXPECT_LE(TBottom, subA);
+
+  EXPECT_LT(exactA, subA);
+
+  EXPECT_LT(exactA, subB);
+  EXPECT_LT(subA, subB);
+
+  EXPECT_FALSE(exactA <= exactB);
+  EXPECT_FALSE(subA <= exactB);
+
+  EXPECT_EQ(exactA & subA, exactA);
+  EXPECT_EQ(subA & exactA, exactA);
+  EXPECT_EQ(exactB & subB, exactB);
+  EXPECT_EQ(subB & exactB, exactB);
+
+  EXPECT_EQ(cls, cls - subA);  // conservative
   EXPECT_EQ(subA, subA - exactA);  // conservative
 }
 
@@ -431,6 +473,7 @@ TEST(Type, PtrRefs) {
   EXPECT_EQ(TBottom, TPtrToRPropCell & TPtrToFrameBool);
   EXPECT_FALSE(TPtrToRPropCell.maybe(TPtrToFrameBool));
 
+  EXPECT_EQ(TPtrToGen, TPtrToGen - TPtrToRefGen);
   EXPECT_EQ(TPtrToPropCell, TPtrToPropGen - TPtrToBoxedCell);
   EXPECT_EQ(TPtrToPropInt, TPtrToRPropInt - TPtrToRefCell);
   EXPECT_EQ(TPtrToPropInt, TPtrToRPropInt - TPtrToRStkCell);

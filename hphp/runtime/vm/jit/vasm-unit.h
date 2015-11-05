@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,12 +18,14 @@
 #define incl_HPHP_JIT_VASM_UNIT_H_
 
 #include "hphp/runtime/base/datatype.h"
+
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/containers.h"
 #include "hphp/runtime/vm/jit/vasm.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 
+#include "hphp/util/data-block.h"
 #include "hphp/util/immed.h"
 
 #include <functional>
@@ -34,6 +36,9 @@ namespace HPHP { namespace jit {
 
 /*
  * Block of Vinstrs, managed by Vunit.
+ *
+ * A Vblock, in addition to containing a Vinstr stream, also specifies where it
+ * should be emitted to.
  */
 struct Vblock {
   explicit Vblock(AreaIndex area) : area(area) {}
@@ -63,25 +68,46 @@ struct VcallArgs {
  * Vasm constant.
  *
  * Either a 1, 4, or 8 byte unsigned value, 8 byte double, or the disp32 part
- * of a thread-local address of an immutable constant that varies by
- * thread. Constants may also represent an undefined value, indicated by the
- * isUndef member.
+ * of a thread-local address of an immutable constant that varies by thread.
+ * Constants may also represent an undefined value, indicated by the isUndef
+ * member.
+ *
+ * Also contains convenience constructors for various pointer and enum types.
  */
 struct Vconst {
   enum Kind { Quad, Long, Byte, Double, ThreadLocal };
 
+  using ullong = unsigned long long;
+  using ulong = unsigned long;
+
   Vconst() : kind(Quad), val(0) {}
-  explicit Vconst(Kind k) : kind(k), isUndef(true), val(0) {}
-  explicit Vconst(bool b) : kind(Byte), val(b) {}
-  explicit Vconst(uint8_t b) : kind(Byte), val(b) {}
-  explicit Vconst(uint32_t i) : kind(Long), val(i) {}
-  explicit Vconst(uint64_t i) : kind(Quad), val(i) {}
-  explicit Vconst(double d) : kind(Double), doubleVal(d) {}
-  explicit Vconst(Vptr tl) : kind(ThreadLocal), disp(tl.disp) {
-    assertx(!tl.base.isValid() &&
-           !tl.index.isValid() &&
-           tl.seg == Vptr::FS);
+  explicit Vconst(Kind k)        : kind(k), isUndef(true), val(0) {}
+  explicit Vconst(bool b)        : kind(Byte), val(b) {}
+  explicit Vconst(uint8_t b)     : kind(Byte), val(b) {}
+  explicit Vconst(int8_t b)      : Vconst(uint8_t(b)) {}
+  explicit Vconst(uint32_t i)    : kind(Long), val(i) {}
+  // For historical reasons Vconst(int) produces an 8-byte constant.
+  explicit Vconst(int32_t i)     : Vconst(int64_t(i)) {}
+  explicit Vconst(uint16_t)      = delete;
+  explicit Vconst(int16_t)       = delete;
+  explicit Vconst(ullong i)      : kind(Quad), val(i) {}
+  explicit Vconst(long long i)   : Vconst(ullong(i)) {}
+  explicit Vconst(ulong i)       : Vconst(ullong(i)) {}
+  explicit Vconst(long i)        : Vconst(ullong(i)) {}
+  explicit Vconst(const void* p) : Vconst(uintptr_t(p)) {}
+  explicit Vconst(double d)      : kind(Double), doubleVal(d) {}
+  explicit Vconst(Vptr tl)       : kind(ThreadLocal), disp(tl.disp) {
+    assertx(!tl.base.isValid() && !tl.index.isValid() && tl.seg == Vptr::FS);
   }
+
+  template<
+    class E,
+    class Enable = typename std::enable_if<std::is_enum<E>::value>::type
+  >
+  explicit Vconst(E e) : Vconst(typename std::underlying_type<E>::type(e)) {}
+
+  template<class R, class... Args>
+  explicit Vconst(R (*fn)(Args...)) : Vconst(uintptr_t(fn)) {}
 
   bool operator==(Vconst other) const {
     return kind == other.kind &&
@@ -134,6 +160,8 @@ struct Vunit {
    */
   void freeScratchBlock(Vlabel);
 
+  /////////////////////////////////////////////////////////////////////////////
+
   /*
    * Make various Vunit-managed vasm structures.
    */
@@ -142,24 +170,13 @@ struct Vunit {
   Vtuple makeTuple(const VregList& regs);
   VcallArgsId makeVcallArgs(VcallArgs&& args);
 
-  Vreg makeConst(bool);
-  Vreg makeConst(uint32_t);
-  Vreg makeConst(uint64_t);
-  Vreg makeConst(double);
-  Vreg makeConst(Vptr);
-  Vreg makeConst(const void* p) { return makeConst(uint64_t(p)); }
-  Vreg makeConst(int64_t v) { return makeConst(uint64_t(v)); }
-  Vreg makeConst(int32_t v) { return makeConst(int64_t(v)); }
-  Vreg makeConst(DataType t) { return makeConst(uint64_t(t)); }
-  Vreg makeConst(Immed64 v) { return makeConst(uint64_t(v.q())); }
-  Vreg makeConst(Vconst::Kind k);
+  /*
+   * Create or return a register representing the given constant value.
+   */
+  Vreg makeConst(Vconst);
+  template<typename T> Vreg makeConst(T v) { return makeConst(Vconst{v}); }
 
-  template<class R, class... Args>
-  Vreg makeConst(R (*fn)(Args...)) { return makeConst(CTCA(fn)); }
-
-  template<class T>
-  typename std::enable_if<std::is_integral<T>::value, Vreg>::type
-  makeConst(T l) { return makeConst(uint64_t(l)); }
+  /////////////////////////////////////////////////////////////////////////////
 
   /*
    * Return true iff this Vunit needs register allocation before it can be
@@ -168,18 +185,17 @@ struct Vunit {
    */
   bool needsRegAlloc() const;
 
-
   /////////////////////////////////////////////////////////////////////////////
   // Data members.
 
   unsigned next_vr{Vreg::V0};
-  unsigned next_point{0};
   Vlabel entry;
   jit::vector<Vblock> blocks;
   jit::hash_map<Vconst,Vreg,Vconst::Hash> constToReg;
   jit::hash_map<size_t,Vconst> regToConst;
   jit::vector<VregList> tuples;
   jit::vector<VcallArgs> vcallArgs;
+  bool padding{false};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

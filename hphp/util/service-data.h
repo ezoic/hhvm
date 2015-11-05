@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -27,6 +27,7 @@
 #include <folly/Synchronized.h>
 #include <folly/stats/Histogram.h>
 #include <folly/stats/MultiLevelTimeSeries.h>
+#include <folly/Optional.h>
 
 namespace HPHP {
 
@@ -169,12 +170,20 @@ ExportedHistogram* createHistogram(
  */
 void exportAll(std::map<std::string, int64_t>& statsMap);
 
+/*
+ * Export a specific counter by key name.
+ */
+folly::Optional<int64_t> exportCounterByKey(std::string& key);
+
 // Interface for a flat counter. All methods are thread safe.
 class ExportedCounter {
  public:
   ExportedCounter() : m_value(0) {}
   void increment() { m_value.fetch_add(1, std::memory_order_relaxed); }
   void decrement() { m_value.fetch_sub(1, std::memory_order_relaxed); }
+  void addValue(int64_t value) {
+    m_value.fetch_add(value, std::memory_order_relaxed);
+  }
   void setValue(int64_t value) {
     m_value.store(value, std::memory_order_relaxed);
   }

@@ -17,17 +17,23 @@
 #include "hphp/runtime/vm/jit/recycle-tc.h"
 
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/treadmill.h"
+
+#include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/relocation.h"
+#include "hphp/runtime/vm/jit/smashable-instr.h"
 #include "hphp/runtime/vm/jit/srcdb.h"
-#include "hphp/runtime/vm/jit/types.h"
-#include "hphp/runtime/vm/treadmill.h"
+
+#include "hphp/util/asm-x64.h"
 #include "hphp/util/trace.h"
 
 #include <folly/MoveWrapper.h>
 
 namespace HPHP { namespace jit {
+
+///////////////////////////////////////////////////////////////////////////////
 
 TRACE_SET_MOD(reusetc);
 
@@ -131,7 +137,7 @@ void reclaimSrcRec(const SrcRec* rec) {
   Trace::Indent _i;
 
   auto anchor = rec->getFallbackTranslation();
-  mcg->code.blockFor(anchor).free(anchor, mcg->backEnd().reusableStubSize());
+  mcg->code.blockFor(anchor).free(anchor, svcreq::stub_size());
 
   for (auto& loc : rec->translations()) {
     reclaimTranslation(loc);
@@ -225,7 +231,7 @@ void reclaimTranslation(TransLoc loc) {
     // Ensure no one calls into the function
     ITRACE(1, "Overwriting function\n");
     auto clearBlock = [] (CodeBlock& cb) {
-      Asm a {cb};
+      X64Assembler a {cb};
       while (cb.available() >= 2) a.ud2();
       if (cb.available() > 0) a.int3();
       always_assert(!cb.available());
@@ -242,7 +248,7 @@ void reclaimTranslation(TransLoc loc) {
   }
 }
 
-void reclaimFunction(Func* func) {
+void reclaimFunction(const Func* func) {
   BlockingLeaseHolder writer(Translator::WriteLease());
   if (!writer) return;
 
@@ -269,7 +275,7 @@ void reclaimFunction(Func* func) {
     // reachable.
     auto addr = caller.second.isGuard ? us.bindCallStub
                                       : nullptr;
-    mcg->backEnd().smashCall(caller.first, addr);
+    smashCall(caller.first, addr);
     s_smashedCalls.erase(caller.first);
   }
 
@@ -301,5 +307,7 @@ void reclaimFunction(Func* func) {
 
   s_funcTCData.erase(it);
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 }}

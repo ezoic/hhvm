@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -14,198 +14,110 @@
    +----------------------------------------------------------------------+
 */
 
-#include "hphp/util/data-block.h"
-#include "hphp/runtime/vm/event-hook.h"
+#include "hphp/runtime/vm/jit/unique-stubs-arm.h"
+
+#include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/stats.h"
+#include "hphp/runtime/vm/bytecode.h"
+#include "hphp/runtime/vm/vm-regs.h"
+
 #include "hphp/runtime/vm/jit/abi-arm.h"
-#include "hphp/runtime/vm/jit/code-gen-helpers-arm.h"
-#include "hphp/runtime/vm/jit/unique-stubs.h"
-#include "hphp/runtime/vm/jit/mc-generator.h"
-#include "hphp/runtime/vm/jit/service-requests-inline.h"
-#include "hphp/vixl/a64/macro-assembler-a64.h"
+#include "hphp/runtime/vm/jit/unwind-arm.h"
 
-namespace HPHP { namespace jit { namespace arm {
+#include "hphp/vixl/a64/decoder-a64.h"
+#include "hphp/vixl/a64/disasm-a64.h"
+#include "hphp/vixl/a64/instructions-a64.h"
+#include "hphp/vixl/a64/simulator-a64.h"
 
-namespace {
+#include <folly/ScopeGuard.h>
 
-using namespace vixl;
+#include <iostream>
 
-void emitCallToExit(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
+namespace HPHP { namespace jit {
 
-  a.   Nop   ();
-  us.callToExit = a.frontier();
-  a.   Br    (rLinkReg);
-  us.add("callToExit", us.callToExit);
+///////////////////////////////////////////////////////////////////////////////
+
+TRACE_SET_MOD(ustubs);
+
+extern "C" void enterTCHelper(Cell* vm_sp,
+                              ActRec* vm_fp,
+                              TCA start,
+                              ActRec* firstAR,
+                              void* targetCacheBase,
+                              ActRec* stashedAR);
+
+///////////////////////////////////////////////////////////////////////////////
+
+namespace arm {
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * A partial equivalent of enterTCHelper, used to set up the ARM simulator.
+ */
+static uintptr_t setupSimRegsAndStack(vixl::Simulator& sim,
+                                      ActRec* saved_rStashedAr) {
+  auto& vmRegs = vmRegsUnsafe();
+  sim.   set_xreg(x2a(rvmfp()).code(), vmRegs.fp);
+  sim.   set_xreg(x2a(rvmsp()).code(), vmRegs.stack.top());
+  sim.   set_xreg(x2a(rvmtl()).code(), rds::tl_base);
+
+  // Leave space for register spilling and MInstrState.
+  assertx(sim.is_on_stack(reinterpret_cast<void*>(sim.sp())));
+
+  auto spOnEntry = sim.sp();
+
+  // Push the link register onto the stack. The link register is technically
+  // caller-saved; what this means in practice is that non-leaf functions push
+  // it at the very beginning and pop it just before returning (as opposed to
+  // just saving it around calls).
+  sim.   set_sp(sim.sp() - 16);
+  *reinterpret_cast<uint64_t*>(sim.sp()) = sim.lr();
+
+  return spOnEntry;
 }
 
-void emitReturnHelpers(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-
-  us.retHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.retInlHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.genRetHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.asyncGenRetHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.add("retHelper", us.retHelper);
-  us.add("genRetHelper", us.genRetHelper);
-  us.add("asyncGenRetHelper", us.asyncGenRetHelper);
-  us.add("retInlHelper", us.retInlHelper);
-}
-
-void emitResumeHelpers(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-
-  us.resumeHelperRet = a.frontier();
-  a.   Brk   (0);
-
-  not_implemented();
-
-  us.add("resumeHelper", us.resumeHelper);
-  us.add("resumeHelperRet", us.resumeHelperRet);
-}
-
-void emitStackOverflowHelper(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.cold() };
-
-  us.stackOverflowHelper = a.frontier();
-  a.   Brk   (0);
-
-  not_implemented();
-
-  us.add("stackOverflowHelper", us.stackOverflowHelper);
-}
-
-void emitFreeLocalsHelpers(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-
-  us.freeManyLocalsHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.add("freeManyLocalsHelper", us.freeManyLocalsHelper);
-}
-
-void emitFuncPrologueRedispatch(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-
-  a.  Brk  (0);
-  not_implemented();
-
-  us.add("funcPrologueRedispatch", us.funcPrologueRedispatch);
-}
-
-void emitFCallArrayHelper(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-
-  us.fcallArrayHelper = a.frontier();
-  a.   Brk   (0);
-
-  us.add("fcallArrayHelper", us.fcallArrayHelper);
-}
-
-void emitFCallHelperThunk(UniqueStubs& us) {
-  MacroAssembler a { mcg->code.main() };
-  us.fcallHelperThunk = a.frontier();
-  a.   Brk   (0);
-  us.add("fcallHelperThunk", us.fcallHelperThunk);
-}
-
-void emitFuncBodyHelperThunk(UniqueStubs& us) {
-  TCA (*helper)(ActRec*) = &funcBodyHelper;
-  MacroAssembler a { mcg->code.main() };
-
-  us.funcBodyHelperThunk = a.frontier();
-  a.   Mov   (argReg(0), rVmFp);
-  a.   Mov   (argReg(1), rVmSp);
-  a.   Mov   (rHostCallReg, reinterpret_cast<intptr_t>(helper));
-  a.   Push  (rLinkReg, rVmFp);
-  a.   HostCall(2);
-  a.   Pop   (rVmFp, rLinkReg);
-  a.   Br    (rReturnReg);
-
-  us.add("funcBodyHelperThunk", us.funcBodyHelperThunk);
-}
-
-void emitFunctionEnterHelper(UniqueStubs& us) {
-  bool (*helper)(const ActRec*, int) = &EventHook::onFunctionCall;
-  MacroAssembler a { mcg->code.main() };
-
-  us.functionEnterHelper = a.frontier();
-
-  vixl::Label skip;
-
-  auto ar = argReg(0);
-
-  a.   Push    (rLinkReg, rVmFp);
-  a.   Mov     (rVmFp, vixl::sp);
-  // rAsm2 gets the savedRbp, rAsm gets the savedRip.
-  a.   Ldp     (rAsm2, rAsm, ar[AROFF(m_sfp)]);
-  static_assert(AROFF(m_sfp) + 8 == AROFF(m_savedRip),
-                "m_sfp must precede m_savedRip");
-  a.   Push    (rAsm, rAsm2);
-  a.   Mov     (argReg(1), EventHook::NormalFunc);
-  a.   Mov     (rHostCallReg, reinterpret_cast<intptr_t>(helper));
-  a.   HostCall(2);
-  a.   Cbz     (rReturnReg, &skip);
-  a.   Mov     (vixl::sp, rVmFp);
-  a.   Pop     (rVmFp, rLinkReg);
-  a.   Ret     (rLinkReg);
-
-  a.   bind    (&skip);
-
-  // Tricky. The last two things we pushed were the saved fp and return TCA from
-  // the function we were supposed to enter. Since we're now "returning" from
-  // that function, restore that fp and jump to that return TCA. Below that on
-  // the stack are that function's *caller's* saved fp and return TCA. We can
-  // ignore the saved fp, but we have to restore the return TCA into x30.
-  auto rIgnored = rAsm2;
-  a.   Pop     (rVmFp, rAsm);
-  a.   Pop     (rIgnored, rLinkReg);
-  a.   Ldr     (rVmSp, rVmTl[rds::kVmspOff]);
-  a.   Br      (rAsm);
-
-  us.add("functionEnterHelper", us.functionEnterHelper);
-}
-
-void emitBindCallStubs(UniqueStubs& uniqueStubs) {
-  for (int i = 0; i < 2; i++) {
-    auto& cb = mcg->code.cold();
-    if (!i) {
-      uniqueStubs.bindCallStub = cb.frontier();
-    } else {
-      uniqueStubs.immutableBindCallStub = cb.frontier();
-    }
-    not_implemented();
+void enterTCImpl(TCA start, ActRec* stashedAR) {
+  // This is a pseudo-copy of the logic in enterTCHelper: it sets up the
+  // simulator's registers and stack, runs the translation, and gets the
+  // necessary information out of the registers when it's done.
+  vixl::PrintDisassembler disasm(std::cout);
+  vixl::Decoder decoder;
+  if (getenv("ARM_DISASM")) {
+    decoder.AppendVisitor(&disasm);
   }
-  uniqueStubs.add("bindCallStub", uniqueStubs.bindCallStub);
-  uniqueStubs.add("immutableBindCallStub", uniqueStubs.immutableBindCallStub);
-}
-
-} // anonymous namespace
-
-UniqueStubs emitUniqueStubs() {
-  UniqueStubs us;
-  auto functions = {
-    emitCallToExit,
-    emitReturnHelpers,
-    emitResumeHelpers,
-    emitStackOverflowHelper,
-    emitFreeLocalsHelpers,
-    emitFuncPrologueRedispatch,
-    emitFCallArrayHelper,
-    emitFCallHelperThunk,
-    emitFuncBodyHelperThunk,
-    emitFunctionEnterHelper,
-    emitBindCallStubs,
+  vixl::Simulator sim(&decoder, std::cout);
+  SCOPE_EXIT {
+    Stats::inc(Stats::vixl_SimulatedInstr, sim.instr_count());
+    Stats::inc(Stats::vixl_SimulatedLoad, sim.load_count());
+    Stats::inc(Stats::vixl_SimulatedStore, sim.store_count());
   };
-  for (auto& f : functions) f(us);
-  return us;
+
+  sim.set_exception_hook(arm::simulatorExceptionHook);
+
+  g_context->m_activeSims.push_back(&sim);
+  SCOPE_EXIT { g_context->m_activeSims.pop_back(); };
+
+  DEBUG_ONLY auto spOnEntry = setupSimRegsAndStack(sim, stashedAR);
+
+  // The handshake is different when entering at a func prologue. The code
+  // we're jumping to expects to find a return address in x30, and a saved
+  // return address on the stack.
+  if (stashedAR) {
+    // Put the call's return address in the link register.
+    sim.set_lr(stashedAR->m_savedRip);
+  }
+
+  std::cout.flush();
+  sim.RunFrom(vixl::Instruction::Cast(start));
+  std::cout.flush();
+
+  assertx(sim.sp() == spOnEntry);
+
+  vmRegsUnsafe().fp = (ActRec*)sim.xreg(x2a(rvmfp()).code());
+  vmRegsUnsafe().stack.top() = (Cell*)sim.xreg(x2a(rvmsp()).code());
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 }}}

@@ -3,7 +3,7 @@
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
    | Copyright (c) 2010 Hyves (http://www.hyves.nl)                       |
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -19,7 +19,7 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/vm/native-data.h"
-#include "hphp/runtime/ext/libmemcached_portability.h"
+#include "hphp/runtime/ext/memcached/libmemcached_portability.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/ext/json/ext_json.h"
 #include <map>
@@ -100,6 +100,8 @@ const int64_t q_Memcached$$DISTRIBUTION_CONSISTENT_WEIGHTED
 #endif
 const int64_t q_Memcached$$OPT_LIBKETAMA_COMPATIBLE
           = MEMCACHED_BEHAVIOR_KETAMA_WEIGHTED;
+const int64_t q_Memcached$$OPT_LIBKETAMA_HASH
+          = MEMCACHED_BEHAVIOR_KETAMA_HASH;
 const int64_t q_Memcached$$OPT_BUFFER_WRITES
           = MEMCACHED_BEHAVIOR_BUFFER_REQUESTS;
 const int64_t q_Memcached$$OPT_BINARY_PROTOCOL
@@ -188,6 +190,8 @@ const int64_t q_Memcached$$RES_SERVER_MARKED_DEAD
           = MEMCACHED_SERVER_MARKED_DEAD;
 const int64_t q_Memcached$$RES_SERVER_TEMPORARILY_DISABLED
           = MEMCACHED_SERVER_TEMPORARILY_DISABLED;
+const int64_t q_Memcached$$OPT_HASH_WITH_PREFIX_KEY
+          = MEMCACHED_BEHAVIOR_HASH_WITH_PREFIX_KEY;
 
 // Our result codes
 const int64_t q_Memcached$$RES_PAYLOAD_FAILURE = -1001;
@@ -233,7 +237,7 @@ public:
 static memcached_return_t memcached_dump_callback(const memcached_st*,
                                                   const char* key,
                                                   size_t len, void* context) {
-  ((Array*)context)->append(makeStaticString(key, len));
+  ((Array*)context)->append(Variant{makeStaticString(key, len)});
   return MEMCACHED_SUCCESS;
 }
 
@@ -257,6 +261,8 @@ class MemcachedData {
     bool compression;
     int serializer;
     int rescode;
+    bool is_persistent;
+    bool is_pristine;
   };
   MemcachedData() {}
   ~MemcachedData() {}
@@ -591,12 +597,20 @@ void HHVM_METHOD(Memcached, __construct,
   auto data = Native::data<MemcachedData>(this_);
   if (persistent_id.isNull()) {
     data->m_impl.reset(new MemcachedData::Impl);
+    data->m_impl->is_persistent = false;
+    data->m_impl->is_pristine = true;
   } else {
+    bool is_pristine = false;
     MemcachedData::ImplPtr &impl = (*data->s_persistentMap)[
       persistent_id.toString().toCppString()
     ];
-    if (!impl) impl.reset(new MemcachedData::Impl);
+    if (!impl) {
+      impl.reset(new MemcachedData::Impl);
+      is_pristine = true;
+    }
     data->m_impl = impl;
+    data->m_impl->is_persistent = true;
+    data->m_impl->is_pristine = is_pristine;
   }
 }
 
@@ -654,7 +668,7 @@ Variant HHVM_METHOD(Memcached, getbykey, const String& server_key,
     if (status == MEMCACHED_NOTFOUND && !cache_cb.isNull()) {
       status = data->doCacheCallback(cache_cb, this_, key, returnValue);
       if (!data->handleError(status)) return false;
-      if (cas_token.isReferenced()) cas_token = 0.0;
+      cas_token.assignIfRef(0.0);
       return returnValue;
     }
     data->handleError(status);
@@ -665,9 +679,7 @@ Variant HHVM_METHOD(Memcached, getbykey, const String& server_key,
     data->m_impl->rescode = q_Memcached$$RES_PAYLOAD_FAILURE;
     return false;
   }
-  if (cas_token.isReferenced()) {
-    cas_token = (double) memcached_result_cas(&result.value);
-  }
+  cas_token.assignIfRef((double) memcached_result_cas(&result.value));
   return returnValue;
 }
 
@@ -679,19 +691,24 @@ Variant HHVM_METHOD(Memcached, getmultibykey, const String& server_key,
   data->m_impl->rescode = q_Memcached$$RES_SUCCESS;
 
   bool preserveOrder = flags & q_Memcached$$GET_PRESERVE_ORDER;
-  Array returnValue;
+  Array returnValue = Array::Create();
   if (!data->getMultiImpl(server_key, keys, cas_tokens.isReferenced(),
                           preserveOrder ? &returnValue : nullptr)) {
     return false;
   }
 
   Array cas_tokens_arr;
-  SCOPE_EXIT { if (cas_tokens.isReferenced()) cas_tokens = cas_tokens_arr; };
+  SCOPE_EXIT { cas_tokens.assignIfRef(cas_tokens_arr); };
 
   MemcachedResultWrapper result(&data->m_impl->memcached);
   memcached_return status;
   while (memcached_fetch_result(&data->m_impl->memcached, &result.value,
                                 &status)) {
+    if (status != MEMCACHED_SUCCESS) {
+        status = MEMCACHED_SOME_ERRORS;
+        data->handleError(status);
+        continue;
+    }
     Variant value;
     if (!data->toObject(value, result.value)) {
       data->m_impl->rescode = q_Memcached$$RES_PAYLOAD_FAILURE;
@@ -706,8 +723,6 @@ Variant HHVM_METHOD(Memcached, getmultibykey, const String& server_key,
       cas_tokens_arr.set(sKey, cas, true);
     }
   }
-
-  if (status != MEMCACHED_END && !data->handleError(status)) return false;
   return returnValue;
 }
 
@@ -838,6 +853,35 @@ bool HHVM_METHOD(Memcached, deletebykey, const String& server_key,
   return data->handleError(memcached_delete_by_key(&data->m_impl->memcached,
                      myServerKey.c_str(), myServerKey.length(),
                      key.c_str(), key.length(), time));
+}
+
+Variant HHVM_METHOD(Memcached, deletemultibykey, const String& server_key,
+                                         const Array& keys,
+                                         int64_t time /*= 0*/) {
+  auto data = Native::data<MemcachedData>(this_);
+  data->m_impl->rescode = q_Memcached$$RES_SUCCESS;
+
+  memcached_return status_memcached;
+  bool status;
+  Array returnValue = Array::Create();
+  for (ArrayIter iter(keys); iter; ++iter) {
+    Variant vKey = iter.second();
+    if (!vKey.isString()) continue;
+    const String& key = vKey.toString();
+    if (key.empty()) continue;
+    const String& myServerKey = server_key.empty() ? key : server_key;
+    status_memcached = memcached_delete_by_key(&data->m_impl->memcached,
+                     myServerKey.c_str(), myServerKey.length(),
+                     key.c_str(), key.length(), time);
+
+    status = data->handleError(status_memcached);
+    if (!status) {
+        returnValue.set(key, status_memcached, true);
+    } else {
+        returnValue.set(key, status, true);
+    }
+  }
+  return returnValue;
 }
 
 Variant HHVM_METHOD(Memcached, increment,
@@ -1219,6 +1263,16 @@ String HHVM_METHOD(Memcached, getresultmessage) {
   }
 }
 
+bool HHVM_METHOD(Memcached, ispersistent) {
+  auto data = Native::data<MemcachedData>(this_);
+  return data->m_impl->is_persistent;
+}
+
+bool HHVM_METHOD(Memcached, ispristine) {
+  auto data = Native::data<MemcachedData>(this_);
+  return data->m_impl->is_pristine;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 IMPLEMENT_THREAD_LOCAL(MemcachedData::ImplMap, MemcachedData::s_persistentMap);
@@ -1253,9 +1307,11 @@ const StaticString s_OPT_DEAD_TIMEOUT("OPT_DEAD_TIMEOUT");
 const StaticString s_OPT_DISTRIBUTION("OPT_DISTRIBUTION");
 const StaticString s_OPT_HASH("OPT_HASH");
 const StaticString s_OPT_LIBKETAMA_COMPATIBLE("OPT_LIBKETAMA_COMPATIBLE");
+const StaticString s_OPT_LIBKETAMA_HASH("OPT_LIBKETAMA_HASH");
 const StaticString s_OPT_NO_BLOCK("OPT_NO_BLOCK");
 const StaticString s_OPT_POLL_TIMEOUT("OPT_POLL_TIMEOUT");
 const StaticString s_OPT_PREFIX_KEY("OPT_PREFIX_KEY");
+const StaticString s_OPT_HASH_WITH_PREFIX_KEY("OPT_HASH_WITH_PREFIX_KEY");
 const StaticString s_OPT_RECV_TIMEOUT("OPT_RECV_TIMEOUT");
 #if defined(LIBMEMCACHED_VERSION_HEX) && LIBMEMCACHED_VERSION_HEX >= 0x00049000
 const StaticString s_OPT_REMOVE_FAILED_SERVERS("OPT_REMOVE_FAILED_SERVERS");
@@ -1333,6 +1389,7 @@ class MemcachedExtension final : public Extension {
     HHVM_ME(Memcached, replacebykey);
     HHVM_ME(Memcached, casbykey);
     HHVM_ME(Memcached, deletebykey);
+    HHVM_ME(Memcached, deletemultibykey);
     HHVM_ME(Memcached, increment);
     HHVM_ME(Memcached, incrementbykey);
     HHVM_ME(Memcached, decrement);
@@ -1348,6 +1405,8 @@ class MemcachedExtension final : public Extension {
     HHVM_ME(Memcached, setoption);
     HHVM_ME(Memcached, getresultcode);
     HHVM_ME(Memcached, getresultmessage);
+    HHVM_ME(Memcached, ispersistent);
+    HHVM_ME(Memcached, ispristine);
 
     Native::registerNativeDataInfo<MemcachedData>(s_MemcachedData.get());
 
@@ -1437,6 +1496,10 @@ class MemcachedExtension final : public Extension {
       q_Memcached$$OPT_LIBKETAMA_COMPATIBLE
     );
     Native::registerClassConstant<KindOfInt64>(
+      s_Memcached.get(), s_OPT_LIBKETAMA_HASH.get(),
+      q_Memcached$$OPT_LIBKETAMA_HASH
+    );
+    Native::registerClassConstant<KindOfInt64>(
       s_Memcached.get(), s_OPT_NO_BLOCK.get(), q_Memcached$$OPT_NO_BLOCK
     );
     Native::registerClassConstant<KindOfInt64>(
@@ -1444,6 +1507,10 @@ class MemcachedExtension final : public Extension {
     );
     Native::registerClassConstant<KindOfInt64>(
       s_Memcached.get(), s_OPT_PREFIX_KEY.get(), q_Memcached$$OPT_PREFIX_KEY
+    );
+    Native::registerClassConstant<KindOfInt64>(
+      s_Memcached.get(), s_OPT_HASH_WITH_PREFIX_KEY.get(),
+      q_Memcached$$OPT_HASH_WITH_PREFIX_KEY
     );
     Native::registerClassConstant<KindOfInt64>(
       s_Memcached.get(), s_OPT_RECV_TIMEOUT.get(), q_Memcached$$OPT_RECV_TIMEOUT

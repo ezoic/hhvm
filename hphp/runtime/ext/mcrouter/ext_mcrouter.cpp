@@ -4,6 +4,8 @@
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/ext/asio/asio-external-thread-event.h"
 
+#include <memory>
+
 #include "mcrouter/config.h" // @nolint
 #include "mcrouter/options.h" // @nolint
 #include "mcrouter/McrouterClient.h" // @nolint
@@ -92,7 +94,8 @@ class MCRouter {
 
     mcr::McrouterInstance* router;
     if (pid.empty()) {
-      router = mcr::McrouterInstance::createTransient(opts);
+      m_transientRouter = mcr::McrouterInstance::create(opts.clone());
+      router = m_transientRouter.get();
     } else {
       router = mcr::McrouterInstance::init(pid.toCppString(), opts);
     }
@@ -114,6 +117,7 @@ class MCRouter {
   Object issue(mcr::mcrouter_msg_t& msg);
 
  private:
+  std::shared_ptr<mcr::McrouterInstance> m_transientRouter;
   mcr::McrouterClient::Pointer m_client;
 
   void parseOptions(mc::McrouterOptions& opts, const Array& options) {
@@ -123,10 +127,6 @@ class MCRouter {
     opts.async_spool = "";
     opts.stats_logging_interval = 0;
     opts.stats_root = "";
-#else
-    // Default this to true since this is a new interface
-    // and it allows our tests to work inside or out
-    opts.use_new_configs = true;
 #endif
 
     std::unordered_map<std::string, std::string> dict;
@@ -179,8 +179,14 @@ class MCRouterResult : public AsioExternalThreadEvent {
         case mc_op_replace:
         case mc_op_prepend:
         case mc_op_append:
-        case mc_op_flushall:
           if (!msg->reply.isStored()) {
+            setResultException(msg);
+            break;
+          }
+          break;
+
+        case mc_op_flushall:
+          if (msg->reply.result() != mc_res_ok) {
             setResultException(msg);
             break;
           }
@@ -265,7 +271,7 @@ void MCRouter::onCancel(void* request, void* router) {
 Object MCRouter::issue(mcr::mcrouter_msg_t& msg) {
   auto ev = new MCRouterResult(this, msg);
   try {
-    return ev->getWaitHandle();
+    return Object{ev->getWaitHandle()};
   } catch (...) {
     assert(false);
     ev->abandon();

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,7 +15,7 @@
 */
 #include "hphp/runtime/base/crash-reporter.h"
 #include "hphp/util/stack-trace.h"
-#include "hphp/util/light-process.h"
+#include "hphp/util/process.h"
 #include "hphp/util/logger.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/program-functions.h"
@@ -23,6 +23,9 @@
 #include "hphp/runtime/ext/std/ext_std_errorfunc.h"
 #include "hphp/runtime/debugger/debugger.h"
 #include "hphp/runtime/vm/ringbuffer-print.h"
+#include "hphp/runtime/vm/jit/mc-generator.h"
+#include "hphp/runtime/vm/jit/translator.h"
+#include <signal.h>
 
 namespace HPHP {
 
@@ -94,11 +97,17 @@ static void bt_handler(int sig) {
     ::close(fd);
   }
 
+  if (jit::Translator::isTransDBEnabled()) {
+    jit::tc_dump(true);
+  }
+
   if (!RuntimeOption::CoreDumpEmail.empty()) {
     char format [] = "cat %s | mail -s \"Stack Trace from %s\" '%s'";
-    char cmdline[strlen(format)+RuntimeOption::StackTraceFilename.length()
+    char* cmdline = (char*)alloca(sizeof(char) *
+                (strlen(format)
+                 +RuntimeOption::StackTraceFilename.length()
                  +strlen(Process::GetAppName().c_str())
-                 +strlen(RuntimeOption::CoreDumpEmail.c_str())+1];
+                 +strlen(RuntimeOption::CoreDumpEmail.c_str())+1));
     sprintf(cmdline, format, RuntimeOption::StackTraceFilename.c_str(),
             Process::GetAppName().c_str(),
             RuntimeOption::CoreDumpEmail.c_str());
@@ -129,11 +138,13 @@ static void bt_handler(int sig) {
 }
 
 void install_crash_reporter() {
+#ifndef _MSC_VER
   signal(SIGQUIT, bt_handler);
+  signal(SIGBUS,  bt_handler);
+#endif
   signal(SIGILL,  bt_handler);
   signal(SIGFPE,  bt_handler);
   signal(SIGSEGV, bt_handler);
-  signal(SIGBUS,  bt_handler);
   signal(SIGABRT, bt_handler);
 
   register_assert_fail_logger(&StackTraceNoHeap::AddExtraLogging);

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,8 +29,8 @@ namespace HPHP {
 
 namespace {
 
-// Pointer to StringData, or pointer to StringSlice.
-typedef intptr_t StrInternKey;
+// Pointer to StringData, or pointer to folly::StringPiece.
+using StrInternKey = intptr_t;
 
 DEBUG_ONLY constexpr intptr_t kAhmMagicThreshold = -3;
 
@@ -40,7 +40,7 @@ StrInternKey make_intern_key(const StringData* sd) {
   return ret;
 }
 
-StrInternKey make_intern_key(const StringSlice* sl) {
+StrInternKey make_intern_key(const folly::StringPiece* sl) {
   auto const ret = -reinterpret_cast<StrInternKey>(sl);
   assert(ret < 0 && ret < kAhmMagicThreshold);
   return ret;
@@ -51,9 +51,9 @@ const StringData* to_sdata(StrInternKey key) {
   return reinterpret_cast<const StringData*>(key);
 }
 
-const StringSlice* to_sslice(StrInternKey key) {
+const folly::StringPiece* to_sslice(StrInternKey key) {
   assert(key < 0 && key < kAhmMagicThreshold);
-  return reinterpret_cast<const StringSlice*>(-key);
+  return reinterpret_cast<const folly::StringPiece*>(-key);
 }
 
 struct strintern_eq {
@@ -66,17 +66,16 @@ struct strintern_eq {
     assert(k2 >= 0 || k2 < kAhmMagicThreshold);
     auto const sd1 = to_sdata(k1);
     auto const len1 = sd1->size();
-    const char* const* ptr2;
+    auto const data1 = sd1->data();
     if (UNLIKELY(k2 < 0)) {
       auto slice2 = to_sslice(k2);
-      if (len1 != slice2->len) return false;
-      ptr2 = reinterpret_cast<const char* const*>(slice2);
-    } else {
-      auto string2 = to_sdata(k2);
-      if (len1 != string2->size()) return false;
-      ptr2 = reinterpret_cast<const char* const*>(string2);
+      if (len1 != slice2->size()) return false;
+      return !memcmp(data1, slice2->begin(), len1);
     }
-    return wordsame(sd1->data(), *ptr2, len1);
+    auto string2 = to_sdata(k2);
+    if (len1 != string2->size()) return false;
+    // only use wordsame on 8-byte aligned addresses
+    return wordsame(data1, string2->data(), len1);
   }
 };
 
@@ -87,7 +86,7 @@ struct strintern_hash {
       return to_sdata(k)->hash();
     }
     auto const slice = *to_sslice(k);
-    return hash_string(slice.ptr, slice.len);
+    return hash_string(slice.data(), slice.size());
   }
 };
 
@@ -138,7 +137,7 @@ StringData* insertStaticString(StringData* sd) {
   return const_cast<StringData*>(to_sdata(pair.first->first));
 }
 
-inline StringData* insertStaticStringSlice(StringSlice slice) {
+inline StringData* insertStaticStringSlice(folly::StringPiece slice) {
   return insertStaticString(StringData::MakeStatic(slice));
 }
 
@@ -177,7 +176,7 @@ StringData* makeStaticString(const StringData* str) {
   return insertStaticStringSlice(str->slice());
 }
 
-StringData* makeStaticString(StringSlice slice) {
+StringData* makeStaticString(folly::StringPiece slice) {
   if (UNLIKELY(!s_stringDataMap)) {
     create_string_data_map();
   }
@@ -208,14 +207,12 @@ StringData* makeStaticString(const String& str) {
 
 StringData* makeStaticString(const char* str, size_t len) {
   assert(len <= StringData::MaxSize);
-  return makeStaticString(StringSlice{str, static_cast<uint32_t>(len)});
+  return makeStaticString(folly::StringPiece{str, len});
 }
 
 StringData* makeStaticString(const std::string& str) {
   assert(str.size() <= StringData::MaxSize);
-  return makeStaticString(
-    StringSlice{str.c_str(), static_cast<uint32_t>(str.size())}
-  );
+  return makeStaticString(folly::StringPiece{str.c_str(), str.size()});
 }
 
 StringData* makeStaticString(const char* str) {

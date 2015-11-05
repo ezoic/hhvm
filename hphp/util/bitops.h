@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,6 +16,10 @@
 
 #ifndef incl_HPHP_BITOPS_H_
 #define incl_HPHP_BITOPS_H_
+
+#if !defined(__x86_64__) && !defined(__AARCH64EL__)
+#include <folly/Bits.h>
+#endif
 
 namespace HPHP {
 
@@ -44,6 +48,9 @@ inline bool ffs64(I64 input, I64 &out) {
     :
     "cc"
   );
+#else
+  out = folly::findFirstSet(input);
+  retval = input != 0;
 #endif
   return retval;
 }
@@ -71,6 +78,9 @@ inline bool fls64(I64 input, I64 &out) {
     "r"(input):
     "cc"
   );
+#else
+  out = folly::findLastSet(input) - 1;
+  retval = input != 0;
 #endif
   return retval;
 }

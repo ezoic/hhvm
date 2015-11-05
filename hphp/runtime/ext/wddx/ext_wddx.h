@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -30,8 +30,9 @@ class WddxPacket: public ResourceData {
   WddxPacket(const Variant& comment, bool manualPacket, bool sVar);
 
   CLASSNAME_IS("WddxPacket");
-  // overriding ResourceData
-  virtual const String& o_getClassNameHook() const { return classnameof(); }
+  const String& o_getClassNameHook() const override {
+    return classnameof();
+  }
 
 
   bool add_var(const String& varName, bool hasVarTag);
@@ -61,7 +62,7 @@ class WddxPacket: public ResourceData {
 // helper
 
 void find_var_recursive(const TypedValue* tv,
-                        const SmartPtr<WddxPacket>& wddxPacket);
+                        const req::ptr<WddxPacket>& wddxPacket);
 
 }
 

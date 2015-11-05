@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,6 +18,7 @@
 #include "hphp/runtime/server/virtual-host.h"
 #include "hphp/runtime/base/preg.h"
 #include "hphp/runtime/base/config.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/util/text-util.h"
 
 namespace HPHP {
@@ -28,9 +29,13 @@ FilesMatch::FilesMatch(const IniSetting::Map& ini, const Hdf& vh) {
     m_pattern = format_pattern(vh["pattern"].configGetString(), true);
     vh["headers"].configGet(m_headers);
   } else {
-    m_pattern = format_pattern(ini["pattern"].data(), true);
-    for (auto& val : ini["headers"].items()) {
-      m_headers.push_back(val.second.data());
+    m_pattern = format_pattern(
+      ini[String("pattern")].toString().toCppString(),
+      true
+    );
+    for (ArrayIter iter(ini[String("headers")].toArray());
+         iter; ++iter) {
+      m_headers.push_back(iter.second().toString().toCppString());
     }
   }
 }

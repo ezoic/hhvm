@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <set>
@@ -37,6 +38,7 @@
 #include "hphp/util/job-queue.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/program-functions.h"
 
 using namespace HPHP;
 using std::set;
@@ -55,11 +57,11 @@ void Package::addAllFiles(bool force) {
   if (Option::PackageDirectories.empty() && Option::PackageFiles.empty()) {
     addDirectory("/", force);
   } else {
-    for (set<string>::const_iterator iter = Option::PackageDirectories.begin();
+    for (auto iter = Option::PackageDirectories.begin();
          iter != Option::PackageDirectories.end(); ++iter) {
       addDirectory(*iter, force);
     }
-    for (set<string>::const_iterator iter = Option::PackageFiles.begin();
+    for (auto iter = Option::PackageFiles.begin();
          iter != Option::PackageFiles.end(); ++iter) {
       addSourceFile((*iter).c_str());
     }
@@ -79,7 +81,7 @@ void Package::addInputList(const char *listFileName) {
     if (fileName[len - 1] == '\n') fileName[len - 1] = '\0';
     len = strlen(fileName);
     if (len) {
-      if (fileName[len - 1] == '/') {
+      if (FileUtil::isDirSeparator(fileName[len - 1])) {
         addDirectory(fileName, false);
       } else {
         addSourceFile(fileName);
@@ -108,7 +110,7 @@ void Package::addDirectory(const char *path, bool force) {
 }
 
 void Package::addPHPDirectory(const char *path, bool force) {
-  vector<string> files;
+  std::vector<std::string> files;
   if (force) {
     FileUtil::find(files, m_root, path, true);
   } else {
@@ -116,9 +118,8 @@ void Package::addPHPDirectory(const char *path, bool force) {
                    &Option::PackageExcludeDirs, &Option::PackageExcludeFiles);
     Option::FilterFiles(files, Option::PackageExcludePatterns);
   }
-  int rootSize = m_root.size();
-  for (unsigned int i = 0; i < files.size(); i++) {
-    const string &file = files[i];
+  auto const rootSize = m_root.size();
+  for (auto const& file : files) {
     assert(file.substr(0, rootSize) == m_root);
     m_filesToParse.insert(file.substr(rootSize));
   }
@@ -136,47 +137,44 @@ void Package::getFiles(std::vector<std::string> &files) const {
 }
 
 std::shared_ptr<FileCache> Package::getFileCache() {
-  for (set<string>::const_iterator iter = m_directories.begin();
+  for (auto iter = m_directories.begin();
        iter != m_directories.end(); ++iter) {
-    vector<string> files;
+    std::vector<std::string> files;
     FileUtil::find(files, m_root, iter->c_str(), false,
                    &Option::PackageExcludeStaticDirs,
                    &Option::PackageExcludeStaticFiles);
     Option::FilterFiles(files, Option::PackageExcludeStaticPatterns);
-    for (unsigned int i = 0; i < files.size(); i++) {
-      string &file = files[i];
-      string rpath = file.substr(m_root.size());
+    for (auto& file : files) {
+      auto const rpath = file.substr(m_root.size());
       if (!m_fileCache->fileExists(rpath.c_str())) {
         Logger::Verbose("saving %s", file.c_str());
         m_fileCache->write(rpath.c_str(), file.c_str());
       }
     }
   }
-  for (set<string>::const_iterator iter = m_staticDirectories.begin();
+  for (auto iter = m_staticDirectories.begin();
        iter != m_staticDirectories.end(); ++iter) {
-    vector<string> files;
+    std::vector<std::string> files;
     FileUtil::find(files, m_root, iter->c_str(), false);
-    for (unsigned int i = 0; i < files.size(); i++) {
-      string &file = files[i];
-      string rpath = file.substr(m_root.size());
+    for (auto& file : files) {
+      auto const rpath = file.substr(m_root.size());
       if (!m_fileCache->fileExists(rpath.c_str())) {
         Logger::Verbose("saving %s", file.c_str());
         m_fileCache->write(rpath.c_str(), file.c_str());
       }
     }
   }
-  for (set<string>::const_iterator iter = m_extraStaticFiles.begin();
+  for (auto iter = m_extraStaticFiles.begin();
        iter != m_extraStaticFiles.end(); ++iter) {
     const char *file = iter->c_str();
     if (!m_fileCache->fileExists(file)) {
-      string fullpath = m_root + file;
+      auto const fullpath = m_root + file;
       Logger::Verbose("saving %s", fullpath.c_str());
       m_fileCache->write(file, fullpath.c_str());
     }
   }
 
-  for (std::map<string,string>::const_iterator
-         iter = m_discoveredStaticFiles.begin();
+  for (auto iter = m_discoveredStaticFiles.begin();
        iter != m_discoveredStaticFiles.end(); ++iter) {
     const char *file = iter->first.c_str();
     if (!m_fileCache->fileExists(file)) {
@@ -200,7 +198,7 @@ class ParserWorker :
 public:
   bool m_ret;
   ParserWorker() : m_ret(true) {}
-  virtual void doJob(JobType job) {
+  void doJob(JobType job) override {
     bool ret;
     try {
       Package *package = m_context;
@@ -217,6 +215,13 @@ public:
       Logger::Error("Fatal: Unable to stat/parse %s", job.first);
       m_ret = false;
     }
+  }
+
+  void onThreadEnter() override {
+    g_context.getCheck();
+  }
+  void onThreadExit() override {
+    hphp_memory_cleanup();
   }
 };
 
@@ -249,12 +254,11 @@ bool Package::parse(bool check) {
 
   m_dispatcher = &dispatcher;
 
-  std::set<string> files;
+  std::set<std::string> files;
   files.swap(m_filesToParse);
 
   dispatcher.start();
-  for (std::set<string>::iterator iter = files.begin(), end = files.end();
-       iter != end; ++iter) {
+  for (auto iter = files.begin(), end = files.end(); iter != end; ++iter) {
     addSourceFile((*iter).c_str(), check);
   }
   dispatcher.waitEmpty();
@@ -279,8 +283,8 @@ bool Package::parseImpl(const char *fileName) {
   assert(fileName);
   if (fileName[0] == 0) return false;
 
-  string fullPath;
-  if (fileName[0] == '/') {
+  std::string fullPath;
+  if (FileUtil::isDirSeparator(fileName[0])) {
     fullPath = fileName;
   } else {
     fullPath = m_root + fileName;
@@ -288,7 +292,7 @@ bool Package::parseImpl(const char *fileName) {
 
   struct stat sb;
   if (stat(fullPath.c_str(), &sb)) {
-    if (fullPath.find(' ') == string::npos) {
+    if (fullPath.find(' ') == std::string::npos) {
       Logger::Error("Unable to stat file %s", fullPath.c_str());
     }
     return false;
@@ -351,7 +355,7 @@ void Package::saveStatsToFile(const char *filename, int totalSeconds) const {
 
     ms.add("VariableTableFunctions");
     JSON::CodeError::ListStream ls(o);
-    for (const std::string &f: m_ar->m_variableTableFunctions) {
+    for (auto const& f : m_ar->m_variableTableFunctions) {
       ls << f;
     }
     ls.done();

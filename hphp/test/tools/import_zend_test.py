@@ -327,6 +327,10 @@ flaky_tests = (
     '/ext/soap/tests/schema/schema021.php',
     '/ext/soap/tests/schema/schema035.php',
     '/ext/standard/tests/network/http-stream.php',
+
+    # Socket based test that are possibly port clowny
+    # Github commit: 6ae44fc92acb63e7fa31b5fd4fcd4cf939c3ef54
+    '/ext/sockets/tests/socket_getsockname.php',
 )
 
 # Tests that work but not in repo mode
@@ -631,6 +635,9 @@ norepo_tests = (
 
     # Tests use banned reflection features
     '/ext/reflection/tests/bug30146.php',
+
+    # Closure::bind.
+    '/Zend/tests/anon/013.php',
 )
 
 # Random other files that zend wants
@@ -737,6 +744,7 @@ other_files = (
     '/ext/gd/tests/test8859.ttf',
     '/ext/gd/tests/test.png',
     '/ext/gd/tests/Tuffy.ttf',
+    '/ext/gd/tests/logo_noise.png',
     '/ext/gettext/tests/locale/en/LC_CTYPE/dgettextTest.mo',
     '/ext/gettext/tests/locale/en/LC_CTYPE/dgettextTest.po',
     '/ext/gettext/tests/locale/en/LC_CTYPE/dgettextTest_switched.po',
@@ -1012,28 +1020,6 @@ other_files = (
     '/Zend/tests/use_function/includes/global_baz.php',
 )
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-o",
-    "--only",
-    type=str,
-    action='append',
-    help="only import tests whose path contains this substring."
-)
-parser.add_argument(
-    "--dirty",
-    action='store_true',
-    help="leave around test/zend/all directory."
-)
-parser.add_argument(
-    "-v",
-    "--verbose",
-    action='store_true',
-    help="print out extra stuff."
-)
-args = parser.parse_args()
-
-
 def mkdir_p(path):
     try:
         os.makedirs(path)
@@ -1047,8 +1033,10 @@ def walk(filename, dest_subdir):
     full_dest_filename = os.path.join(dest_subdir, dest_filename)
 
     # Exactly mirror zend's directories incase some tests depend on random crap.
-    # We'll only move things we want into 'good'
-    shutil.copyfile(filename, full_dest_filename)
+    # We'll only move things we want into 'good'. The condition below is in case
+    # of using --local on a file already in the current workind directory.
+    if os.path.abspath(filename) != os.path.abspath(full_dest_filename):
+        shutil.copyfile(filename, full_dest_filename)
 
     full_dest_filename = full_dest_filename.replace('.phpt', '.php')
 
@@ -1663,6 +1651,49 @@ def should_import(filename):
         if bad in filename:
             return False
     return True
+
+# -- main --
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "-o",
+    "--only",
+    type=str,
+    action='append',
+    help="only import tests whose path contains this substring."
+)
+parser.add_argument(
+    "--dirty",
+    action='store_true',
+    help="leave around test/zend/all directory."
+)
+parser.add_argument(
+    "-v",
+    "--verbose",
+    action='store_true',
+    help="print out extra stuff."
+)
+parser.add_argument(
+    "--local",
+    type=str,
+    help="Convert a single local .phpt into *.php and expect files in the CWD.")
+args = parser.parse_args()
+
+if args.local:
+    if args.only:
+        print("--only and --local are not compatible; choose one.")
+        sys.exit(1)
+    if not os.path.exists(args.local):
+        print("--local file not found")
+        sys.exit(1)
+    if not args.local.endswith('.phpt'):
+        print("Invalid --local file. Must be a .phpt file")
+        sys.exit(1)
+
+    print("Converting %s into php and expect files..." % (args.local, ))
+    walk(args.local, os.getcwd())
+
+    sys.exit(0)
 
 script_dir = os.path.dirname(__file__)
 zend_dir = os.path.normpath(os.path.join(script_dir, '../zend'))

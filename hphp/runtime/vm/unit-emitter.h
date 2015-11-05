@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,7 +25,6 @@
 
 #include "hphp/parser/location.h"
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/preclass.h"
@@ -207,13 +206,26 @@ struct UnitEmitter {
   PreClassEmitter* pce(Id preClassId);
 
   /*
-   * Create a new PreClassEmitter and add it to the PCE vector.
+   * Add a PreClassEmitter to the hoistability tracking data structures.
+   *
+   * @see: PreClass::Hoistable
+   */
+  void addPreClassEmitter(PreClassEmitter* pce);
+
+  /*
+   * Create a new PreClassEmitter and add it to all the PCE data structures.
    *
    * @see: PreClass::Hoistable
    */
   PreClassEmitter* newPreClassEmitter(const StringData* name,
                                       PreClass::Hoistable hoistable);
-
+  /*
+   * Create a new PreClassEmitter without adding it to the hoistability
+   * tracking data structures.
+   * It should be added latter with addPreClassEmitter.
+   */
+  PreClassEmitter* newBarePreClassEmitter(const StringData* name,
+                                          PreClass::Hoistable hoistable);
 
   /////////////////////////////////////////////////////////////////////////////
   // Type aliases.
@@ -295,14 +307,19 @@ struct UnitEmitter {
   void insertMergeableDef(int ix, Unit::MergeKind kind, Id id,
                           const TypedValue& tv);
 
+  /*
+   * Add a TypeAlias to the UnitEmitter's list of mergeables.
+   */
+  void pushMergeableTypeAlias(Unit::MergeKind kind, const Id id);
+  void insertMergeableTypeAlias(int ix, Unit::MergeKind kind, const Id id);
 
   /////////////////////////////////////////////////////////////////////////////
   // Bytecode emit.
   //
-  // These methods emit values to bc() at bcPos() and then updates bcPos(),
-  // realloc-ing the bytecode region if necessary.
+  // These methods emit values to bc() at bcPos() (or pos, if given) and then
+  // update bcPos(), realloc-ing the bytecode region if necessary.
 
-  void emitOp(Op op, int64_t pos = -1);
+  void emitOp(Op op);
   void emitByte(unsigned char n, int64_t pos = -1);
 
   void emitInt32(int n, int64_t pos = -1);

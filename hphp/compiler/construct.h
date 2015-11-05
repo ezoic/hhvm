@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,6 +28,7 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 class Variant;
+DECLARE_BOOST_TYPES(Expression);
 DECLARE_BOOST_TYPES(StatementList);
 DECLARE_BOOST_TYPES(IParseHandler);
 DECLARE_BOOST_TYPES(AnalysisResult);
@@ -130,19 +131,10 @@ public:
   x(ConstantExpression,         Const) \
   x(EncapsListExpression,        None) \
   x(ClosureExpression,           None) \
+  x(ClassExpression,             None) \
   x(YieldExpression,             None) \
   x(AwaitExpression,             None) \
-  x(UserAttribute,               None) \
-  x(QueryExpression,             None) \
-  x(FromClause,                  None) \
-  x(LetClause,                   None) \
-  x(WhereClause,                 None) \
-  x(SelectClause,                None) \
-  x(IntoClause,                  None) \
-  x(JoinClause,                  None) \
-  x(GroupClause,                 None) \
-  x(OrderbyClause,               None) \
-  x(Ordering,                    None)
+  x(UserAttribute,               None)
 
 /**
  * Base class of Expression and Statement.
@@ -209,6 +201,10 @@ public:
     UnknownEffect = 0xfff        // any of the above
   };
 
+  static bool SkipRecurse(ConstructPtr c) {
+    return c && c->skipRecurse();
+  }
+  bool skipRecurse() const;
   void copyLocationTo(ConstructPtr other);
   const Location::Range& getRange() const { return m_r; }
   int line0() const { return m_r.line0; }
@@ -216,66 +212,16 @@ public:
   void setFirst(int line0, int char0) { m_r.line0 = line0; m_r.char0 = char0; }
   void setFileLevel() { m_flags.topLevel = m_flags.fileLevel = true;}
   void setTopLevel() { m_flags.topLevel = true;}
-  void setVisited() { m_flags.visited = true;}
-  void clearVisited() { m_flags.visited = false;}
   bool isFileLevel() const { return m_flags.fileLevel;}
   bool isTopLevel() const { return m_flags.topLevel;}
-  bool isVisited() const { return m_flags.visited; }
-
-  void setAnticipated() { m_flags.anticipated = true; }
-  void clearAnticipated() { m_flags.anticipated = false; }
-  bool isAnticipated() const { return m_flags.anticipated; }
-
-  void setAvailable() { m_flags.available = true; }
-  void clearAvailable() { m_flags.available = false; }
-  bool isAvailable() const { return m_flags.available; }
-
-  void setNonNull() { m_flags.nonNull = true; }
-  void clearNonNull() { m_flags.nonNull = false; }
-  bool isNonNull() const { return m_flags.nonNull; }
-
-  void setLocalExprAltered() { m_flags.localExprNotAltered = false; }
-  void clearLocalExprAltered() { m_flags.localExprNotAltered = true; }
-  bool isLocalExprAltered() const { return !m_flags.localExprNotAltered; }
-
-  void setReferencedValid() { m_flags.referenced_valid = true; }
-  void clearReferencedValid() { m_flags.referenced_valid = false; }
-  bool isReferencedValid() const { return m_flags.referenced_valid; }
-
-  void setReferenced() { m_flags.referenced = true; }
-  void clearReferenced() { m_flags.referenced = false; }
-  bool isReferenced() const { return m_flags.referenced; }
 
   void setNeeded() { m_flags.needed = true; }
   void clearNeeded() { m_flags.needed = false; }
   bool isNeeded() const { return m_flags.needed; }
 
-  void setNoRemove() { m_flags.noRemove = true; }
-  void clearNoRemove() { m_flags.noRemove = false; }
-  bool isNoRemove() const { return m_flags.noRemove; }
-
-  void setGuarded() { m_flags.guarded = true; }
-  void clearGuarded() { m_flags.guarded = false; }
-  bool isGuarded() const { return m_flags.guarded; }
-
-  void setRefCounted() { m_flags.refCounted = 3; }
-  void clearRefCounted() { m_flags.refCounted = 2; }
-  bool maybeRefCounted() const {
-    return !(m_flags.refCounted & 2) || (m_flags.refCounted & 1);
-  }
-
-  void setInited() { m_flags.inited = 3; }
-  void clearInited() { m_flags.inited = 2; }
-  bool maybeInited() const {
-    return !(m_flags.inited & 2) || (m_flags.inited & 1);
-  }
   void setIsUnpack() { m_flags.unpack = 1; }
   bool isUnpack() const { return m_flags.unpack; }
   void clearIsUnpack() { m_flags.unpack = 0; }
-
-  void setKilled() { m_flags.killed = true; }
-  void clearKilled() { m_flags.killed = false; }
-  bool isKilled() const { return m_flags.killed; }
 
   BlockScopeRawPtr getScope() const { return m_blockScope; }
   void setBlockScope(BlockScopeRawPtr scope) { m_blockScope = scope; }
@@ -288,11 +234,11 @@ public:
   ClassScopeRawPtr getClassScope() const {
     return m_blockScope->getContainingClass();
   }
-  void resetScope(BlockScopeRawPtr scope, bool resetOrigScope=false);
+  void resetScope(BlockScopeRawPtr scope);
   void parseTimeFatal(FileScopeRawPtr fs, Compiler::ErrorType error,
-                      const char *fmt, ...) ATTRIBUTE_PRINTF(4,5);
-  void analysisTimeFatal(Compiler::ErrorType error, const char *fmt, ...)
-    ATTRIBUTE_PRINTF(3,4);
+    ATTRIBUTE_PRINTF_STRING const char *fmt, ...) ATTRIBUTE_PRINTF(4,5);
+  void analysisTimeFatal(Compiler::ErrorType error,
+    ATTRIBUTE_PRINTF_STRING const char *fmt, ...) ATTRIBUTE_PRINTF(3,4);
   virtual int getLocalEffects() const { return UnknownEffect;}
   int getChildrenEffects() const;
   int getContainedEffects() const;
@@ -339,28 +285,11 @@ public:
   virtual int getKidCount() const = 0;
 
   // helpers for GDB
-  void dump(int spc, AnalysisResultPtr ar) {
-    AnalysisResultConstPtr arp(ar);
-    dump(spc, arp);
-  }
-  void dumpNode(int spc, AnalysisResultPtr ar) {
-    AnalysisResultConstPtr arp(ar);
-    dumpNode(spc, arp);
-  }
   void dumpNode(int spc);
   void dumpNode(int spc) const;
 
   void dump(int spc, AnalysisResultConstPtr ar);
   void dumpNode(int spc, AnalysisResultConstPtr ar);
-
-  static void dump(int spc, AnalysisResultConstPtr ar, bool functionOnly,
-                   const AstWalkerStateVec &start,
-                   ConstructPtr endBefore, ConstructPtr endAfter);
-
-  /**
-   * Generates a serialized Code Model corresponding to this AST.
-   */
-  virtual void outputCodeModel(CodeGenerator &cg) = 0;
 
   /**
    * Called when generating code.
@@ -375,10 +304,9 @@ public:
   /**
    * Get canonicalized PHP source code for this construct.
    */
-  std::string getText(bool useCache, bool translate = false,
-                      AnalysisResultPtr ar = AnalysisResultPtr());
+  std::string getText(AnalysisResultPtr ar);
+  std::string getText();
 
-  std::string getText() { return getText(false); }
   void recomputeEffects();
 
   /**
@@ -390,27 +318,13 @@ public:
   ExpressionPtr makeScalarExpression(AnalysisResultConstPtr ar,
                                      const Variant &value) const;
 private:
-  std::string m_text;
   BlockScopeRawPtr m_blockScope;
   union {
     unsigned m_flagsVal;
     struct {
       unsigned fileLevel           : 1; // is it at top level of a file
       unsigned topLevel            : 1; // is it at top level of a scope
-      unsigned visited             : 1; // general purpose for walks
-      unsigned anticipated         : 1;
-      unsigned available           : 1;
-      unsigned localExprNotAltered : 1; // whether this node can be
-                                        // altered in this expression
-      unsigned nonNull             : 1; // expression is not null
-      unsigned referenced          : 1;
-      unsigned referenced_valid    : 1; // is the above flag is valid
       unsigned needed              : 1;
-      unsigned noRemove            : 1; // DCE should NOT remove this node
-      unsigned guarded             : 1; // previously used
-      unsigned killed              : 1;
-      unsigned refCounted          : 2; // high bit indicates whether its valid
-      unsigned inited              : 2; // high bit indicates whether its valid
       unsigned unpack              : 1; // is this an unpack (only on params)
     } m_flags;
   };

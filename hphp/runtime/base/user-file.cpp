@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -70,7 +70,7 @@ StaticString s_rmdir("rmdir");
 ///////////////////////////////////////////////////////////////////////////////
 
 UserFile::UserFile(Class *cls,
-                   const SmartPtr<StreamContext>& context /*= null */)
+                   const req::ptr<StreamContext>& context /*= null */)
 : UserFSNode(cls, context) {
   m_StreamOpen  = lookupMethod(s_stream_open.get());
   m_StreamClose = lookupMethod(s_stream_close.get());
@@ -411,8 +411,10 @@ static int statFill(Variant stat_array, struct stat* stat_sb)
   stat_sb->st_atime = a->get(s_atime.get()).toInt64();
   stat_sb->st_mtime = a->get(s_mtime.get()).toInt64();
   stat_sb->st_ctime = a->get(s_ctime.get()).toInt64();
+#ifndef _MSC_VER
   stat_sb->st_blksize = a->get(s_blksize.get()).toInt64();
   stat_sb->st_blocks = a->get(s_blocks.get()).toInt64();
+#endif
   return 0;
 }
 
@@ -450,8 +452,13 @@ int UserFile::access(const String& path, int mode) {
   }
 
   // The mode flags in stat are different from the flags used by access.
+#ifdef _MSC_VER
+  auto uid = -1;
+  auto gid = -1;
+#else
   auto uid = geteuid();
   auto gid = getegid();
+#endif
   switch (mode) {
     case R_OK: // Test for read permission.
       return simulateAccessResult(

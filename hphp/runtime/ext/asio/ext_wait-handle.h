@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -96,13 +96,11 @@ class c_WaitHandle : public ExtObjectDataFlags<ObjectData::IsWaitHandle|
   void t_import();
   Variant t_join();
   Variant t_result();
-  Variant result();
   bool t_isfinished();
   bool t_issucceeded();
   bool t_isfailed();
   int64_t t_getid();
   String t_getname();
-  Object t_getexceptioniffailed();
 
  public:
   static constexpr ptrdiff_t stateOff() {
@@ -177,6 +175,16 @@ class c_WaitHandle : public ExtObjectDataFlags<ObjectData::IsWaitHandle|
     static_assert(offsetof(c_WaitHandle, m_contextIdx) == type, "");
     static_assert(offsetof(c_WaitHandle, m_kind_state) < aux, "");
     static_assert(offsetof(c_WaitHandle, m_ctxVecIndex) == aux, "");
+  }
+
+ public:
+  template<class F> void scan(F& mark) const {
+    if (isFinished()) {
+      mark(m_resultOrException);
+    } else {
+      m_parentChain.scan(mark);
+    }
+    // TODO: t7925088 switch on kind and handle subclasses
   }
 
  protected:

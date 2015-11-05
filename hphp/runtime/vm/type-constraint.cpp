@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -274,7 +274,7 @@ bool TypeConstraint::checkTypeAliasNonObj(const TypedValue* tv) const {
     if (dt) {
       return equivDataTypes(*dt, tv->m_type);
     } else {
-      return IS_INT_TYPE(tv->m_type) || IS_STRING_TYPE(tv->m_type);
+      return isIntType(tv->m_type) || isStringType(tv->m_type);
     }
   }
   return false;
@@ -388,7 +388,8 @@ static const char* describe_actual_type(const TypedValue* tv, bool isHHType) {
     case KindOfString:        return "string";
     case KindOfArray:         return "array";
     case KindOfObject:        return tv->m_data.pobj->getClassName().c_str();
-    case KindOfResource:      return tv->m_data.pres->o_getClassName().c_str();
+    case KindOfResource:
+      return tv->m_data.pres->data()->o_getClassName().c_str();
 
     case KindOfRef:
     case KindOfClass:
@@ -419,7 +420,7 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
           "Value returned from {}{} {}() must be of type {}, {} given",
           func->isAsync() ? "async " : "",
           func->preClass() ? "method" : "function",
-          func->fullName()->data(),
+          func->fullName(),
           name,
           givenType
         ).str();
@@ -445,7 +446,7 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
       folly::format(
         "Argument {} to {}() must be of type {}, {} given; argument {} was "
         "implicitly cast to array",
-        id + 1, func->fullName()->data(), name, givenType, id + 1
+        id + 1, func->fullName(), name, givenType, id + 1
       ).str()
     );
     tvCastToArrayInPlace(tv);
@@ -458,14 +459,14 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
     raise_warning_unsampled(
       folly::format(
         "Argument {} to {}() must be of type {}, {} given",
-        id + 1, func->fullName()->data(), name, givenType
+        id + 1, func->fullName(), name, givenType
       ).str()
     );
   } else if (isExtended() && isNullable()) {
     raise_typehint_error(
       folly::format(
         "Argument {} to {}() must be of type {}, {} given",
-        id + 1, func->fullName()->data(), name, givenType
+        id + 1, func->fullName(), name, givenType
       ).str()
     );
   } else {
@@ -474,14 +475,14 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
       raise_typehint_error(
         folly::format(
           "Argument {} passed to {}() must implement interface {}, {} given",
-          id + 1, func->fullName()->data(), name, givenType
+          id + 1, func->fullName(), name, givenType
         ).str()
       );
     } else {
       raise_typehint_error(
         folly::format(
           "Argument {} passed to {}() must be an instance of {}, {} given",
-          id + 1, func->fullName()->data(), name, givenType
+          id + 1, func->fullName(), name, givenType
         ).str()
       );
     }

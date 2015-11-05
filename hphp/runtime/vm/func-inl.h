@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -67,11 +67,6 @@ inline bool Func::ParamInfo::isVariadic() const {
 
 ///////////////////////////////////////////////////////////////////////////////
 // Func.
-
-inline void Func::freeClone() const {
-  assert(isPreFunc());
-  m_cloned.flag.clear();
-}
 
 inline void Func::validate() const {
 #ifdef DEBUG
@@ -217,6 +212,10 @@ inline bool Func::contains(Offset offset) const {
 
 inline MaybeDataType Func::returnType() const {
   return shared()->m_returnType;
+}
+
+inline bool Func::isReturnByValue() const {
+  return shared()->m_returnByValue;
 }
 
 inline bool Func::isReturnRef() const {

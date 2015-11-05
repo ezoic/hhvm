@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,6 @@
 #include <unordered_map>
 
 #include "hphp/util/hash-map-typedefs.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/srckey.h"
 #include "hphp/runtime/vm/jit/types.h"
@@ -188,7 +187,7 @@ public:
   SrcKey                  transLastSrcKey(TransID id) const;
   Offset                  transStartBcOff(TransID id) const;
   Offset                  transLastBcOff(TransID id)  const;
-  Op*                     transLastInstr(TransID id)  const;
+  PC                      transLastInstr(TransID id)  const;
   Offset                  transStopBcOff(TransID id)  const;
   FuncId                  transFuncId(TransID id)     const;
   Func*                   transFunc(TransID id)       const;
@@ -197,9 +196,9 @@ public:
   TransKind               transKind(TransID id)       const;
   bool                    isKindProfile(TransID id)   const;
   // The actual counter value, which starts at JitPGOThreshold and goes down.
-  int64_t                 transCounter(TransID id)    const;
+  int64_t                 transCounterRaw(TransID id) const;
   // The absolute number of times that a translation executed.
-  int64_t                 absTransCounter(TransID id) const;
+  int64_t                 transCounter(TransID id)    const;
   int64_t*                transCounterAddr(TransID id);
   TransID                 prologueTransId(const Func* func,
                                           int nArgs)  const;
@@ -227,6 +226,8 @@ public:
   void                    clearOptimized(SrcKey sk);
   bool                    profiling(FuncId funcId) const;
   void                    setProfiling(FuncId funcId);
+  void                    free();
+  bool                    freed() const;
 
   /*
    * Called when we've finished promoting all the profiling translations for
@@ -247,6 +248,7 @@ private:
   uint32_t                m_numTrans;
   std::vector<ProfTransRecPtr>
                           m_transRecs;
+  bool                    m_freed;
   FuncProfTransMap        m_funcProfTrans;
   ProfCounters<int64_t>   m_counters;
   SrcKeySet               m_optimizedSKs;   // set of SrcKeys already optimized

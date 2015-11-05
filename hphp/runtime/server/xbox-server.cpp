@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -366,7 +366,7 @@ Resource XboxServer::TaskStart(const String& msg, const String& reqInitDoc /* = 
          RuntimeOption::XboxServerThreadCount ||
          s_dispatcher->getQueuedJobs() <
          RuntimeOption::XboxServerMaxQueueLength)) {
-      auto task = makeSmartPtr<XboxTask>(msg, reqInitDoc);
+      auto task = req::make<XboxTask>(msg, reqInitDoc);
       XboxTransport *job = task->getJob();
       job->incRefCount(); // paired with worker's decRefCount()
 
@@ -400,17 +400,19 @@ bool XboxServer::TaskStatus(const Resource& task) {
   return cast<XboxTask>(task)->getJob()->isDone();
 }
 
-int XboxServer::TaskResult(const Resource& task, int timeout_ms, Variant &ret) {
+int XboxServer::TaskResult(const Resource& task, int timeout_ms, Variant *ret) {
   return TaskResult(cast<XboxTask>(task)->getJob(), timeout_ms, ret);
 }
 
-int XboxServer::TaskResult(XboxTransport *job, int timeout_ms, Variant &ret) {
+int XboxServer::TaskResult(XboxTransport *job, int timeout_ms, Variant *ret) {
   int code = 0;
   String response = job->getResults(code, timeout_ms);
-  if (code == 200) {
-    ret = unserialize_from_string(response);
-  } else {
-    ret = response;
+  if (ret) {
+    if (code == 200) {
+      *ret = unserialize_from_string(response);
+    } else {
+      *ret = response;
+    }
   }
   return code;
 }

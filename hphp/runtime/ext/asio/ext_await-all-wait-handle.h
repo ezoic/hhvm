@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -20,7 +20,7 @@
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/mixed-array.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/ext/asio/ext_waitable-wait-handle.h"
 
 namespace HPHP {
@@ -60,6 +60,7 @@ struct c_AwaitAllWaitHandle final : c_WaitableWaitHandle {
   void onUnblocked();
   c_WaitableWaitHandle* getChild();
   template<typename T> void forEachChild(T fn);
+  template<class F> void scanChildren(F&) const;
 
   size_t heapSize() const { return heapSize(m_cap); }
   static size_t heapSize(unsigned count) {
@@ -68,10 +69,11 @@ struct c_AwaitAllWaitHandle final : c_WaitableWaitHandle {
 
  private:
   static Object FromPackedArray(const ArrayData* dependencies);
+  static Object FromStructArray(const StructArray* dependencies);
   static Object FromMixedArray(const MixedArray* dependencies);
   static Object FromMap(const BaseMap* dependencies);
   static Object FromVector(const BaseVector* dependencies);
-  static SmartPtr<c_AwaitAllWaitHandle> Alloc(int32_t cnt);
+  static req::ptr<c_AwaitAllWaitHandle> Alloc(int32_t cnt);
   void initialize(context_idx_t ctx_idx);
   template<bool checkCycle> void blockOnCurrent();
   void markAsFailed(const Object& exception);

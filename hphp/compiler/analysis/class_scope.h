@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -108,13 +108,9 @@ public:
     Final = 32
   };
 
-  enum JumpTableName {
-    JumpTableCallInfo
-  };
-
 public:
   ClassScope(FileScopeRawPtr fs,
-             KindOf kindOf, const std::string &name,
+             KindOf kindOf, const std::string &originalName,
              const std::string &parent,
              const std::vector<std::string> &bases,
              const std::string &docComment, StatementPtr stmt,
@@ -124,10 +120,14 @@ public:
    * Special constructor for extension classes.
    */
   ClassScope(AnalysisResultPtr ar,
-             const std::string &name, const std::string &parent,
-             const std::vector<std::string> &bases,
-             const FunctionScopePtrVec &methods);
+             const std::string& originalName, const std::string& parent,
+             const std::vector<std::string>& bases,
+             const std::vector<FunctionScopePtr>& methods);
 
+  bool isNamed(const char* n) const;
+  bool isNamed(const std::string& n) const {
+    return isNamed(n.c_str());
+  }
   bool classNameCtor() const {
     return getAttribute(ClassNameConstructor);
   }
@@ -142,9 +142,14 @@ public:
    */
   bool isUserClass() const { return !getAttribute(System);}
   bool isExtensionClass() const { return getAttribute(Extension); }
-  bool isDynamic() const { return m_dynamic; }
   bool isBaseClass() const { return m_bases.empty(); }
   bool isBuiltin() const { return !getStmt(); }
+
+  /**
+   * Helpers for parsing class functions and variables.
+   */
+  ModifierExpressionPtr setModifiers(ModifierExpressionPtr modifiers);
+  ModifierExpressionPtr getModifiers() { return m_modifiers;}
 
   /**
    * Whether this class name was declared twice or more.
@@ -153,14 +158,11 @@ public:
   bool isRedeclaring() const { return m_redeclaring >= 0;}
   int getRedeclaringId() { return m_redeclaring; }
 
-  void setStaticDynamic(AnalysisResultConstPtr ar);
-  void setDynamic(AnalysisResultConstPtr ar, const std::string &name);
-
   void addReferer(BlockScopePtr ref, int useKinds);
 
   /* For class_exists */
   void setVolatile();
-  bool isVolatile() const { return m_volatile;}
+  bool isVolatile() const { return m_volatile; }
   bool isPersistent() const { return m_persistent; }
   void setPersistent(bool p) { m_persistent = p; }
 
@@ -168,10 +170,6 @@ public:
 
   Derivation derivesFromRedeclaring() const {
     return m_derivesFromRedeclaring;
-  }
-
-  bool derivedByDynamic() const {
-    return m_derivedByDynamic;
   }
 
   /**
@@ -189,7 +187,7 @@ public:
     ClassScopePtr parent = getParentScope(ar);
     return parent && !parent->isRedeclaring() && parent->hasAttribute(attr, ar);
   }
-  const FunctionScopePtrVec &getFunctionsVec() const {
+  const std::vector<FunctionScopePtr>& getFunctionsVec() const {
     return m_functionsVec;
   }
 
@@ -324,7 +322,6 @@ public:
   bool hasProperty(const std::string &name) const;
   bool hasConst(const std::string &name) const;
 
-  static bool NeedStaticArray(ClassScopePtr cls, FunctionScopePtr func);
   void inheritedMagicMethods(ClassScopePtr super);
   void derivedMagicMethods(ClassScopePtr super);
   /* true if it might, false if it doesnt */
@@ -345,14 +342,6 @@ public:
   bool addFunction(AnalysisResultConstPtr ar,
                    FileScopeRawPtr fileScope,
                    FunctionScopePtr funcScope);
-
-  void setNeedsCppCtor(bool needsCppCtor) { m_needsCppCtor = needsCppCtor; }
-  void setNeedsInitMethod(bool needsInit) { m_needsInit = needsInit; }
-  bool needsCppCtor()    const { return m_needsCppCtor; }
-  bool needsInitMethod() const { return m_needsInit; }
-
-  bool canSkipCreateMethod(AnalysisResultConstPtr ar) const;
-  bool checkHasPropTable(AnalysisResultConstPtr ar);
 
   const StringData* getFatalMessage() const {
     return m_fatal_error_msg;
@@ -415,7 +404,9 @@ private:
     using alias_type = TraitAliasStatementPtr;
 
     static bool strEmpty(const std::string& str)    { return str.empty(); }
-    static std::string clsName(ClassScopePtr cls)   { return cls->getName(); }
+    static std::string clsName(ClassScopePtr cls)   {
+      return cls->getOriginalName();
+    }
 
     static bool isTrait(ClassScopePtr cls)          { return cls->isTrait(); }
     static bool isAbstract(ModifierExpressionPtr m) { return m->isAbstract(); }
@@ -430,25 +421,25 @@ private:
     }
 
     static std::string precMethodName(prec_type stmt) {
-      return toLower(stmt->getMethodName());
+      return stmt->getMethodName();
     }
     static std::string precSelectedTraitName(prec_type stmt) {
-      return toLower(stmt->getTraitName());
+      return stmt->getTraitName();
     }
-    static std::unordered_set<std::string> precOtherTraitNames(prec_type stmt) {
-      std::unordered_set<string> otherTraitNames;
+    static hphp_string_iset precOtherTraitNames(prec_type stmt) {
+      hphp_string_iset otherTraitNames;
       stmt->getOtherTraitNames(otherTraitNames);
       return otherTraitNames;
     }
 
     static std::string aliasTraitName(alias_type stmt) {
-      return toLower(stmt->getTraitName());
+      return stmt->getTraitName();
     }
     static std::string aliasOrigMethodName(alias_type stmt) {
-      return toLower(stmt->getMethodName());
+      return stmt->getMethodName();
     }
     static std::string aliasNewMethodName(alias_type stmt) {
-      return toLower(stmt->getNewMethodName());
+      return stmt->getNewMethodName();
     }
     static ModifierExpressionPtr aliasModifiers(alias_type stmt) {
       return stmt->getModifiers();
@@ -494,7 +485,9 @@ private:
   friend class TMIOps;
 
 public:
-  using TMIData = TraitMethodImportData<TraitMethod, TMIOps>;
+  using TMIData = TraitMethodImportData<TraitMethod, TMIOps,
+                                        std::string,
+                                        string_hashi, string_eqstri>;
 
 private:
   MethodStatementPtr importTraitMethod(const TraitMethod& traitMethod,
@@ -514,11 +507,12 @@ private:
 
 private:
   // need to maintain declaration order for ClassInfo map
-  FunctionScopePtrVec m_functionsVec;
+  std::vector<FunctionScopePtr> m_functionsVec;
 
   std::string m_parent;
   mutable std::vector<std::string> m_bases;
   UserAttributeMap m_userAttributes;
+  ModifierExpressionPtr m_modifiers;
 
   std::vector<std::string> m_usedTraitNames;
   boost::container::flat_set<std::string> m_requiredExtends;
@@ -535,12 +529,8 @@ private:
     BEING_FLATTENED,
     FLATTENED
   } m_traitStatus;
-  unsigned m_dynamic:1;
   unsigned m_volatile:1; // for class_exists
   unsigned m_persistent:1;
-  unsigned m_derivedByDynamic:1;
-  unsigned m_needsCppCtor:1;
-  unsigned m_needsInit:1;
   int32_t m_numDeclMethods{-1};
 
   // holds the fact that accessing this class declaration is a fatal error

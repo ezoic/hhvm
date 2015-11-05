@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -33,7 +33,7 @@ bool isFuncEntry(const Func* func, Offset off) {
 int numInstrs(PC start, PC end) {
   int ret{};
   for (; start != end; ++ret) {
-    start += instrLen((Op*)start);
+    start += instrLen(start);
   }
   return ret;
 }
@@ -56,6 +56,7 @@ int numInstrs(PC start, PC end) {
  */
 RegionDescPtr selectMethod(const RegionContext& context) {
   using namespace HPHP::Verifier;
+  using HPHP::Verifier::Block;
 
   if (!isFuncEntry(context.func, context.bcOffset)) return nullptr;
   if (context.func->isPseudoMain()) return nullptr;
@@ -84,7 +85,7 @@ RegionDescPtr selectMethod(const RegionContext& context) {
       auto const start  = unit->offsetOf(b->start);
       auto const length = numInstrs(b->start, b->end);
       SrcKey sk{context.func, start, context.resumed};
-      auto const rblock = ret->addBlock(sk, length, spOffset, 0);
+      auto const rblock = ret->addBlock(sk, length, spOffset);
       blockMap[b] = rblock->id();
       // flag SP offset as unknown for all but the first block
       spOffset = FPInvOffset::invalid();
@@ -117,7 +118,7 @@ RegionDescPtr selectMethod(const RegionContext& context) {
 
     for (InstrRange inst = blockInstrs(b); !inst.empty();) {
       auto const pc   = inst.popFront();
-      auto const info = instrStackTransInfo(reinterpret_cast<const Op*>(pc));
+      auto const info = instrStackTransInfo(pc);
       switch (info.kind) {
       case StackTransInfo::Kind::InsertMid:
         ++sp;
@@ -157,7 +158,6 @@ RegionDescPtr selectMethod(const RegionContext& context) {
    * Fill the first block predictions with the live types.
    */
   assertx(!ret->empty());
-  auto const startSK = ret->start();
   for (auto& lt : context.liveTypes) {
     typedef RegionDesc::Location::Tag LTag;
 
@@ -168,7 +168,7 @@ RegionDescPtr selectMethod(const RegionContext& context) {
       if (lt.location.localId() < context.func->numParams()) {
         // Only predict objectness, not the specific class type.
         auto const type = lt.type < TObj ? TObj : lt.type;
-        ret->entry()->addPreCondition(startSK, {lt.location, type});
+        ret->entry()->addPreCondition({lt.location, type, DataTypeSpecific});
       }
       break;
     }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -42,7 +42,7 @@ namespace HPHP { namespace Eval {
 
 TRACE_SET_MOD(debugger);
 
-DebuggerProxy::DebuggerProxy(SmartPtr<Socket> socket, bool local)
+DebuggerProxy::DebuggerProxy(req::ptr<Socket> socket, bool local)
     : m_local(local),
       m_signalThread(this, &DebuggerProxy::pollSignal),
       m_signum(CmdSignal::SignalNone) {
@@ -324,7 +324,7 @@ void DebuggerProxy::interrupt(CmdInterrupt &cmd) {
   // command, stop if we're at a breakpoint, handle other interrupts, etc.
   if (checkFlowBreak(cmd)) {
     // We've hit a breakpoint and now need to make sure that breakpoints
-    // wont be hit again for this site until control leaves this site.
+    // won't be hit again for this site until control leaves this site.
     // (Breakpoints can still get hit if control reaches this site during
     // a call that is part of this site because the flags are stacked.)
     unsetBreakableForBreakpointsMatching(cmd);

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -36,9 +36,6 @@ public:
 
   explicit ExpressionList(EXPRESSION_CONSTRUCTOR_PARAMETERS,
                           ListKind kind = ListKindParam);
-  ~ExpressionList();
-  // change case to lower so to make it case insensitive
-  void toLower();
 
   DECLARE_EXPRESSION_VIRTUAL_FUNCTIONS;
   ExpressionPtr preOptimize(AnalysisResultConstPtr ar) override;
@@ -67,7 +64,6 @@ public:
   ExpressionPtr &operator[](int index);
 
   void getStrings(std::vector<std::string> &strings);
-  void getOriginalStrings(std::vector<std::string> &strings);
   void stripConcat();
 
   void markParam(int p);
@@ -76,8 +72,6 @@ public:
   void setCollectionElems();
   void setContainsUnpack() { m_argUnpack = true; };
   bool containsUnpack() const { return m_argUnpack; }
-
-  bool canonCompare(ExpressionPtr e) const override;
 
   /**
    * Checks whether the expression list contains only literal strings and
@@ -92,7 +86,7 @@ private:
   enum class ElemsKind: uint8_t { None, ArrayPairs, Collection };
 
 private:
-  ExpressionPtrVec m_exps;
+  std::vector<ExpressionPtr> m_exps;
   ElemsKind m_elems_kind;
   bool m_argUnpack;
   ListKind m_kind;

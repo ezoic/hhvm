@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -35,10 +35,14 @@ public:
   static void Info(const std::string &msg);
   static void Verbose(const std::string &msg);
 
-  static void Error(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Warning(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Info(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
-  static void Verbose(const char *fmt, ...) ATTRIBUTE_PRINTF(1,2);
+  static void Error(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Warning(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Info(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
+  static void Verbose(ATTRIBUTE_PRINTF_STRING const char *fmt, ...)
+    ATTRIBUTE_PRINTF(1,2);
 
   // Log additional injected stacktrace.
   static void Log(LogLevelType level, const Array& stackTrace, bool escape = true,

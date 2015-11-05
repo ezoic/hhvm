@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,6 +17,7 @@
 #define incl_HPHP_PORTABILITY_H_
 
 #include <folly/Likely.h> // defining LIKELY/UNLIKELY is part of this header
+#include <folly/Portability.h>
 #include <folly/CPortability.h> // defining FOLLY_DISABLE_ADDRESS_SANITIZER
 
 //////////////////////////////////////////////////////////////////////
@@ -49,18 +50,37 @@
 #ifdef ATTRIBUTE_PRINTF
 # undef ATTRIBUTE_PRINTF
 #endif
+#ifdef ATTRIBUTE_PRINTF_STRING
+# undef ATTRIBUTE_PRINTF_STRING
+#endif
 
-#define ATTRIBUTE_UNUSED   __attribute__((__unused__))
+#define ATTRIBUTE_PRINTF_STRING FOLLY_PRINTF_FORMAT
+
+#ifdef _MSC_VER
+#define ATTRIBUTE_NORETURN __declspec(noreturn)
+#define ATTRIBUTE_PRINTF(a1, a2)
+#ifndef __thread
+# define __thread __declspec(thread)
+#endif
+#define ATTRIBUTE_UNUSED
+
+#define ALWAYS_INLINE __forceinline
+#define EXTERNALLY_VISIBLE
+#define FLATTEN
+#define NEVER_INLINE __declspec(noinline)
+#define UNUSED
+#else
 #define ATTRIBUTE_NORETURN __attribute__((__noreturn__))
-
 #define ATTRIBUTE_PRINTF(a1, a2) \
   __attribute__((__format__ (__printf__, a1, a2)))
+#define ATTRIBUTE_UNUSED   __attribute__((__unused__))
 
 #define ALWAYS_INLINE      inline __attribute__((__always_inline__))
+#define EXTERNALLY_VISIBLE __attribute__((__externally_visible__))
+#define FLATTEN            __attribute__((__flatten__))
 #define NEVER_INLINE       __attribute__((__noinline__))
 #define UNUSED             __attribute__((__unused__))
-#define FLATTEN            __attribute__((__flatten__))
-#define EXTERNALLY_VISIBLE __attribute__((__externally_visible__))
+#endif
 
 #ifdef DEBUG
 # define DEBUG_ONLY /* nop */
@@ -100,6 +120,7 @@
 #endif
 
 //////////////////////////////////////////////////////////////////////
+// DECLARE_FRAME_POINTER
 
 #if defined(__x86_64__)
 
@@ -110,6 +131,14 @@
 # else
 #  define DECLARE_FRAME_POINTER(fp) register ActRec* fp asm("rbp");
 # endif
+
+#elif defined(_M_X64)
+
+// TODO: FIXME! Without this implemented properly, the JIT
+// will fail "pretty spectacularly".
+# define DECLARE_FRAME_POINTER(fp) \
+  always_assert(false);            \
+  register ActRec* fp = nullptr;
 
 #elif defined(__AARCH64EL__)
 
@@ -129,6 +158,29 @@
 
 # error What are the stack and frame pointers called on your architecture?
 
+#endif
+
+//////////////////////////////////////////////////////////////////////
+// CALLEE_SAVED_BARRIER
+
+#if defined(__CYGWIN__) || defined(__MINGW__)
+  #define CALLEE_SAVED_BARRIER()\
+    asm volatile("" : : : "rbx", "rsi", "rdi", "r12", "r13", "r14", "r15");
+#elif defined(_MSC_VER)
+  // Unfortunately, we have no way to tell MSVC to do this, so we'll
+  // probably have to use a pair of assembly stubs to manage this.
+  #define CALLEE_SAVED_BARRIER() always_assert(false);
+#elif defined (__powerpc64__)
+  // PPC64 port under development
+  #define CALLEE_SAVED_BARRIER()\
+      not_implemented();
+#elif defined (__AARCH64EL__)
+  #define CALLEE_SAVED_BARRIER()\
+    asm volatile("" : : : "x19", "x20", "x21", "x22", "x23", "x24", "x25",\
+                 "x26", "x27", "x28")
+#else
+  #define CALLEE_SAVED_BARRIER()\
+    asm volatile("" : : : "rbx", "r12", "r13", "r14", "r15");
 #endif
 
 //////////////////////////////////////////////////////////////////////

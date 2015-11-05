@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -176,36 +176,6 @@ inline bool Type::operator==(Type rhs) const {
 
 inline bool Type::operator!=(Type rhs) const {
   return !operator==(rhs);
-}
-
-inline bool Type::operator<=(Type rhs) const {
-  auto lhs = *this;
-
-  // Check for any members in lhs.m_bits that aren't in rhs.m_bits.
-  if ((lhs.m_bits & rhs.m_bits) != lhs.m_bits) {
-    return false;
-  }
-
-  // Check for Bottom; all the remaining cases assume `lhs' is not Bottom.
-  if (lhs.m_bits == kBottom) return true;
-
-  // If `rhs' is a constant, we must be the same constant.
-  if (rhs.m_hasConstVal) {
-    assertx(!rhs.isUnion());
-    return lhs.m_hasConstVal && lhs.m_extra == rhs.m_extra;
-  }
-
-  // If `rhs' could be a pointer, we must have a subtype relation in pointer
-  // kinds or we're not a subtype.  (If `lhs' can't be a pointer, we found out
-  // above when we intersected the bits.)  If neither can be a pointer, it's an
-  // invariant that `m_ptrKind' will be Ptr::Unk so this will pass.
-  if (lhs.ptrKind() != rhs.ptrKind() &&
-      !ptr_subtype(lhs.ptrKind(), rhs.ptrKind())) {
-    return false;
-  }
-
-  // Compare specializations only if `rhs' is specialized.
-  return !rhs.isSpecialized() || lhs.spec() <= rhs.spec();
 }
 
 inline bool Type::operator>=(Type rhs) const {
@@ -410,6 +380,15 @@ inline Type Type::ExactObj(const Class* cls) {
   return Type(TObj, ClassSpec(cls, ClassSpec::ExactTag{}));
 }
 
+inline Type Type::SubCls(const Class* cls) {
+  if (cls->attrs() & AttrNoOverride) return ExactCls(cls);
+  return Type(TCls, ClassSpec(cls, ClassSpec::SubTag{}));
+}
+
+inline Type Type::ExactCls(const Class* cls) {
+  return Type::cns(cls);
+}
+
 inline Type Type::unspecialize() const {
   return Type(m_bits, ptrKind());
 }
@@ -428,7 +407,7 @@ inline bool Type::supports(SpecKind kind) const {
     case SpecKind::Array:
       return m_bits & kAnyArr;
     case SpecKind::Class:
-      return m_bits & kAnyObj;
+      return (m_bits & kAnyObj) || (m_bits & kCls);
   }
   not_reached();
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,12 +19,13 @@
 
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/type-string.h"
-#include "hphp/system/constants.h"
+#include "hphp/runtime/ext/std/ext_std_misc.h"
+
+#include <map>
+#include <memory>
 
 extern "C" {
 #include <timelib.h>
-#include <map>
-#include <memory>
 }
 
 namespace HPHP {
@@ -43,16 +44,15 @@ public:
   /**
    * Get/set current timezone that controls how local time is interpreted.
    */
-  static String CurrentName();            // current timezone's name
-  static SmartPtr<TimeZone> Current(); // current timezone
-  static bool SetCurrent(const String& name);   // returns false if invalid
+  static String CurrentName();              // current timezone's name
+  static req::ptr<TimeZone> Current();      // current timezone
+  static bool SetCurrent(const char* name); // returns false if invalid
 
   /**
    * TimeZone database queries.
    */
-  static bool IsValid(const String& name);
+  static bool IsValid(const char* name);
   static Array GetAbbreviations();
-  static Array GetNamesToCountryCodes();
   static String AbbreviationToName(String abbr, int utcoffset = -1,
                                    int isdst = 1);
 
@@ -114,7 +114,7 @@ public:
   /**
    * Make a copy of this timezone object, so it can be changed independently.
    */
-  SmartPtr<TimeZone> cloneTimeZone() const;
+  req::ptr<TimeZone> cloneTimeZone() const;
 
 protected:
   friend class DateTime;

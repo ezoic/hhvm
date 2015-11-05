@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -57,13 +57,11 @@ struct CallDest {
 };
 UNUSED const CallDest kVoidDest { DestType::None };
 
-class ArgDesc {
-public:
+struct ArgDesc {
   enum class Kind {
     Reg,     // Normal register
-    TypeReg, // TypedValue's m_type field. Might need arch-specific
-             // mangling before call depending on TypedValue's layout.
     Imm,     // 64-bit Immediate
+    TypeImm, // DataType Immediate
     Addr,    // Address (register plus 32-bit displacement)
   };
 
@@ -72,6 +70,10 @@ public:
   Kind kind() const { return m_kind; }
   void setDstReg(PhysReg reg) { m_dstReg = reg; }
   Immed64 imm() const { assertx(m_kind == Kind::Imm); return m_imm64; }
+  DataType typeImm() const {
+    assertx(m_kind == Kind::TypeImm);
+    return m_typeImm;
+  }
   Immed disp() const { assertx(m_kind == Kind::Addr); return m_disp32; }
   bool isZeroExtend() const { return m_zeroExtend; }
   bool done() const { return m_done; }
@@ -104,6 +106,7 @@ private:
   union {
     Immed64 m_imm64; // 64-bit plain immediate
     Immed m_disp32;  // 32-bit displacement
+    DataType m_typeImm;
   };
   bool m_zeroExtend{false};
   bool m_done{false};
@@ -187,19 +190,7 @@ struct ArgGroup {
   /*
    * Pass tmp as a TypedValue passed by value.
    */
-  ArgGroup& typedValue(int i) {
-    // If there's exactly one register argument slot left, the whole TypedValue
-    // goes on the stack instead of being split between a register and the
-    // stack.
-    if (m_gpArgs.size() == x64::kNumRegisterArgs - 1) {
-      m_override = &m_stkArgs;
-    }
-    static_assert(offsetof(TypedValue, m_data) == 0, "");
-    static_assert(offsetof(TypedValue, m_type) == 8, "");
-    ssa(i).type(i);
-    m_override = nullptr;
-    return *this;
-  }
+  ArgGroup& typedValue(int i);
 
   ArgGroup& memberKeyIS(int i) {
     return memberKeyImpl(i, true);
@@ -214,25 +205,8 @@ struct ArgGroup {
   }
 
 private:
-  void push_arg(const ArgDesc& arg) {
-    // If m_override is set, use it unconditionally. Otherwise, select
-    // m_gpArgs or m_stkArgs depending on how many args we've already pushed.
-    ArgVec* args = m_override;
-    if (!args) {
-      args = m_gpArgs.size() < x64::kNumRegisterArgs ? &m_gpArgs : &m_stkArgs;
-    }
-    args->push_back(arg);
-  }
-
-  void push_SIMDarg(const ArgDesc& arg) {
-    // See push_arg above
-    ArgVec* args = m_override;
-    if (!args) {
-      args = m_simdArgs.size() < x64::kNumSIMDRegisterArgs
-           ? &m_simdArgs : &m_stkArgs;
-    }
-    args->push_back(arg);
-  }
+  void push_arg(const ArgDesc& arg);
+  void push_SIMDarg(const ArgDesc& arg);
 
   /*
    * For passing the m_type field of a TypedValue.

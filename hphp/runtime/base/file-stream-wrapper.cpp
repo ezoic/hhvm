@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,7 +20,6 @@
 #include "hphp/runtime/base/plain-file.h"
 #include "hphp/runtime/base/directory.h"
 #include "hphp/runtime/server/static-content-cache.h"
-#include "hphp/system/constants.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/ext/stream/ext_stream.h"
@@ -30,7 +29,7 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-SmartPtr<MemFile> FileStreamWrapper::openFromCache(const String& filename,
+req::ptr<MemFile> FileStreamWrapper::openFromCache(const String& filename,
                                                    const String& mode) {
   if (!StaticContentCache::TheFileCache) {
     return nullptr;
@@ -38,7 +37,7 @@ SmartPtr<MemFile> FileStreamWrapper::openFromCache(const String& filename,
 
   String relative =
     FileCache::GetRelativePath(File::TranslatePath(filename).c_str());
-  auto file = makeSmartPtr<MemFile>();
+  auto file = req::make<MemFile>();
   bool ret = file->open(relative, mode);
   if (ret) {
     return file;
@@ -46,9 +45,9 @@ SmartPtr<MemFile> FileStreamWrapper::openFromCache(const String& filename,
   return nullptr;
 }
 
-SmartPtr<File>
+req::ptr<File>
 FileStreamWrapper::open(const String& filename, const String& mode,
-                        int options, const SmartPtr<StreamContext>& context) {
+                        int options, const req::ptr<StreamContext>& context) {
   String fname;
   if (StringUtil::IsFileUrl(filename)) {
     fname = StringUtil::DecodeFileUrl(filename);
@@ -72,7 +71,7 @@ FileStreamWrapper::open(const String& filename, const String& mode,
     }
   }
 
-  auto file = makeSmartPtr<PlainFile>();
+  auto file = req::make<PlainFile>();
   bool ret = file->open(File::TranslatePath(fname), mode);
   if (!ret) {
     raise_warning("%s", file->getLastError().c_str());
@@ -81,13 +80,13 @@ FileStreamWrapper::open(const String& filename, const String& mode,
   return file;
 }
 
-SmartPtr<Directory> FileStreamWrapper::opendir(const String& path) {
+req::ptr<Directory> FileStreamWrapper::opendir(const String& path) {
   auto tpath = File::TranslatePath(path);
   if (File::IsVirtualDirectory(tpath)) {
-    return makeSmartPtr<CachedDirectory>(tpath);
+    return req::make<CachedDirectory>(tpath);
   }
 
-  auto dir = makeSmartPtr<PlainDirectory>(tpath);
+  auto dir = req::make<PlainDirectory>(tpath);
   if (!dir->isValid()) {
     raise_warning("%s", dir->getLastError().c_str());
     return nullptr;

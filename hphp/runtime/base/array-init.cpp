@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,7 +28,7 @@ ArrayInit::ArrayInit(size_t n, Map)
 #endif
 {
   m_data = MixedArray::MakeReserveMixed(n);
-  m_data->setRefCount(0);
+  assert(m_data->hasExactlyOneRef());
 }
 
 ArrayInit::ArrayInit(size_t n, Map, CheckAllocation)
@@ -42,11 +42,11 @@ ArrayInit::ArrayInit(size_t n, Map, CheckAllocation)
     check_request_surprise_unlikely();
   }
   auto const allocsz = computeAllocBytes(computeScaleFromSize(n));
-  if (UNLIKELY(allocsz > kMaxSmartSize && MM().preAllocOOM(allocsz))) {
+  if (UNLIKELY(allocsz > kMaxSmallSize && MM().preAllocOOM(allocsz))) {
     check_request_surprise_unlikely();
   }
   m_data = MixedArray::MakeReserveMixed(n);
-  m_data->setRefCount(0);
+  assert(m_data->hasExactlyOneRef());
   check_request_surprise_unlikely();
 }
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -14,11 +14,15 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/runtime/vm/jit/abi.h"
+#include "hphp/runtime/vm/jit/abi-x64.h"
 #include "hphp/runtime/vm/jit/containers.h"
 #include "hphp/runtime/vm/jit/vasm.h"
 #include "hphp/runtime/vm/jit/vasm-emit.h"
+#include "hphp/runtime/vm/jit/vasm-gen.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-print.h"
+#include "hphp/runtime/vm/jit/vasm-text.h"
 #include "hphp/runtime/vm/jit/vasm-unit.h"
 
 #include <gtest/gtest.h>
@@ -30,23 +34,30 @@ template<class T> uint64_t test_const(T val) {
   using testfunc = double (*)();
   static const Abi test_abi = {
     .gpUnreserved = RegSet{},
-    .gpReserved = x64::abi.gp(),
+    .gpReserved = x64::abi().gp(),
     .simdUnreserved = RegSet{xmm0},
-    .simdReserved = x64::abi.simd() - RegSet{xmm0},
-    .calleeSaved = x64::kCalleeSaved,
-    .sf = x64::abi.sf
+    .simdReserved = x64::abi().simd() - RegSet{xmm0},
+    .calleeSaved = x64::abi().calleeSaved,
+    .sf = x64::abi().sf
   };
   static uint8_t code[1000];
+
   CodeBlock main;
   main.init(code, sizeof(code), "test");
+
   Vasm vasm;
+  Vtext text { main };
+
   auto& unit = vasm.unit();
-  auto& v = vasm.main(main);
+  auto& v = vasm.main();
   unit.entry = v;
+
   v << copy{v.cns(val), Vreg{xmm0}};
   v << ret{RegSet{xmm0}};
+
   optimizeX64(vasm.unit(), test_abi);
-  emitX64(vasm.unit(), vasm.areas(), nullptr);
+  emitX64(unit, text, nullptr);
+
   union { double d; uint64_t c; } u;
   u.d = ((testfunc)code)();
   return u.c;

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -65,10 +65,8 @@ TransRec::TransRec(SrcKey                      _src,
   }
 
   auto& firstBlock = *region->blocks().front();
-  auto guardRange = firstBlock.typePreConditions().equal_range(
-      firstBlock.start());
-  for (; guardRange.first != guardRange.second; ++guardRange.first) {
-    guards.emplace_back(show(guardRange.first->second));
+  for (auto const& pred : firstBlock.typePreConditions()) {
+    guards.emplace_back(show(pred));
   }
 }
 

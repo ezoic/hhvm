@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,26 +16,37 @@
 
 #include "hphp/runtime/vm/jit/native-calls.h"
 
-#include "hphp/util/abi-cxx.h"
-#include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/base/comparisons.h"
+#include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/tv-conversions.h"
-#include "hphp/runtime/base/rds.h"
-#include "hphp/runtime/vm/jit/translator-runtime.h"
-#include "hphp/runtime/vm/jit/ir-opcode.h"
+#include "hphp/runtime/vm/runtime.h"
+
 #include "hphp/runtime/vm/jit/arg-group.h"
+#include "hphp/runtime/vm/jit/ir-opcode.h"
+#include "hphp/runtime/vm/jit/irlower.h"
+#include "hphp/runtime/vm/jit/translator-runtime.h"
+
+#include "hphp/runtime/ext/array/ext_array.h"
 #include "hphp/runtime/ext/asio/asio-blockable.h"
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_static-wait-handle.h"
-#include "hphp/runtime/ext/array/ext_array.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 
-namespace HPHP { namespace jit { namespace NativeCalls {
+#include "hphp/util/abi-cxx.h"
+
+namespace HPHP { namespace jit {
+
+///////////////////////////////////////////////////////////////////////////////
+
+namespace NativeCalls {
+
+///////////////////////////////////////////////////////////////////////////////
 
 namespace {
 
-constexpr SyncOptions SNone = SyncOptions::kNoSyncPoint;
-constexpr SyncOptions SSync = SyncOptions::kSyncPoint;
+constexpr irlower::SyncOptions SNone = irlower::SyncOptions::None;
+constexpr irlower::SyncOptions SSync = irlower::SyncOptions::Sync;
 
 constexpr DestType DSSA  = DestType::SSA;
 constexpr DestType DTV   = DestType::TV;
@@ -58,6 +69,16 @@ auto constexpr TV       = ArgType::TV;
 using IFaceSupportFn = bool (*)(const StringData*);
 
 using StrCmpFn = bool (*)(const StringData*, const StringData*);
+using ObjCmpFn = bool (*)(const ObjectData*, const ObjectData*);
+using ArrCmpFn = bool (*)(const ArrayData*, const ArrayData*);
+using ResCmpFn = bool (*)(const ResourceHdr*, const ResourceHdr*);
+using StrIntCmpFn = bool (*)(const StringData*, int64_t);
+
+using StrCmpFnInt = int64_t (*)(const StringData*, const StringData*);
+using ObjCmpFnInt = int64_t (*)(const ObjectData*, const ObjectData*);
+using ArrCmpFnInt = int64_t (*)(const ArrayData*, const ArrayData*);
+using ResCmpFnInt = int64_t (*)(const ResourceHdr*, const ResourceHdr*);
+using StrIntCmpFnInt = int64_t (*)(const StringData*, int64_t);
 
 }
 
@@ -116,19 +137,23 @@ static CallMap s_callMap {
 
     {ConvArrToDbl,       convArrToDblHelper, DSSA, SNone,
                            {{SSA, 0}}},
-    {ConvObjToDbl,       convCellToDblHelper, DSSA, SSync,
-                           {{TV, 0}}},
+    {ConvObjToDbl,       convObjToDblHelper, DSSA, SSync,
+                           {{SSA, 0}}},
     {ConvStrToDbl,       convStrToDblHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvCellToDbl,       convCellToDblHelper, DSSA, SSync,
+    {ConvResToDbl,       convResToDblHelper, DSSA, SNone,
+                           {{SSA, 0}}},
+    {ConvCellToDbl,      convCellToDblHelper, DSSA, SSync,
                            {{TV, 0}}},
 
     {ConvArrToInt,       convArrToIntHelper, DSSA, SNone,
                            {{SSA, 0}}},
-    {ConvObjToInt,       cellToInt, DSSA, SSync,
-                           {{TV, 0}}},
+    {ConvObjToInt,       &ObjectData::toInt64, DSSA, SSync,
+                           {{SSA, 0}}},
     {ConvStrToInt,       &StringData::toInt64, DSSA, SNone,
                            {{SSA, 0}, immed(10)}},
+    {ConvResToInt,       &ResourceHdr::getId, DSSA, SNone,
+                           {{SSA, 0}}},
     {ConvCellToInt,      cellToInt, DSSA, SSync,
                            {{TV, 0}}},
 
@@ -234,6 +259,10 @@ static CallMap s_callMap {
                           {{TV, 0}, {TV, 1}, {TV, 2}}},
     {MapIdx,             mapIdx, DTV, SSync,
                           {{SSA, 0}, {SSA, 1}, {TV, 2}}},
+    {ThrowInvalidOperation, throw_invalid_operation_exception,
+                          DNone, SSync, {{SSA, 0}}},
+    {HasToString,        &ObjectData::hasToString, DSSA, SSync,
+                          {{SSA, 0}}},
 
     /* Type specialized comparison operators */
     {GtStr,              static_cast<StrCmpFn>(more), DSSA, SSync,
@@ -251,6 +280,64 @@ static CallMap s_callMap {
     {SameStr,            static_cast<StrCmpFn>(same), DSSA, SSync,
                           {{SSA, 0}, {SSA, 1}}},
     {NSameStr,           static_cast<StrCmpFn>(nsame), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {CmpStr,             static_cast<StrCmpFnInt>(compare), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GtStrInt,           static_cast<StrIntCmpFn>(more), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GteStrInt,          static_cast<StrIntCmpFn>(moreEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LtStrInt,           static_cast<StrIntCmpFn>(less), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LteStrInt,          static_cast<StrIntCmpFn>(lessEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {EqStrInt,           static_cast<StrIntCmpFn>(equal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {NeqStrInt,          static_cast<StrIntCmpFn>(nequal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {CmpStrInt,          static_cast<StrIntCmpFnInt>(compare), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GtObj,              static_cast<ObjCmpFn>(more), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GteObj,             static_cast<ObjCmpFn>(moreEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LtObj,              static_cast<ObjCmpFn>(less), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LteObj,             static_cast<ObjCmpFn>(lessEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {EqObj,              static_cast<ObjCmpFn>(equal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {NeqObj,             static_cast<ObjCmpFn>(nequal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {CmpObj,             static_cast<ObjCmpFnInt>(compare), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GtArr,              static_cast<ArrCmpFn>(more), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GteArr,             static_cast<ArrCmpFn>(moreEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LtArr,              static_cast<ArrCmpFn>(less), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LteArr,             static_cast<ArrCmpFn>(lessEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {EqArr,              static_cast<ArrCmpFn>(equal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {NeqArr,             static_cast<ArrCmpFn>(nequal), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {SameArr,            static_cast<ArrCmpFn>(same), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {NSameArr,           static_cast<ArrCmpFn>(nsame), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {CmpArr,             static_cast<ArrCmpFnInt>(compare), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GtRes,              static_cast<ResCmpFn>(more), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {GteRes,             static_cast<ResCmpFn>(moreEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LtRes,              static_cast<ResCmpFn>(less), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {LteRes,             static_cast<ResCmpFn>(lessEqual), DSSA, SSync,
+                          {{SSA, 0}, {SSA, 1}}},
+    {CmpRes,             static_cast<ResCmpFnInt>(compare), DSSA, SSync,
                           {{SSA, 0}, {SSA, 1}}},
 
     /* Static prop helpers */
@@ -300,8 +387,8 @@ static CallMap s_callMap {
     {SetNewElemArray, setNewElemArray, DNone, SSync, {{SSA, 0}, {TV, 1}}},
     {BindNewElem, bindNewElemIR, DNone, SSync,
                  {{SSA, 0}, {SSA, 1}, {SSA, 2}}},
-    {StringGet, MInstrHelpers::stringGetI, DSSA, SSync,
-                 {{SSA, 0}, {SSA, 1}}},
+    {StringGet, MInstrHelpers::stringGetI, DSSA, SSync, {{SSA, 0}, {SSA, 1}}},
+
     {PairIsset, MInstrHelpers::pairIsset, DSSA, SSync, {{SSA, 0}, {SSA, 1}}},
     {VectorIsset, MInstrHelpers::vectorIsset, DSSA, SSync,
                   {{SSA, 0}, {SSA, 1}}},
@@ -365,7 +452,11 @@ const CallInfo& CallMap::info(Opcode op) {
   return it->second;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 } // NativeCalls
+
+///////////////////////////////////////////////////////////////////////////////
 
 using namespace NativeCalls;
 ArgGroup toArgGroup(const CallInfo& info,
@@ -391,4 +482,6 @@ ArgGroup toArgGroup(const CallInfo& info,
   return argGroup;
 }
 
-} }
+///////////////////////////////////////////////////////////////////////////////
+
+}}

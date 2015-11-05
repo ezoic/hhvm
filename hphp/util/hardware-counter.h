@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,8 @@
 #define incl_HPHP_UTIL_HARDWARE_COUNTER_H_
 
 #include "hphp/util/thread-local.h"
-#include "hphp/util/slice.h"
+
+#include <folly/Range.h>
 
 #include <cstdint>
 #include <vector>
@@ -49,7 +50,7 @@ public:
   static int64_t GetInstructionCount();
   static int64_t GetLoadCount();
   static int64_t GetStoreCount();
-  static bool SetPerfEvents(const StringSlice& events);
+  static bool SetPerfEvents(folly::StringPiece events);
   static void IncInstructionCount(int64_t amount);
   static void IncLoadCount(int64_t amount);
   static void IncStoreCount(int64_t amount);
@@ -67,7 +68,7 @@ private:
   int64_t getStoreCount();
   bool eventExists(const char* event);
   bool addPerfEvent(const char* event);
-  bool setPerfEvents(const StringSlice& events);
+  bool setPerfEvents(folly::StringPiece events);
   void getPerfEvents(PerfEventCallback f, void* data);
   void clearPerfEvents();
 
@@ -93,7 +94,7 @@ public:
   static int64_t GetInstructionCount() { return 0; }
   static int64_t GetLoadCount() { return 0; }
   static int64_t GetStoreCount() { return 0; }
-  static bool SetPerfEvents(const StringSlice& events) { return false; }
+  static bool SetPerfEvents(folly::StringPiece events) { return false; }
   static void IncInstructionCount(int64_t amount) {}
   static void IncLoadCount(int64_t amount) {}
   static void IncStoreCount(int64_t amount) {}

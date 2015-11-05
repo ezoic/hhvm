@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,7 +21,6 @@
 #include "hphp/compiler/analysis/analysis_result.h"
 #include "hphp/compiler/analysis/file_scope.h"
 #include "hphp/compiler/analysis/code_error.h"
-#include "hphp/compiler/analysis/type.h"
 #include "hphp/compiler/code_generator.h"
 #include "hphp/compiler/expression/modifier_expression.h"
 #include "hphp/compiler/analysis/function_scope.h"
@@ -40,13 +39,15 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 VariableTable::VariableTable(BlockScope &blockScope)
-    : SymbolTable(blockScope, false), m_attribute(0), m_nextParam(0),
+    : SymbolTable(blockScope), m_attribute(0), m_nextParam(0),
       m_hasGlobal(false), m_hasStatic(false),
       m_hasPrivate(false), m_hasNonStaticPrivate(false),
       m_forcedVariants(0) {
 }
 
-void VariableTable::getLocalVariableNames(vector<string> &syms) const {
+void VariableTable::getLocalVariableNames(
+  std::vector<std::string>& syms
+) const {
   FunctionScopeRawPtr fs = getScopePtr()->getContainingFunction();
   bool dollarThisIsSpecial = fs->getContainingClass() ||
                              fs->inPseudoMain() ||
@@ -58,7 +59,7 @@ void VariableTable::getLocalVariableNames(vector<string> &syms) const {
 
   bool hadThisSym = false;
   for (unsigned int i = 0; i < m_symbolVec.size(); i++) {
-    const string& name = m_symbolVec[i]->getName();
+    auto const& name = m_symbolVec[i]->getName();
     if (name == "this" && dollarThisIsSpecial) {
       /*
        * The "this" variable in methods, pseudo-main, or closures is
@@ -81,7 +82,7 @@ void VariableTable::getLocalVariableNames(vector<string> &syms) const {
   }
 }
 
-void VariableTable::getNames(std::set<string> &names,
+void VariableTable::getNames(std::set<std::string> &names,
                              bool collectPrivate /* = true */) const {
   for (unsigned int i = 0; i < m_symbolVec.size(); i++) {
     if (collectPrivate || !m_symbolVec[i]->isPrivate()) {
@@ -90,72 +91,72 @@ void VariableTable::getNames(std::set<string> &names,
   }
 }
 
-bool VariableTable::isParameter(const string &name) const {
+bool VariableTable::isParameter(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isParameter();
 }
 
-bool VariableTable::isPublic(const string &name) const {
+bool VariableTable::isPublic(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isPublic();
 }
 
-bool VariableTable::isProtected(const string &name) const {
+bool VariableTable::isProtected(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isProtected();
 }
 
-bool VariableTable::isPrivate(const string &name) const {
+bool VariableTable::isPrivate(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isPrivate();
 }
 
-bool VariableTable::isStatic(const string &name) const {
+bool VariableTable::isStatic(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isStatic();
 }
 
-bool VariableTable::isGlobal(const string &name) const {
+bool VariableTable::isGlobal(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isGlobal();
 }
 
-bool VariableTable::isRedeclared(const string &name) const {
+bool VariableTable::isRedeclared(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isRedeclared();
 }
 
-bool VariableTable::isLocalGlobal(const string &name) const {
+bool VariableTable::isLocalGlobal(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isLocalGlobal();
 }
 
-bool VariableTable::isNestedStatic(const string &name) const {
+bool VariableTable::isNestedStatic(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isNestedStatic();
 }
 
-bool VariableTable::isLvalParam(const string &name) const {
+bool VariableTable::isLvalParam(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isLvalParam();
 }
 
-bool VariableTable::isUsed(const string &name) const {
+bool VariableTable::isUsed(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isUsed();
 }
 
-bool VariableTable::isNeeded(const string &name) const {
+bool VariableTable::isNeeded(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isNeeded();
 }
 
-bool VariableTable::isSuperGlobal(const string &name) const {
+bool VariableTable::isSuperGlobal(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return sym && sym->isSuperGlobal();
 }
 
-bool VariableTable::isLocal(const string &name) const {
+bool VariableTable::isLocal(const std::string &name) const {
   return isLocal(getSymbol(name));
 }
 
@@ -174,7 +175,7 @@ bool VariableTable::isLocal(const Symbol *sym) const {
   return false;
 }
 
-bool VariableTable::needLocalCopy(const string &name) const {
+bool VariableTable::needLocalCopy(const std::string &name) const {
   return needLocalCopy(getSymbol(name));
 }
 
@@ -189,20 +190,20 @@ bool VariableTable::needLocalCopy(const Symbol *sym) const {
      getAttribute(ContainsUnset));
 }
 
-bool VariableTable::isInherited(const string &name) const {
+bool VariableTable::isInherited(const std::string &name) const {
   const Symbol *sym = getSymbol(name);
   return !sym ||
     (!sym->isGlobal() && !sym->isSystem() && !sym->getDeclaration());
 }
 
-ConstructPtr VariableTable::getStaticInitVal(string varName) {
+ConstructPtr VariableTable::getStaticInitVal(std::string varName) {
   if (Symbol *sym = getSymbol(varName)) {
     return sym->getStaticInitVal();
   }
   return ConstructPtr();
 }
 
-bool VariableTable::setStaticInitVal(string varName,
+bool VariableTable::setStaticInitVal(std::string varName,
                                      ConstructPtr value) {
   Symbol *sym = addSymbol(varName);
   bool exists = (sym->getStaticInitVal() != nullptr);
@@ -210,14 +211,14 @@ bool VariableTable::setStaticInitVal(string varName,
   return exists;
 }
 
-ConstructPtr VariableTable::getClassInitVal(string varName) {
+ConstructPtr VariableTable::getClassInitVal(std::string varName) {
   if (Symbol *sym = getSymbol(varName)) {
     return sym->getClassInitVal();
   }
   return ConstructPtr();
 }
 
-bool VariableTable::setClassInitVal(string varName, ConstructPtr value) {
+bool VariableTable::setClassInitVal(std::string varName, ConstructPtr value) {
   Symbol *sym = addSymbol(varName);
   bool exists = (sym->getClassInitVal() != nullptr);
   sym->setClassInitVal(value);
@@ -226,36 +227,24 @@ bool VariableTable::setClassInitVal(string varName, ConstructPtr value) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-TypePtr VariableTable::addParam(const string &name, TypePtr type,
-                                AnalysisResultConstPtr ar,
-                                ConstructPtr construct) {
+void VariableTable::addParam(const std::string &name,
+                             AnalysisResultConstPtr ar,
+                             ConstructPtr construct) {
   Symbol *sym = addDeclaredSymbol(name, construct);
   if (!sym->isParameter()) {
     sym->setParameterIndex(m_nextParam++);
   }
-  return type ?
-    add(sym, type, false, ar, construct, ModifierExpressionPtr()) : type;
+  add(sym, false, ar, construct, ModifierExpressionPtr());
 }
 
-TypePtr VariableTable::addParamLike(const string &name, TypePtr type,
-                                    AnalysisResultPtr ar,
-                                    ConstructPtr construct, bool firstPass) {
-  TypePtr ret = type;
+void VariableTable::addParamLike(const std::string &name,
+                                 AnalysisResultPtr ar,
+                                 ConstructPtr construct, bool firstPass) {
   if (firstPass) {
-    ret = add(name, ret, false, ar,
-              construct, ModifierExpressionPtr());
+    add(name, false, ar, construct, ModifierExpressionPtr());
   } else {
-    ret = checkVariable(name, ret, true, ar, construct);
-    if (ret->is(Type::KindOfSome)) {
-      // This is probably too conservative. The problem is that
-      // a function never called will have parameter types of Any.
-      // Functions that it calls won't be able to accept variant unless
-      // it is forced here.
-      forceVariant(ar, name, VariableTable::AnyVars);
-      ret = Type::Variant;
-    }
+    checkVariable(name, ar, construct);
   }
-  return ret;
 }
 
 void VariableTable::addStaticVariable(Symbol *sym,
@@ -284,7 +273,7 @@ void VariableTable::addStaticVariable(Symbol *sym,
 void VariableTable::cleanupForError(AnalysisResultConstPtr ar) {
 }
 
-bool VariableTable::markOverride(AnalysisResultPtr ar, const string &name) {
+bool VariableTable::markOverride(AnalysisResultPtr ar, const std::string &name) {
   Symbol *sym = getSymbol(name);
   assert(sym && sym->isPresent());
   bool ret = false;
@@ -312,42 +301,31 @@ bool VariableTable::markOverride(AnalysisResultPtr ar, const string &name) {
   return ret;
 }
 
-TypePtr VariableTable::add(const string &name, TypePtr type,
-                           bool implicit, AnalysisResultConstPtr ar,
-                           ConstructPtr construct,
-                           ModifierExpressionPtr modifiers) {
-  return add(addSymbol(name), type, implicit, ar,
-             construct, modifiers);
+void VariableTable::add(const std::string &name,
+                        bool implicit, AnalysisResultConstPtr ar,
+                        ConstructPtr construct,
+                        ModifierExpressionPtr modifiers) {
+  add(addSymbol(name), implicit, ar, construct, modifiers);
 }
 
-TypePtr VariableTable::add(Symbol *sym, TypePtr type,
-                           bool implicit, AnalysisResultConstPtr ar,
-                           ConstructPtr construct,
-                           ModifierExpressionPtr modifiers) {
+void VariableTable::add(Symbol *sym,
+                        bool implicit, AnalysisResultConstPtr ar,
+                        ConstructPtr construct,
+                        ModifierExpressionPtr modifiers) {
   if (getAttribute(InsideStaticStatement)) {
     addStaticVariable(sym, ar);
-    if (ClassScope::NeedStaticArray(getClassScope(), getFunctionScope())) {
-      forceVariant(ar, sym->getName(), AnyVars);
-    }
   } else if (getAttribute(InsideGlobalStatement)) {
     sym->setGlobal();
     m_hasGlobal = true;
     AnalysisResult::Locker lock(ar);
     if (!isGlobalTable(ar)) {
-      lock->getVariables()->add(sym->getName(), type, implicit,
+      lock->getVariables()->add(sym->getName(), implicit,
                                 ar, construct, modifiers);
-    }
-    assert(type->is(Type::KindOfSome) || type->is(Type::KindOfAny));
-    TypePtr varType = ar->getVariables()->getFinalType(sym->getName());
-    if (varType) {
-      type = varType;
-    } else {
-      lock->getVariables()->setType(ar, sym->getName(), type, true);
     }
   } else if (!sym->isHidden() && isPseudoMainTable()) {
     // A variable used in a pseudomain
     // only need to do this once... should mark the sym.
-    ar->lock()->getVariables()->add(sym->getName(), type, implicit, ar,
+    ar->lock()->getVariables()->add(sym->getName(), implicit, ar,
                                     construct, modifiers);
   }
 
@@ -366,7 +344,6 @@ TypePtr VariableTable::add(Symbol *sym, TypePtr type,
     }
   }
 
-  type = setType(ar, sym, type, true);
   if (sym->isParameter()) {
     auto p = dynamic_pointer_cast<ParameterExpression>(construct);
     if (p) {
@@ -381,38 +358,31 @@ TypePtr VariableTable::add(Symbol *sym, TypePtr type,
       sym->setValue(construct);
     }
   }
-  return type;
 }
 
-TypePtr VariableTable::checkVariable(const string &name, TypePtr type,
-                                     bool coerce, AnalysisResultConstPtr ar,
-                                     ConstructPtr construct) {
-  return checkVariable(addSymbol(name), type,
-                       coerce, ar, construct);
+void VariableTable::checkVariable(const std::string &name,
+                                  AnalysisResultConstPtr ar,
+                                  ConstructPtr construct) {
+  checkVariable(addSymbol(name), ar, construct);
 }
 
-TypePtr VariableTable::checkVariable(Symbol *sym, TypePtr type,
-                                     bool coerce, AnalysisResultConstPtr ar,
-                                     ConstructPtr construct) {
+void VariableTable::checkVariable(Symbol *sym,
+                                  AnalysisResultConstPtr ar,
+                                  ConstructPtr construct) {
 
   // Variable used in pseudomain
   if (!sym->isHidden() && isPseudoMainTable()) {
     // only need to do this once... should mark the sym.
-    ar->lock()->getVariables()->checkVariable(sym->getName(), type,
-                                              coerce, ar, construct);
+    ar->lock()->getVariables()->checkVariable(sym->getName(), ar, construct);
   }
 
   if (!sym->declarationSet()) {
-    type = setType(ar, sym, type, coerce);
     sym->setDeclaration(construct);
-    return type;
   }
-
-  return setType(ar, sym, type, coerce);
 }
 
 Symbol *VariableTable::findProperty(ClassScopePtr &cls,
-                                    const string &name,
+                                    const std::string &name,
                                     AnalysisResultConstPtr ar) {
   Symbol *sym = getSymbol(name);
   if (sym) {
@@ -437,7 +407,7 @@ Symbol *VariableTable::findProperty(ClassScopePtr &cls,
   return sym;
 }
 
-bool VariableTable::checkRedeclared(const string &name,
+bool VariableTable::checkRedeclared(const std::string &name,
                                     Statement::KindOf kindOf)
 {
   Symbol *sym = getSymbol(name);
@@ -461,23 +431,23 @@ bool VariableTable::checkRedeclared(const string &name,
   }
 }
 
-void VariableTable::addLocalGlobal(const string &name) {
+void VariableTable::addLocalGlobal(const std::string &name) {
   addSymbol(name)->setLocalGlobal();
 }
 
-void VariableTable::addNestedStatic(const string &name) {
+void VariableTable::addNestedStatic(const std::string &name) {
   addSymbol(name)->setNestedStatic();
 }
 
-void VariableTable::addLvalParam(const string &name) {
+void VariableTable::addLvalParam(const std::string &name) {
   addSymbol(name)->setLvalParam();
 }
 
-void VariableTable::addUsed(const string &name) {
+void VariableTable::addUsed(const std::string &name) {
   addSymbol(name)->setUsed();
 }
 
-void VariableTable::addNeeded(const string &name) {
+void VariableTable::addNeeded(const std::string &name) {
   addSymbol(name)->setNeeded();
 }
 
@@ -493,118 +463,28 @@ bool VariableTable::checkUnused(Symbol *sym) {
 }
 
 void VariableTable::clearUsed() {
-  typedef std::pair<const string,Symbol> symPair;
+  typedef std::pair<const std::string,Symbol> symPair;
   bool ps = isPseudoMainTable();
   for (symPair &sym: m_symbolMap) {
     if (!ps || sym.second.isHidden()) {
       sym.second.clearUsed();
       sym.second.clearNeeded();
-      sym.second.clearReferenced();
       sym.second.clearGlobal();
       sym.second.clearReseated();
-    } else {
-      sym.second.setReferenced();
     }
   }
 }
 
-void VariableTable::forceVariants(AnalysisResultConstPtr ar, int varClass,
-                                  bool recur /* = true */) {
-  int mask = varClass & ~m_forcedVariants;
-  if (mask) {
-    if (!m_hasPrivate) mask &= ~AnyPrivateVars;
-    if (!m_hasStatic) mask &= ~AnyStaticVars;
-
-    if (mask) {
-      for (unsigned int i = 0; i < m_symbolVec.size(); i++) {
-        Symbol *sym = m_symbolVec[i];
-        if (!sym->isHidden() && sym->declarationSet() &&
-            mask & GetVarClassMaskForSym(sym)) {
-          setType(ar, sym, Type::Variant, true);
-          sym->setIndirectAltered();
-        }
-      }
-    }
-    m_forcedVariants |= varClass;
-
-    if (recur) {
-      ClassScopePtr parent = m_blockScope.getParentScope(ar);
-      if (parent && !parent->isRedeclaring()) {
-        parent->getVariables()->forceVariants(ar, varClass & ~AnyPrivateVars);
-      }
-    }
-  }
-}
-
-void VariableTable::forceVariant(AnalysisResultConstPtr ar,
-                                 const string &name, int varClass) {
-  int mask = varClass & ~m_forcedVariants;
-  if (!mask) return;
-  if (!m_hasPrivate) mask &= ~AnyPrivateVars;
-  if (!m_hasStatic) mask &= ~AnyStaticVars;
-  if (!mask) return;
-  if (Symbol *sym = getSymbol(name)) {
-    if (!sym->isHidden() && sym->declarationSet() &&
-        mask & GetVarClassMaskForSym(sym)) {
-      setType(ar, sym, Type::Variant, true);
-      sym->setIndirectAltered();
-    }
-  }
-}
-
-TypePtr VariableTable::setType(AnalysisResultConstPtr ar,
-                               const std::string &name,
-                               TypePtr type, bool coerce) {
-  return setType(ar, addSymbol(name), type, coerce);
-}
-
-TypePtr VariableTable::setType(AnalysisResultConstPtr ar, Symbol *sym,
-                               TypePtr type, bool coerce) {
-  bool force_coerce = coerce;
-  int mask = GetVarClassMaskForSym(sym);
-  if (m_forcedVariants & mask && !sym->isHidden()) {
-    type = Type::Variant;
-    force_coerce = true;
-  }
-  TypePtr ret = SymbolTable::setType(ar, sym, type, force_coerce);
-  if (!ret) return ret;
-
-  if (sym->isGlobal() && !isGlobalTable(ar)) {
-    ar->lock()->getVariables()->setType(ar, sym->getName(), type, coerce);
-  }
-
-  if (coerce) {
-    if (sym->isParameter()) {
-      FunctionScope *func = dynamic_cast<FunctionScope *>(&m_blockScope);
-      assert(func);
-      TypePtr paramType = func->setParamType(ar,
-                                             sym->getParameterIndex(), type);
-      if (!Type::SameType(paramType, type)) {
-        return setType(ar, sym, paramType, true); // recursively
-      }
-    }
-  }
-  return ret;
-}
-
-void VariableTable::dumpStats(std::map<string, int> &typeCounts) {
-  for (unsigned int i = 0; i < m_symbolVec.size(); i++) {
-    Symbol *sym = m_symbolVec[i];
-    if (sym->isGlobal()) continue;
-    typeCounts[sym->getFinalType()->toString()]++;
-  }
-}
-
-void VariableTable::addSuperGlobal(const string &name) {
+void VariableTable::addSuperGlobal(const std::string &name) {
   addSymbol(name)->setSuperGlobal();
 }
 
-bool VariableTable::isConvertibleSuperGlobal(const string &name) const {
+bool VariableTable::isConvertibleSuperGlobal(const std::string &name) const {
   return !getAttribute(ContainsDynamicVariable) && isSuperGlobal(name);
 }
 
 ClassScopePtr VariableTable::findParent(AnalysisResultConstPtr ar,
-                                        const string &name,
+                                        const std::string &name,
                                         const Symbol *&sym) const {
   sym = nullptr;
   for (ClassScopePtr parent = m_blockScope.getParentScope(ar);
@@ -635,8 +515,8 @@ bool VariableTable::hasNonStaticPrivate() const {
 
 void VariableTable::outputPHP(CodeGenerator &cg, AnalysisResultPtr ar) {
   if (Option::ConvertSuperGlobals && !getAttribute(ContainsDynamicVariable)) {
-    std::set<string> convertibles;
-    typedef std::pair<const string,Symbol> symPair;
+    std::set<std::string> convertibles;
+    typedef std::pair<const std::string,Symbol> symPair;
     for (symPair &sym: m_symbolMap) {
       if (sym.second.isSuperGlobal() && !sym.second.declarationSet()) {
         convertibles.insert(sym.second.getName());
@@ -644,7 +524,7 @@ void VariableTable::outputPHP(CodeGenerator &cg, AnalysisResultPtr ar) {
     }
     if (!convertibles.empty()) {
       cg_printf("/* converted super globals */ global ");
-      for (std::set<string>::const_iterator iter = convertibles.begin();
+      for (auto iter = convertibles.begin();
            iter != convertibles.end(); ++iter) {
         if (iter != convertibles.begin()) cg_printf(",");
         cg_printf("$%s", iter->c_str());

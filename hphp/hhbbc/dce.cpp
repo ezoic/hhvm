@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -282,12 +282,12 @@ std::string show(const InstrIdSet& set) {
     ;
 }
 
-std::string show(const UseInfo& ui) {
+std::string DEBUG_ONLY show(const UseInfo& ui) {
   return folly::format("{}@{}", show(ui.first), show(ui.second)).str();
 }
 
-std::string bits_string(borrowed_ptr<const php::Func> func,
-                        std::bitset<kMaxTrackedLocals> locs) {
+std::string DEBUG_ONLY bits_string(borrowed_ptr<const php::Func> func,
+                                   std::bitset<kMaxTrackedLocals> locs) {
   std::ostringstream out;
   if (func->locals.size() < kMaxTrackedLocals) {
     for (auto i = func->locals.size(); i-- > 0;) {

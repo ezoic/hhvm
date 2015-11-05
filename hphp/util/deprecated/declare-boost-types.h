@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,22 +38,21 @@
 
 #define DECLARE_BOOST_TYPES(classname)                                  \
   class classname;                                                      \
-  typedef std::shared_ptr<classname> classname ## Ptr;                  \
-  typedef hphp_raw_ptr<classname> classname ## RawPtr;                  \
-  typedef std::weak_ptr<classname> classname ## WeakPtr;                \
-  typedef std::shared_ptr<const classname> classname ## ConstPtr;       \
-  typedef std::vector<classname ## Ptr> classname ## PtrVec;            \
-  typedef std::set<classname ## Ptr> classname ## PtrSet;               \
-  typedef std::list<classname ## Ptr> classname ## PtrList;
+                                                                        \
+  using classname ## Ptr      = std::shared_ptr<classname>;             \
+  using classname ## RawPtr   = hphp_raw_ptr<classname>;                \
+  using classname ## ConstPtr = std::shared_ptr<const classname>;       \
 
-#define DECLARE_EXTENDED_BOOST_TYPES(classname)                 \
-  DECLARE_BOOST_TYPES(classname)                                \
-  typedef hphp_string_hash_map<classname ## Ptr, classname>     \
-    StringTo ## classname ## PtrMap;                            \
-  typedef hphp_string_hash_map<classname ## PtrVec, classname>  \
-    StringTo ## classname ## PtrVecMap;                         \
-  typedef hphp_string_hash_map<classname ## PtrSet, classname>  \
-    StringTo ## classname ## PtrSetMap;
+#define DECLARE_EXTENDED_BOOST_TYPES(classname)                     \
+  DECLARE_BOOST_TYPES(classname)                                    \
+  using StringTo ## classname ## PtrMap    = hphp_string_hash_map<  \
+    classname ## Ptr,                                               \
+    classname                                                       \
+  >;                                                                \
+  using StringTo ## classname ## PtrVecMap = hphp_string_hash_map<  \
+    std::vector<classname ## Ptr>,                                  \
+    classname                                                       \
+  >;                                                                \
 
 //////////////////////////////////////////////////////////////////////
 

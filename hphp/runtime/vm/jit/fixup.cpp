@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -13,40 +13,42 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
 #include "hphp/runtime/vm/jit/fixup.h"
 
-#include "hphp/vixl/a64/simulator-a64.h"
-
 #include "hphp/runtime/vm/vm-regs.h"
+
 #include "hphp/runtime/vm/jit/abi-arm.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
+
 #include "hphp/util/data-block.h"
+#include "hphp/vixl/a64/simulator-a64.h"
 
 namespace HPHP { namespace jit {
 
 //////////////////////////////////////////////////////////////////////
 
-bool FixupMap::getFrameRegs(const ActRec* ar,
-                            const ActRec* prevAr,
-                            VMRegs* outVMRegs) const {
+bool FixupMap::getFrameRegs(const ActRec* ar, VMRegs* outVMRegs) const {
   CTCA tca = (CTCA)ar->m_savedRip;
+
+  auto ent = m_fixups.find(tca);
+  if (!ent) return false;
+
+  // Note: If indirect fixups happen frequently enough, we could just compare
+  // savedRip to be less than some threshold where stubs in a.code stop.
+  if (ent->isIndirect()) {
+    auto savedRIPAddr = reinterpret_cast<uintptr_t>(ar) +
+                        ent->indirect.returnIpDisp;
+    ent = m_fixups.find(*reinterpret_cast<CTCA*>(savedRIPAddr));
+    assertx(ent && !ent->isIndirect());
+  }
+
   // Non-obvious off-by-one fun: if the *return address* points into the TC,
   // then the frame we were running on in the TC is actually the previous
   // frame.
   ar = ar->m_sfp;
-  auto* ent = m_fixups.find(tca);
-  if (!ent) return false;
-  if (ent->isIndirect()) {
-    // Note: if indirect fixups happen frequently enough, we could
-    // just compare savedRip to be less than some threshold where
-    // stubs in a.code stop.
-    assertx(prevAr);
-    auto pRealRip = ent->indirect.returnIpDisp +
-      uintptr_t(prevAr->m_sfp);
-    ent = m_fixups.find(*reinterpret_cast<CTCA*>(pRealRip));
-    assertx(ent && !ent->isIndirect());
-  }
+
   regsFromActRec(tca, ar, ent->fixup, outVMRegs);
   return true;
 }
@@ -56,10 +58,10 @@ void FixupMap::fixupWork(ExecutionContext* ec, ActRec* rbp) const {
 
   TRACE(1, "fixup(begin):\n");
 
-  auto* nextRbp = rbp;
+  auto nextRbp = rbp;
   rbp = 0;
+
   do {
-    auto* prevRbp = rbp;
     rbp = nextRbp;
     assertx(rbp && "Missing fixup for native call");
     nextRbp = rbp->m_sfp;
@@ -69,7 +71,7 @@ void FixupMap::fixupWork(ExecutionContext* ec, ActRec* rbp) const {
       TRACE(2, "fixup checking vm frame %s\n",
                nextRbp->m_func->name()->data());
       VMRegs regs;
-      if (getFrameRegs(rbp, prevRbp, &regs)) {
+      if (getFrameRegs(rbp, &regs)) {
         TRACE(2, "fixup(end): func %s fp %p sp %p pc %p\n",
               regs.fp->m_func->name()->data(),
               regs.fp, regs.sp, regs.pc);
@@ -108,7 +110,8 @@ void FixupMap::fixupWorkSimulated(ExecutionContext* ec) const {
   // uniqueStub.
   for (int i = ec->m_activeSims.size() - 1; i >= 0; --i) {
     auto const* sim = ec->m_activeSims[i];
-    auto* rbp = reinterpret_cast<ActRec*>(sim->xreg(jit::arm::rVmFp.code()));
+    auto const fp = arm::x2a(arm::rvmfp());
+    auto* rbp = reinterpret_cast<ActRec*>(sim->xreg(fp.code()));
     auto tca = reinterpret_cast<TCA>(sim->pc());
     TRACE(2, "considering frame %p, %p\n", rbp, tca);
 

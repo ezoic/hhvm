@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -46,30 +46,26 @@ StatementPtr CaseStatement::clone() {
 
 bool CaseStatement::isLiteralInteger() const {
   if (!m_condition->is(Expression::KindOfScalarExpression)) return false;
-  ScalarExpressionPtr exp =
-    dynamic_pointer_cast<ScalarExpression>(m_condition);
-  return exp->isLiteralInteger();
+  return dynamic_pointer_cast<ScalarExpression>(m_condition)
+    ->isLiteralInteger();
 }
 
 bool CaseStatement::isLiteralString() const {
   if (!m_condition->is(Expression::KindOfScalarExpression)) return false;
-  ScalarExpressionPtr exp =
-    dynamic_pointer_cast<ScalarExpression>(m_condition);
-  return exp->isLiteralString();
+  return dynamic_pointer_cast<ScalarExpression>(m_condition)
+    ->isLiteralString();
 }
 
 int64_t CaseStatement::getLiteralInteger() const {
   assert(m_condition->is(Expression::KindOfScalarExpression));
-  ScalarExpressionPtr exp =
-    dynamic_pointer_cast<ScalarExpression>(m_condition);
-  return exp->getLiteralInteger();
+  return dynamic_pointer_cast<ScalarExpression>(m_condition)
+    ->getLiteralInteger();
 }
 
-string CaseStatement::getLiteralString() const {
+std::string CaseStatement::getLiteralString() const {
   assert(m_condition->is(Expression::KindOfScalarExpression));
-  ScalarExpressionPtr exp =
-    dynamic_pointer_cast<ScalarExpression>(m_condition);
-  return exp->getLiteralString();
+  return dynamic_pointer_cast<ScalarExpression>(m_condition)
+    ->getLiteralString();
 }
 
 void CaseStatement::analyzeProgram(AnalysisResultPtr ar) {
@@ -106,23 +102,6 @@ void CaseStatement::setNthKid(int n, ConstructPtr cp) {
       assert(false);
       break;
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void CaseStatement::outputCodeModel(CodeGenerator &cg) {
-  auto numProps = 2;
-  if (m_condition != nullptr) numProps++;
-  cg.printObjectHeader("CaseStatement", numProps);
-  if (m_condition != nullptr) {
-    cg.printPropertyHeader("condition");
-    m_condition->outputCodeModel(cg);
-  }
-  cg.printPropertyHeader("block");
-  cg.printAsBlock(m_stmt);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

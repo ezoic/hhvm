@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,20 +21,27 @@
 
 namespace HPHP {
 
-//////////////////////////////////////////////////////////////////////
-
-APCHandle* APCTypedValue::MakeSharedArray(ArrayData* array) {
-  assert(apcExtension::UseUncounted);
-  APCTypedValue* value;
-  if (array->isPacked()) {
-    value = new APCTypedValue(MixedArray::MakeUncountedPacked(array));
-  } else if (array->isStruct()) {
-    value = new APCTypedValue(StructArray::MakeUncounted(array));
-  } else {
-    value = new APCTypedValue(MixedArray::MakeUncounted(array));
-  }
-  return value->getHandle();
+APCTypedValue* APCTypedValue::tvUninit() {
+  static APCTypedValue* value = new APCTypedValue(KindOfUninit);
+  return value;
 }
+
+APCTypedValue* APCTypedValue::tvNull() {
+  static APCTypedValue* value = new APCTypedValue(KindOfNull);
+  return value;
+}
+
+APCTypedValue* APCTypedValue::tvTrue() {
+  static auto value = new APCTypedValue(APCTypedValue::Bool{}, true);
+  return value;
+}
+
+APCTypedValue* APCTypedValue::tvFalse() {
+  static auto value = new APCTypedValue(APCTypedValue::Bool{}, false);
+  return value;
+}
+
+//////////////////////////////////////////////////////////////////////
 
 void APCTypedValue::deleteUncounted() {
   assert(m_handle.isUncounted());

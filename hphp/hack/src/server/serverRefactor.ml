@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,6 +7,8 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
+
+open Core
 
 type patch =
   | Insert of insert_patch
@@ -34,12 +36,12 @@ let go action genv env =
         ServerFindRefs.Function old_name, new_name in
   
   let refs = ServerFindRefs.get_refs_with_defs find_refs_action genv env in
-  let changes = List.fold_left begin fun acc x ->
+  let changes = List.fold_left refs ~f:begin fun acc x ->
     let replacement = {
       pos  = Pos.to_absolute (snd x);
       text = new_name;
     } in
     let patch = Replace replacement in
     patch :: acc
-  end [] refs in
+  end ~init:[] in
   changes

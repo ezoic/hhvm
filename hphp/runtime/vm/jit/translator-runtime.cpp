@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,11 +21,10 @@
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/zend-functions.h"
-#include "hphp/runtime/ext/ext_closure.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/closure/ext_closure.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 #include "hphp/runtime/ext/hh/ext_hh.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
-#include "hphp/runtime/vm/jit/mc-generator-internal.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/target-profile.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
@@ -73,9 +72,8 @@ namespace jit {
 //////////////////////////////////////////////////////////////////////
 
 ArrayData* addNewElemHelper(ArrayData* a, TypedValue value) {
-  ArrayData* r = a->append(tvAsCVarRef(&value), a->getCount() != 1);
+  ArrayData* r = a->append(tvAsCVarRef(&value), a->hasMultipleRefs());
   if (UNLIKELY(r != a)) {
-    r->incRefCount();
     decRefArr(a);
   }
   tvRefcountedDecRef(value);
@@ -89,7 +87,7 @@ ArrayData* addElemIntKeyHelper(ArrayData* ad,
   // set will decRef any old value that may have been overwritten
   // if appropriate
   ArrayData* retval = ad->set(key, tvAsCVarRef(&value),
-                              ad->hasMultipleRefs());
+                              ad->cowCheck());
   // TODO Task #1970153: It would be great if there were set()
   // methods that didn't bump up the refcount so that we didn't
   // have to decrement it here
@@ -101,7 +99,7 @@ ArrayData* addElemStringKeyHelper(ArrayData* ad,
                                   StringData* key,
                                   TypedValue value) {
   // this does not re-enter
-  bool copy = ad->hasMultipleRefs();
+  bool copy = ad->cowCheck();
   // set will decRef any old value that may have been overwritten
   // if appropriate
   int64_t intkey;
@@ -147,8 +145,7 @@ void setNewElemArray(TypedValue* base, Cell val) {
 
 TypedValue setOpElem(TypedValue* base, TypedValue key,
                      Cell val, MInstrState* mis, SetOpOp op) {
-  TypedValue* result =
-    HPHP::SetOpElem(mis->tvScratch, mis->tvRef, op, base, key, &val);
+  auto result = HPHP::SetOpElem(mis->tvRef, op, base, key, &val);
 
   Cell ret;
   cellDup(*tvToCell(result), ret);
@@ -162,16 +159,14 @@ TypedValue incDecElem(
   IncDecOp op
 ) {
   TypedValue result;
-  HPHP::IncDecElem<true>(mis->tvRef, op, base, key, result);
+  HPHP::IncDecElem(mis->tvRef, op, base, key, result);
   assertx(result.m_type != KindOfRef);
   return result;
 }
 
 void bindNewElemIR(TypedValue* base, RefData* val, MInstrState* mis) {
-  base = HPHP::NewElem<true>(mis->tvScratch, mis->tvRef, base);
-  if (!(base == &mis->tvScratch && base->m_type == KindOfUninit)) {
-    tvBindRef(val, base);
-  }
+  auto elem = HPHP::NewElem<true>(mis->tvRef, base);
+  tvBindRef(val, elem);
 }
 
 RefData* boxValue(TypedValue tv) {
@@ -211,12 +206,20 @@ ArrayData* convCellToArrHelper(TypedValue tv) {
   return tv.m_data.parr;
 }
 
+int64_t convObjToDblHelper(const ObjectData* o) {
+  return reinterpretDblAsInt(o->toDouble());
+}
+
 int64_t convArrToDblHelper(ArrayData* a) {
   return reinterpretDblAsInt(a->empty() ? 0 : 1);
 }
 
 int64_t convStrToDblHelper(const StringData* s) {
   return reinterpretDblAsInt(s->toDouble());
+}
+
+int64_t convResToDblHelper(const ResourceHdr* r) {
+  return reinterpretDblAsInt(r->getId());
 }
 
 int64_t convCellToDblHelper(TypedValue tv) {
@@ -250,17 +253,15 @@ StringData* convIntToStrHelper(int64_t i) {
 }
 
 StringData* convObjToStrHelper(ObjectData* o) {
-  auto s = o->invokeToString();
-  auto r = s.get();
-  if (!r->isStatic()) r->incRefCount();
-  return r;
+  // toString() returns a counted String; detach() it to move ownership
+  // of the count to the caller
+  return o->invokeToString().detach();
 }
 
-StringData* convResToStrHelper(ResourceData* o) {
-  auto s = o->o_toString();
-  auto r = s.get();
-  if (!r->isStatic()) r->incRefCount();
-  return r;
+StringData* convResToStrHelper(ResourceHdr* r) {
+  // toString() returns a counted String; detach() it to move ownership
+  // of the count to the caller
+  return r->data()->o_toString().detach();
 }
 
 TypedValue getMemoKeyHelper(TypedValue tv) {
@@ -505,7 +506,7 @@ bool ak_exist_string(ArrayData* arr, StringData* key) {
 
 bool ak_exist_string_obj(ObjectData* obj, StringData* key) {
   if (obj->isCollection()) {
-    return collections::contains(obj, key);
+    return collections::contains(obj, Variant{key});
   }
   auto arr = obj->toArray();
   return ak_exist_string_impl(arr.get(), key);
@@ -557,6 +558,7 @@ TypedValue arrayIdxIc(ArrayData* a, int64_t key, TypedValue def) {
 const StaticString s_idx("hh\\idx");
 
 TypedValue genericIdx(TypedValue obj, TypedValue key, TypedValue def) {
+  EagerVMRegAnchor _;
   static auto func = Unit::loadFunc(s_idx.get());
   assertx(func != nullptr);
   TypedValue args[] = {
@@ -683,7 +685,7 @@ void tv_release_generic(TypedValue* tv) {
   assertx(tv->m_type == KindOfString || tv->m_type == KindOfArray ||
          tv->m_type == KindOfObject || tv->m_type == KindOfResource ||
          tv->m_type == KindOfRef);
-  g_destructors[typeToDestrIndex(tv->m_type)](tv->m_data.pref);
+  g_destructors[typeToDestrIdx(tv->m_type)](tv->m_data.pref);
 }
 
 Cell lookupCnsHelper(const TypedValue* tv,
@@ -909,8 +911,8 @@ static void fpushCufHelperArraySlowPath(ArrayData* arr,
 ALWAYS_INLINE
 static bool strHasColon(StringData* sd) {
   auto const sl = sd->slice();
-  auto const e = sl.ptr + sl.len;
-  for (auto p = sl.ptr; p != e; ++p) {
+  auto const e = sl.end();
+  for (auto p = sl.begin(); p != e; ++p) {
     if (*p == ':') return true;
   }
   return false;
@@ -926,7 +928,7 @@ void fpushCufHelperArray(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
     auto const elem1 = tvToCell(PackedArray::NvGetInt(arr, 1));
 
     if (UNLIKELY(elem0->m_type != KindOfObject ||
-                 !IS_STRING_TYPE(elem1->m_type))) {
+                 !isStringType(elem1->m_type))) {
       return fpushCufHelperArraySlowPath(arr, preLiveAR, fp);
     }
 
@@ -1048,9 +1050,11 @@ Cell lookupClassConstantTv(TypedValue* cache,
 
 ObjectData* colAddNewElemCHelper(ObjectData* coll, TypedValue value) {
   collections::initElem(coll, &value);
-  // consume the input value. the collection setter either threw or created a
-  // reference to value, so we can use a cheaper decref.
-  tvRefcountedDecRefNZ(value);
+  // If we specialized this on Vector we could use a DecRefNZ here (since we
+  // could assume that initElem has incref'd the value).  Right now, HH\Set
+  // goes through this code path also, though, and it might fail to add the new
+  // element.
+  tvRefcountedDecRef(value);
   return coll;
 }
 
@@ -1236,14 +1240,14 @@ void throwSwitchMode() {
 
 namespace MInstrHelpers {
 
-StringData* stringGetI(StringData* str, uint64_t x) {
-  if (LIKELY(x < str->size())) {
-    return str->getChar(x);
+StringData* stringGetI(StringData* base, uint64_t x) {
+  if (LIKELY(x < base->size())) {
+    return base->getChar(x);
   }
   if (RuntimeOption::EnableHipHopSyntax) {
     raise_warning("Out of bounds");
   }
-  return s_empty.get();
+  return staticEmptyString();
 }
 
 uint64_t pairIsset(c_Pair* pair, int64_t index) {
@@ -1258,30 +1262,20 @@ uint64_t vectorIsset(c_Vector* vec, int64_t index) {
 
 void bindElemC(TypedValue* base, TypedValue key, RefData* val,
                MInstrState* mis) {
-  base = HPHP::ElemD<false, true>(mis->tvScratch, mis->tvRef, base, key);
-  if (!(base == &mis->tvScratch && base->m_type == KindOfUninit)) {
-    tvBindRef(val, base);
-  }
+  auto elem = HPHP::ElemD<false, true>(mis->tvRef, base, key);
+  tvBindRef(val, elem);
 }
 
 void setWithRefElemC(TypedValue* base, TypedValue keyTV, TypedValue val,
                      MInstrState* mis) {
   auto const keyC = tvToCell(&keyTV);
-  base = HPHP::ElemD<false, false>(mis->tvScratch, mis->tvRef, base, *keyC);
-  if (base != &mis->tvScratch) {
-    tvDup(val, *base);
-  } else {
-    assertx(base->m_type == KindOfUninit);
-  }
+  auto elem = HPHP::ElemD<false, false>(mis->tvRef, base, *keyC);
+  tvDup(val, *elem);
 }
 
 void setWithRefNewElem(TypedValue* base, TypedValue val, MInstrState* mis) {
-  base = NewElem<false>(mis->tvScratch, mis->tvRef, base);
-  if (base != &mis->tvScratch) {
-    tvDup(val, *base);
-  } else {
-    assertx(base->m_type == KindOfUninit);
-  }
+  auto elem = NewElem<false>(mis->tvRef, base);
+  tvDup(val, *elem);
 }
 
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -322,7 +322,7 @@ private:
   static constexpr size_t kPtrBoxShift  = kBoxShift + kPtrShift;
 
 public:
-  enum TypedBits {
+  enum TypedBits : bits_t {
 #define IRT(name, bits)       k##name = (bits),
 #define IRTP(name, ptr, bits) k##name = (bits),
     IR_TYPES
@@ -587,6 +587,9 @@ public:
   static Type SubObj(const Class* cls);
   static Type ExactObj(const Class* cls);
 
+  static Type ExactCls(const Class* cls);
+  static Type SubCls(const Class* cls);
+
   /*
    * Return a copy of this Type with the specialization dropped.
    *
@@ -752,7 +755,7 @@ private:
   };
 };
 
-typedef folly::Optional<Type> OptType;
+using OptType = folly::Optional<Type>;
 
 /*
  * jit::Type must be small enough for efficient pass-by-value.
@@ -793,9 +796,25 @@ Type ldRefReturn(Type typeParam);
  */
 Type negativeCheckType(Type typeParam, Type srcType);
 
+/*
+ * Returns the least specific supertype of `t' that maintains the properties
+ * required by `cat'.
+ */
+Type relaxType(Type t, DataTypeCategory cat);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 }}
+
+///////////////////////////////////////////////////////////////////////////////
+
+namespace std {
+  template<> struct hash<HPHP::jit::Type> {
+    size_t operator()(HPHP::jit::Type t) const { return t.hash(); }
+  };
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 #define incl_HPHP_JIT_TYPE_INL_H_
 #include "hphp/runtime/vm/jit/type-inl.h"

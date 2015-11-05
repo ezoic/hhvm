@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -207,12 +207,12 @@ inline uint32_t Class::declPropNumAccessible() const {
   return m_declPropNumAccessible;
 }
 
-inline const Class::Prop* Class::declProperties() const {
-  return m_declProperties.accessList();
+inline folly::Range<const Class::Prop*> Class::declProperties() const {
+  return m_declProperties.range();
 }
 
-inline const Class::SProp* Class::staticProperties() const {
-  return m_staticProperties.accessList();
+inline folly::Range<const Class::SProp*> Class::staticProperties() const {
+  return m_staticProperties.range();
 }
 
 inline Slot Class::lookupDeclProp(const StringData* propName) const {
@@ -224,11 +224,11 @@ inline Slot Class::lookupSProp(const StringData* sPropName) const {
 }
 
 inline RepoAuthType Class::declPropRepoAuthType(Slot index) const {
-  return m_declProperties[index].m_repoAuthType;
+  return m_declProperties[index].repoAuthType;
 }
 
 inline RepoAuthType Class::staticPropRepoAuthType(Slot index) const {
-  return m_staticProperties[index].m_repoAuthType;
+  return m_staticProperties[index].repoAuthType;
 }
 
 inline bool Class::hasDeepInitProps() const {
@@ -290,10 +290,11 @@ inline bool Class::hasConstant(const StringData* clsCnsName) const {
     !m_constants[clsCnsInd].isType();
 }
 
-inline bool Class::hasTypeConstant(const StringData* typeConstName) const {
+inline bool Class::hasTypeConstant(const StringData* typeConstName,
+                                   bool includeAbs) const {
   auto typeConstInd = m_constants.findIndex(typeConstName);
   return (typeConstInd != kInvalidSlot) &&
-    !m_constants[typeConstInd].isAbstract() &&
+    (!m_constants[typeConstInd].isAbstract() || includeAbs) &&
     m_constants[typeConstInd].isType();
 }
 

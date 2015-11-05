@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,8 +21,8 @@
 #include <cstdint>
 
 #include "hphp/runtime/base/array-data-defs.h"
-#include "hphp/runtime/base/smart-containers.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-containers.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/util/tls-pod-bag.h"
 
@@ -284,6 +284,7 @@ struct ArrayIter {
     return (ObjectData*)((intptr_t)m_obj & ~1);
   }
 
+  template<typename F> void scan(F& mark) const;
 private:
   friend int64_t new_iter_array(Iter*, ArrayData*, TypedValue*);
   template<bool withRef>
@@ -428,7 +429,7 @@ struct MArrayIter {
   Variant& val() {
     ArrayData* data = getArray();
     assert(data && data == getContainer());
-    assert(!data->hasMultipleRefs() || data->noCopyOnWrite());
+    assert(!data->cowCheck() || data->noCopyOnWrite());
     assert(!getResetFlag());
     assert(data->validMArrayIter(*this));
     // Normally it's not ok to modify the return value of getValueRef,
@@ -483,6 +484,7 @@ struct MArrayIter {
   bool getResetFlag() const { return m_resetFlag; }
   void setResetFlag(bool reset) { m_resetFlag = reset; }
 
+  template<typename F> void scan(F& mark) const;
 private:
   ArrayData* getData() const {
     assert(hasRef());
@@ -578,7 +580,7 @@ struct MIterTable {
 
   std::array<Ent,7> ents;
   // Slow path: we expect this `extras' list to rarely be allocated.
-  TlsPodBag<Ent,smart::Allocator<Ent>> extras;
+  TlsPodBag<Ent,req::Allocator<Ent>> extras;
 };
 static_assert(sizeof(MIterTable) == 2*64, "");
 extern __thread MIterTable tl_miter_table;
@@ -588,8 +590,7 @@ ArrayData* move_strong_iterators(ArrayData* dest, ArrayData* src);
 
 //////////////////////////////////////////////////////////////////////
 
-class CufIter {
- public:
+struct CufIter {
   CufIter() : m_func(nullptr), m_ctx(nullptr), m_name(nullptr) {}
   ~CufIter();
   const Func* func() const { return m_func; }
@@ -606,13 +607,20 @@ class CufIter {
   static constexpr uint32_t funcOff() { return offsetof(CufIter, m_func); }
   static constexpr uint32_t ctxOff()  { return offsetof(CufIter, m_ctx); }
   static constexpr uint32_t nameOff() { return offsetof(CufIter, m_name); }
+
+  template<class F> void scan(F& mark) const {
+    if (m_ctx && intptr_t(m_ctx) % 2 == 0) {
+      mark(reinterpret_cast<const ObjectData*>(m_ctx));
+    }
+    mark(m_name);
+  }
  private:
   const Func* m_func;
   void* m_ctx;
   StringData* m_name;
 };
 
-struct Iter {
+struct alignas(16) Iter {
   const ArrayIter&   arr() const { return m_u.aiter; }
   const MArrayIter& marr() const { return m_u.maiter; }
   const CufIter&     cuf() const { return m_u.cufiter; }
@@ -633,7 +641,7 @@ private:
     MArrayIter maiter;
     CufIter cufiter;
   } m_u;
-} __attribute__ ((__aligned__(16)));
+};
 
 //////////////////////////////////////////////////////////////////////
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -27,6 +27,8 @@
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/ext/server/ext_server.h"
+#include "hphp/util/boot_timer.h"
+#include "hphp/util/compatibility.h"
 #include "hphp/util/job-queue.h"
 #include "hphp/util/lock.h"
 #include "hphp/util/logger.h"
@@ -357,18 +359,22 @@ void PageletServer::Restart() {
          RuntimeOption::PageletServerThreadDropCacheTimeoutSeconds,
          RuntimeOption::PageletServerThreadDropStack,
          nullptr);
-      auto monitor = folly::Singleton<HostHealthMonitor>::get();
+
+      auto monitor = getSingleton<HostHealthMonitor>();
+
       monitor->subscribe(s_dispatcher);
       monitor->start();
     }
-    Logger::Info("pagelet server started");
     s_dispatcher->start();
+    BootTimer::mark("pagelet server started");
   }
 }
 
 void PageletServer::Stop() {
   if (s_dispatcher) {
-    auto monitor = folly::Singleton<HostHealthMonitor>::get();
+
+    auto monitor = getSingleton<HostHealthMonitor>();
+
     monitor->stop();
     s_dispatcher->stop();
     Lock l(s_dispatchMutex);
@@ -400,7 +406,7 @@ Resource PageletServer::TaskStart(
       return Resource();
     }
   }
-  auto task = makeSmartPtr<PageletTask>(url, headers, remote_host, post_data,
+  auto task = req::make<PageletTask>(url, headers, remote_host, post_data,
                                         get_uploaded_files(), files,
                                         timeoutSeconds);
   PageletTransport *job = task->getJob();

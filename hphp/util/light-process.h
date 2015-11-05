@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,6 +16,10 @@
 
 #ifndef incl_HPHP_LIGHT_PROCESS_H_
 #define incl_HPHP_LIGHT_PROCESS_H_
+
+#ifdef _MSC_VER
+# error LightProcess is not supported under MSVC!
+#endif
 
 #include <string>
 #include <vector>
@@ -37,6 +41,8 @@ class LightProcess {
 public:
   LightProcess();
   ~LightProcess();
+
+  Mutex& mutex() { return m_procMutex; }
 
   static void Close();
   static bool Available();
@@ -76,7 +82,6 @@ public:
   static pid_t pcntl_waitpid(pid_t pid, int *stat_loc, int options);
 
 private:
-  static int GetId();
   static void SigChldHandler(int sig, siginfo_t* info, void* ctx);
 
   bool initShadow(int afdt_listen,

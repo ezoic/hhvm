@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -18,6 +18,7 @@
  *)
 (*****************************************************************************)
 
+open Core
 open Utils
 
 (*****************************************************************************)
@@ -74,7 +75,7 @@ let empty_names = {
 (*****************************************************************************)
     
 let name_set_of_idl idl =
-  List.fold_left (fun acc (_, x) -> SSet.add x acc) SSet.empty idl
+  List.fold_left idl ~f:(fun acc (_, x) -> SSet.add x acc) ~init:SSet.empty
 
 let simplify info =
   let {funs; classes; typedefs; consts; file_mode = _; comments = _;

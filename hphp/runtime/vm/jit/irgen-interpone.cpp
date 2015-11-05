@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -97,7 +97,7 @@ folly::Optional<Type> interpOutputType(IRGS& env,
   using namespace jit::InstrFlags;
   auto localType = [&]{
     auto locId = localInputId(inst);
-    static_assert(std::is_unsigned<typeof(locId)>::value,
+    static_assert(std::is_unsigned<decltype(locId)>::value,
                   "locId should be unsigned");
     assertx(locId < curFunc(env)->numLocals());
     return env.irb->localType(locId, DataTypeSpecific);
@@ -161,9 +161,6 @@ folly::Optional<Type> interpOutputType(IRGS& env,
       auto ty = localType().unbox();
       return ty <= TDbl ? ty : TCell;
     }
-    case OutStrlen:
-      return topType(env, BCSPOffset{0}) <= TStr ?
-        TInt : TUncountedInit;
     case OutClassRef:   return TCls;
     case OutFPushCufSafe: return folly::none;
 
@@ -198,7 +195,10 @@ interpOutputLocals(IRGS& env,
                    bool& smashesAllLocals,
                    folly::Optional<Type> pushedType) {
   using namespace jit::InstrFlags;
-  if (!(getInstrInfo(inst.op()).out & Local)) return {};
+  auto const& info = getInstrInfo(inst.op());
+  // Anything with Local in its output or a member base input can modify a
+  // local.
+  if (!(info.out & Local) && !(info.in & MBase)) return {};
 
   jit::vector<InterpOneData::LocalType> locals;
   auto setLocType = [&](uint32_t id, Type t) {
@@ -217,6 +217,8 @@ interpOutputLocals(IRGS& env,
            testTy.maybe(TBoxedCell) ? TGen :
            useTy;
   };
+
+  auto const mDefine = static_cast<unsigned char>(MOpFlags::Define);
 
   switch (inst.op()) {
     case OpSetN:
@@ -280,6 +282,24 @@ interpOutputLocals(IRGS& env,
     case OpUnsetL:
     case OpPushL:
       setImmLocType(0, TUninit);
+      break;
+
+    // New minstrs are handled extremely conservatively for now.
+    case OpDimL:
+    case OpDimC:
+    case OpDimInt:
+    case OpDimStr:
+      if (inst.imm[2].u_OA & mDefine) smashesAllLocals = true;
+      break;
+    case OpDimNewElem:
+      if (inst.imm[0].u_OA & mDefine) smashesAllLocals = true;
+      break;
+    case OpSetML:
+    case OpSetMC:
+    case OpSetMInt:
+    case OpSetMStr:
+    case OpSetMNewElem:
+      smashesAllLocals = true;
       break;
 
     case OpSetM:
@@ -375,7 +395,9 @@ interpOutputLocals(IRGS& env,
       break;
 
     default:
-      not_reached();
+      always_assert_flog(
+        false, "Unknown local-modifying op {}", opcodeToName(inst.op())
+      );
   }
 
   return locals;
@@ -428,16 +450,7 @@ void interpOne(IRGS& env,
                int pushed,
                InterpOneData& idata) {
   auto const unit = curUnit(env);
-  spillStack(env);
-  env.irb->exceptionStackBoundary();
-  auto const op = unit->getOpcode(bcOff(env));
-
-  auto& iInfo = getInstrInfo(op);
-  if (iInfo.type == jit::InstrFlags::OutFDesc) {
-    env.fpiStack.push(FPIInfo { sp(env), env.irb->spOffset(), nullptr });
-  } else if (isFCallStar(op) && !env.fpiStack.empty()) {
-    env.fpiStack.pop();
-  }
+  auto const op = unit->getOp(bcOff(env));
 
   idata.bcOff = bcOff(env);
   idata.cellsPopped = popped;
@@ -452,7 +465,6 @@ void interpOne(IRGS& env,
     sp(env),
     fp(env)
   );
-  assertx(env.irb->stackDeficit() == 0);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -468,8 +480,6 @@ void emitFPushObjMethod(IRGS& env, int32_t, ObjMethodOp) { INTERP }
 
 void emitLowInvalid(IRGS& env)                { std::abort(); }
 void emitCGetL3(IRGS& env, int32_t)           { INTERP }
-void emitBox(IRGS& env)                       { INTERP }
-void emitBoxR(IRGS& env)                      { INTERP }
 void emitAddElemV(IRGS& env)                  { INTERP }
 void emitAddNewElemV(IRGS& env)               { INTERP }
 void emitClsCns(IRGS& env, const StringData*) { INTERP }
@@ -506,6 +516,7 @@ void emitDefCns(IRGS& env, const StringData*) { INTERP }
 void emitDefCls(IRGS& env, int32_t)           { INTERP }
 void emitDefFunc(IRGS& env, int32_t)          { INTERP }
 void emitCatch(IRGS& env)                     { INTERP }
+void emitContGetReturn(IRGS& env)             { INTERP }
 void emitHighInvalid(IRGS& env)               { std::abort(); }
 
 //////////////////////////////////////////////////////////////////////

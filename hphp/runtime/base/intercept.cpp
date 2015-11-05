@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -57,12 +57,18 @@ struct InterceptRequestData final : RequestEventHandler {
 
   void requestInit() override { clear(); }
   void requestShutdown() override { clear(); }
+  void vscan(IMarker& mark) const override {
+    // maybe better to teach heap-trace and IMarker about hphp_hash_set/map
+    for (auto& s : m_allowed_functions) mark(s);
+    for (auto& p : m_renamed_functions) mark(p);
+    mark(m_global_handler);
+    for (auto& p : m_intercept_handlers) mark(p);
+  }
 
 public:
   bool m_use_allowed_functions;
   StringISet m_allowed_functions;
   StringIMap<String> m_renamed_functions;
-
   Variant m_global_handler;
   StringIMap<Variant> m_intercept_handlers;
 };

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -79,16 +79,18 @@ void ReplayTransport::replayInput(Hdf hdf) {
 }
 
 void ReplayTransport::replayInputImpl() {
-  String postData = StringUtil::UUDecode(Config::Get(m_ini, m_hdf, "post", "",
-                                                     false));
+  String postData = StringUtil::UUDecode(Config::GetString(m_ini, m_hdf, "post",
+                                                           "", false));
   m_postData = std::string(postData.data(), postData.size());
   m_requestHeaders.clear();
-  for (Hdf hdf = m_hdf["headers"].firstChild(); hdf.exists();
-       hdf = hdf.next()) {
-    m_requestHeaders[Config::Get(m_ini, hdf, "name", "", false)].push_back(
-      Config::Get(m_ini, hdf, "value", "", false)
+  auto headers_callback = [&] (const IniSetting::Map &ini_h,
+                               const Hdf &hdf_h, const std::string &ini_h_key) {
+    m_requestHeaders[Config::GetString(ini_h, hdf_h, "name",
+                                       "", false)].push_back(
+      Config::GetString(ini_h, hdf_h, "value", "", false)
     );
-  }
+  };
+  Config::Iterate(headers_callback, m_ini, m_hdf, "headers", false);
 }
 
 const char *ReplayTransport::getUrl() {

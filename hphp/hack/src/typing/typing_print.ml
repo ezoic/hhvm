@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -13,11 +13,12 @@
 (* Pretty printing of types *)
 (*****************************************************************************)
 
-open Utils
+open Core
 open Typing_defs
+open Utils
 
 module SN = Naming_special_names
-
+module Reason = Typing_reason
 (*****************************************************************************)
 (* Computes the string representing a type in an error message.
  * We generally don't want to show the whole type. If an error was due
@@ -45,6 +46,16 @@ module ErrorString = struct
     | Tany               -> "an untyped value"
     | Tunresolved l      -> unresolved l
     | Tarray (x, y)      -> array (x, y)
+    | Tarraykind AKempty -> array (None, None)
+    | Tarraykind AKany   -> array (None, None)
+    | Tarraykind (AKvec x)
+                         -> array (Some x, None)
+    | Tarraykind (AKmap (x, y))
+                         -> array (Some x, Some y)
+    | Tarraykind (AKshape _)
+                         -> "an array (used like a shape)"
+    | Tarraykind (AKtuple _)
+                         -> "an array (used like a tuple)"
     | Ttuple _           -> "a tuple"
     | Tmixed             -> "a mixed value"
     | Toption _          -> "a nullable type"
@@ -52,16 +63,22 @@ module ErrorString = struct
     | Tvar _             -> "some value"
     | Tanon _    -> "a function"
     | Tfun _     -> "a function"
-    | Tgeneric (x, _)    -> "a value of generic type "^x
+    | Tgeneric (x, _)    -> "a value of declared generic type "^x
+    | Tabstract (AKnewtype (x, _), _)
+        when x = SN.Classes.cClassname -> "a classname string"
+    | Tabstract (AKnewtype (x, _), _)
+        when x = SN.Classes.cTypename -> "a typename string"
     | Tabstract (ak, cstr) -> abstract ak cstr
-    | Tclass ((_, x), _) ->
-       "an object of type "^(strip_ns x)
+    | Tclass ((_, x), _) -> "an object of type "^(strip_ns x)
+    | Tapply ((_, x), _)
+        when x = SN.Classes.cClassname -> "a classname string"
+    | Tapply ((_, x), _)
+        when x = SN.Classes.cTypename -> "a typename string"
     | Tapply ((_, x), _) -> "an object of type "^(strip_ns x)
     | Tobject            -> "an object"
     | Tshape _           -> "a shape"
     | Taccess (root_ty, ids) -> tconst root_ty ids
     | Tthis -> "the type 'this'"
-
 
   and array: type a. a ty option * a ty option -> _ = function
     | None, None     -> "an array"
@@ -71,23 +88,24 @@ module ErrorString = struct
 
   and abstract ak cstr =
     let x = strip_ns @@ AbstractKind.to_string ak in
-    let base, cstr =
-      match ak with
-      | AKdependent (`cls _, []) | AKnewtype (_, _) ->
-          "an object of type "^x, None
-      | AKgeneric (_, _) -> "a value of generic type "^x, None
-      | AKdependent (`this, []) -> "the type 'this'", cstr
-      | AKdependent ((`static | `expr _), _) ->
-          "the expression dependent type "^x, cstr
-      | AKdependent (_, _::_) -> "the abstract type constant "^x, cstr in
-    Option.fold
-      cstr
-      ~init:base
-      ~f:(fun init ty -> init^"\n  that is compatible with "^type_ (snd ty))
+    match ak, cstr with
+    | AKnewtype (_, _), _ -> "an object of type "^x
+    | AKenum _, _ -> "a value of "^x
+    | AKgeneric (_, _), _ -> "a value of generic type "^x
+    | AKdependent (`cls c, []), Some (_, ty) ->
+        type_ ty^" (known to be exactly the class '"^strip_ns c^"')"
+    | AKdependent ((`static | `expr _), _), _ ->
+        "the expression dependent type "^x
+    | AKdependent (_, _::_), _ -> "the abstract type constant "^x
+    | AKdependent _, _ ->
+        "the type '"^x^"'"
+        ^Option.value_map cstr ~default:""
+          ~f:(fun (_, ty) -> "\n  that is compatible with "^type_ ty)
+
   and unresolved l =
-    let l = List.map snd l in
-    let l = List.map type_ l in
-    let s = List.fold_right SSet.add l SSet.empty in
+    let l = List.map l snd in
+    let l = List.map l type_ in
+    let s = List.fold_right l ~f:SSet.add ~init:SSet.empty in
     let l = SSet.elements s in
     unresolved_ l
 
@@ -103,16 +121,16 @@ module ErrorString = struct
         then "this"
         else x
       in
-      List.fold_left (fun acc (_, sid) -> acc^"::"^sid)
-        ("the type constant "^strip_ns x) ids in
+      List.fold_left ~f:(fun acc (_, sid) -> acc^"::"^sid)
+        ~init:("the type constant "^strip_ns x) ids in
     match snd root_ty with
     | Tgeneric (x, _) -> f x
     | Tapply ((_, x), _) -> f x
     | Tclass ((_, x), _) -> f x
     | Tabstract (ak, _) -> f @@ AbstractKind.to_string ak
     | Taccess _ as x ->
-        List.fold_left (fun acc (_, sid) -> acc^"::"^sid)
-          (type_ x) ids
+        List.fold_left ~f:(fun acc (_, sid) -> acc^"::"^sid)
+          ~init:(type_ x) ids
      | _ ->
          "a type constant"
 
@@ -134,6 +152,7 @@ module Suggest = struct
   let rec type_: type a. a ty -> string = fun (_, ty) ->
     match ty with
     | Tarray _               -> "array"
+    | Tarraykind _           -> "array"
     | Tthis                  -> SN.Typehints.this
     | Tunresolved _          -> "..."
     | Ttuple (l)             -> "("^list l^")"
@@ -150,7 +169,7 @@ module Suggest = struct
     | Tapply ((_, cid), [x]) -> (Utils.strip_ns cid)^"<"^type_ x^">"
     | Tapply ((_, cid), l)   -> (Utils.strip_ns cid)^"<"^list l^">"
     | Tclass ((_, cid), []) -> Utils.strip_ns cid
-    | Tabstract (AKnewtype (cid, []), _)  -> Utils.strip_ns cid
+    | Tabstract ((AKnewtype (cid, []) | AKenum cid), _) -> Utils.strip_ns cid
     | Tclass ((_, cid), [x]) -> (Utils.strip_ns cid)^"<"^type_ x^">"
     | Tabstract (AKnewtype (cid, [x]), _) ->
         (Utils.strip_ns cid)^"<"^type_ x^">"
@@ -169,8 +188,9 @@ module Suggest = struct
         (match x with
          | None -> "..."
          | Some x ->
-            List.fold_left (fun acc (_, sid) -> acc^"::"^sid)
-                           (strip_ns x) ids
+            List.fold_left ids
+              ~f:(fun acc (_, sid) -> acc^"::"^sid)
+              ~init:(strip_ns x)
         )
 
   and list: type a. a ty list -> string = function
@@ -216,16 +236,23 @@ module Full = struct
     | Tany -> o "_"
     | Tthis -> o SN.Typehints.this
     | Tmixed -> o "mixed"
+    | Tarraykind AKany -> o "array"
+    | Tarraykind AKempty -> o "array"
     | Tarray (None, None) -> o "array"
+    | Tarraykind (AKvec x) -> o "array<"; k x; o ">"
     | Tarray (Some x, None) -> o "array<"; k x; o ">"
     | Tarray (Some x, Some y) -> o "array<"; k x; o ", "; k y; o ">"
+    | Tarraykind (AKmap (x, y)) -> o "array<"; k x; o ", "; k y; o ">"
+    | Tarraykind (AKshape _) -> o "[shape-like array]"
+    | Tarraykind (AKtuple _) -> o "[tuple-like array]"
     | Tarray (None, Some _) -> assert false
     | Tclass ((_, s), []) -> o s
     | Tapply ((_, s), []) -> o s
     | Tgeneric (s, _) -> o s
     | Taccess (root_ty, ids) ->
         k root_ty;
-        o (List.fold_left (fun acc (_, sid) -> acc ^ "::" ^ sid) "" ids)
+        o (List.fold_left ids
+          ~f:(fun acc (_, sid) -> acc ^ "::" ^ sid) ~init:"")
     | Toption x -> o "?"; k x
     | Tprim x -> prim o x
     | Tvar n when ISet.mem n st -> o "[rec]"
@@ -248,7 +275,7 @@ module Full = struct
     | Tapply ((_, s), tyl) -> o s; o "<"; list k tyl; o ">"
     | Ttuple tyl -> o "("; list k tyl; o ")"
     | Tanon _ -> o "[fun]"
-    | Tunresolved tyl -> list_sep o "& " k tyl
+    | Tunresolved tyl -> list_sep o " | " k tyl
     | Tobject -> o "object"
     | Tshape _ -> o "[shape]"
 
@@ -345,7 +372,7 @@ module PrintClass = struct
     (constraint_ty_opt cstr_opt)
 
   let tparam_list l =
-    List.fold_right (fun x acc -> tparam x^", "^acc) l ""
+    List.fold_right l ~f:(fun x acc -> tparam x^", "^acc) ~init:""
 
   let class_elt ce =
     let vis =
@@ -413,9 +440,9 @@ module PrintClass = struct
     end m ""
 
   let user_attribute_list xs =
-    List.fold_left begin fun acc { Nast.ua_name; _ } ->
+    List.fold_left xs ~f:begin fun acc { Nast.ua_name; _ } ->
       acc^"("^snd ua_name^": expr) "
-    end "" xs
+    end ~init:""
 
   let constructor (ce_opt, consist) =
     let consist_str = if consist then " (consistent in hierarchy)" else "" in
@@ -481,7 +508,7 @@ module PrintFun = struct
     | Fellipsis min -> Printf.sprintf "variadic: ...-style (Hack); min: %d" min
 
   let fparams l =
-    List.fold_right (fun x acc -> (fparam x)^acc) l ""
+    List.fold_right l ~f:(fun x acc -> (fparam x)^acc) ~init:""
 
   let fun_type f =
     let ft_pos = PrintClass.pos f.ft_pos in
@@ -526,6 +553,10 @@ let error: type a. a ty_ -> _ = fun ty -> ErrorString.type_ ty
 let suggest: type a. a ty -> _ =  fun ty -> Suggest.type_ ty
 let full env ty = Full.to_string env ty
 let full_strip_ns env ty = Full.to_string_strip_ns env ty
+let debug env ty =
+  let e_str = error (snd ty) in
+  let f_str = full_strip_ns env ty in
+  e_str^" "^f_str
 let class_ c = PrintClass.class_type c
 let gconst gc = Full.to_string_decl gc
 let fun_ f = PrintFun.fun_type f

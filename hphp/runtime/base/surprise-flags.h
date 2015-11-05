@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,30 +28,38 @@ namespace HPHP {
  * in the rds header, so they must be above 2^48.
  */
 enum SurpriseFlag : size_t {
-  MemExceededFlag      = 1ul << 48,
-  TimedOutFlag         = 1ul << 49,
-  SignaledFlag         = 1ul << 50,
-  EventHookFlag        = 1ul << 51,
-  PendingExceptionFlag = 1ul << 52,
-  InterceptFlag        = 1ul << 53,
-  XenonSignalFlag      = 1ul << 54,
-  AsyncEventHookFlag   = 1ul << 55,
+  MemExceededFlag      = 1ull << 48,
+  TimedOutFlag         = 1ull << 49,
+  SignaledFlag         = 1ull << 50,
+  EventHookFlag        = 1ull << 51,
+  PendingExceptionFlag = 1ull << 52,
+  InterceptFlag        = 1ull << 53,
+  XenonSignalFlag      = 1ull << 54,
+  AsyncEventHookFlag   = 1ull << 55,
 
   /* Set by the debugger to break out of loops in translated code. */
-  DebuggerSignalFlag   = 1ul << 56,
+  DebuggerSignalFlag   = 1ull << 56,
 
   /* Set by the debugger hook handler to force function entry/exit events. */
-  DebuggerHookFlag     = 1ul << 57,
+  DebuggerHookFlag     = 1ull << 57,
 
-  CPUTimedOutFlag      = 1ul << 58,
-  IntervalTimerFlag    = 1ul << 59,
+  CPUTimedOutFlag      = 1ull << 58,
+  IntervalTimerFlag    = 1ull << 59,
+
+  /* Set if a GC should be run at the next safe point. */
+  PendingGCFlag        = 1ull << 60,
 
   /*
    * Flags that shouldn't be cleared by fetchAndClearSurpriseFlags, because
    * fetchAndClearSurpriseFlags is only supposed to touch flags related to
    * PHP-visible signals/exceptions and resource limits.
    */
-  ResourceFlags = MemExceededFlag | TimedOutFlag | CPUTimedOutFlag,
+  ResourceFlags =
+    MemExceededFlag |
+    TimedOutFlag |
+    CPUTimedOutFlag |
+    PendingGCFlag,
+
   StickyFlags =
     AsyncEventHookFlag |
     DebuggerHookFlag |
@@ -81,12 +89,12 @@ inline bool checkSurpriseFlags() {
 }
 
 inline void setSurpriseFlag(SurpriseFlag flag) {
-  assertx(flag >= 1ul << 48);
+  assertx(flag >= 1ull << 48);
   stackLimitAndSurprise().fetch_or(flag);
 }
 
 inline bool getSurpriseFlag(SurpriseFlag flag) {
-  assertx(flag >= 1ul << 48);
+  assertx(flag >= 1ull << 48);
   return stackLimitAndSurprise().load() & flag;
 }
 

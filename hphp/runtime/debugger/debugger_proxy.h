@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -69,7 +69,7 @@ struct DebuggerProxy : Synchronizable,
   static std::string MakePHP(const std::string &php);
   static std::string MakePHPReturn(const std::string &php);
 
-  DebuggerProxy(SmartPtr<Socket> socket, bool local);
+  DebuggerProxy(req::ptr<Socket> socket, bool local);
 
   bool isLocal() const { return m_local; }
 

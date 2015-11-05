@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -89,7 +89,8 @@ static bool inferredArcWeight(const TransCFG::ArcPtrVec& arcVec,
 TransCFG::TransCFG(FuncId funcId,
                    const ProfData* profData,
                    const SrcDB& srcDB,
-                   const TcaTransIDMap& jmpToTransID) {
+                   const TcaTransIDMap& jmpToTransID,
+                   bool inlining /* = false */) {
   assertx(profData);
 
   // add nodes
@@ -97,8 +98,8 @@ TransCFG::TransCFG(FuncId funcId,
     assertx(profData->transRegion(tid) != nullptr);
     // This will skip DV Funclets if they were already
     // retranslated w/ the prologues:
-    if (!profData->optimized(profData->transSrcKey(tid))) {
-      int64_t weight = profData->absTransCounter(tid);
+    if (inlining || !profData->optimized(profData->transSrcKey(tid))) {
+      int64_t weight = profData->transCounter(tid);
       addNode(tid, weight);
     }
   }

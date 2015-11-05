@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,7 +17,7 @@
 #define incl_HPHP_PROXY_ARRAY_H
 
 #include "hphp/runtime/base/array-data.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/type-variant.h"
 
 namespace HPHP {
@@ -121,7 +121,7 @@ private:
    * Make a ZendCustomElement resource wrapping the given data block. If pDest
    * is non-null, it will be set to the newly-allocated location for the block.
    */
-  SmartPtr<ResourceData> makeElementResource(void *pData, uint nDataSize,
+  req::ptr<ResourceData> makeElementResource(void *pData, uint32_t nDataSize,
                                              void **pDest) const;
 
   DtorFunc m_destructor;
@@ -195,7 +195,7 @@ public:
   static ArrayData* ZAppend(ArrayData* ad, RefData* v, int64_t* key_ptr);
 
   static ArrayData* CopyWithStrongIterators(const ArrayData*);
-  static ArrayData* NonSmartCopy(const ArrayData*);
+  static ArrayData* CopyStatic(const ArrayData*);
 
 private:
   static ProxyArray* asProxyArray(ArrayData* ad);
@@ -211,7 +211,6 @@ public:
   }
 
 private:
-  template <typename F> friend void scan(const ProxyArray& this_, F& mark);
   // The inner array. This is mutable since zend_hash_find() etc. has a
   // const ProxyArray* as a parameter, but we need to modify the inner array
   // to box and proxy the return values, so making this mutable avoids a

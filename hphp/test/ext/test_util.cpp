@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -83,14 +83,14 @@ bool TestUtil::TestSharedString() {
   {
     hphp_shared_string_map<int64_t> map;
     for (int i = 0; i < 100; i++) {
-      string k("key");
+      std::string k("key");
       k += i;
       map[k] = i;
     }
     for (int i = 0; i < 100; i++) {
-      string k("key");
+      std::string k("key");
       k += i;
-      hphp_shared_string_map<int64_t>::const_iterator it = map.find(k);
+      auto const it = map.find(k);
       VERIFY(it != map.end());
       VERIFY(it->second == i);
     }

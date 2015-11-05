@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -30,7 +30,7 @@
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/file-await.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/ssl-socket.h"
 #include "hphp/runtime/base/stream-wrapper.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
@@ -58,115 +58,101 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 static
-SmartPtr<StreamContext> get_stream_context(const Variant& stream_or_context);
+req::ptr<StreamContext> get_stream_context(const Variant& stream_or_context);
 
-#define REGISTER_CONSTANT(name, value)                                         \
-  Native::registerConstant<KindOfInt64>(makeStaticString(#name), value)        \
+#define REGISTER_SAME_CONSTANT(name) HHVM_RC_INT(name, k_ ## name);
 
 static class StreamExtension final : public Extension {
 public:
   StreamExtension() : Extension("stream") {}
   void moduleInit() override {
-    REGISTER_CONSTANT(STREAM_CLIENT_CONNECT, k_STREAM_CLIENT_CONNECT);
-    REGISTER_CONSTANT(STREAM_CLIENT_ASYNC_CONNECT,
-                      k_STREAM_CLIENT_ASYNC_CONNECT);
-    REGISTER_CONSTANT(STREAM_CLIENT_PERSISTENT, k_STREAM_CLIENT_PERSISTENT);
-    REGISTER_CONSTANT(STREAM_META_TOUCH, k_STREAM_META_TOUCH);
-    REGISTER_CONSTANT(STREAM_META_OWNER_NAME, k_STREAM_META_OWNER_NAME);
-    REGISTER_CONSTANT(STREAM_META_OWNER, k_STREAM_META_OWNER);
-    REGISTER_CONSTANT(STREAM_META_GROUP_NAME, k_STREAM_META_GROUP_NAME);
-    REGISTER_CONSTANT(STREAM_META_GROUP, k_STREAM_META_GROUP);
-    REGISTER_CONSTANT(STREAM_META_ACCESS, k_STREAM_META_ACCESS);
-    REGISTER_CONSTANT(STREAM_BUFFER_NONE, k_STREAM_BUFFER_NONE);
-    REGISTER_CONSTANT(STREAM_BUFFER_LINE, k_STREAM_BUFFER_LINE);
-    REGISTER_CONSTANT(STREAM_BUFFER_FULL, k_STREAM_BUFFER_FULL);
-    REGISTER_CONSTANT(STREAM_SERVER_BIND, k_STREAM_SERVER_BIND);
-    REGISTER_CONSTANT(STREAM_SERVER_LISTEN, k_STREAM_SERVER_LISTEN);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv23_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_SSLv23_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv23_SERVER,
-                      k_STREAM_CRYPTO_METHOD_SSLv23_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv2_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_SSLv2_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv2_SERVER,
-                      k_STREAM_CRYPTO_METHOD_SSLv2_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv3_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_SSLv3_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_SSLv3_SERVER,
-                      k_STREAM_CRYPTO_METHOD_SSLv3_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLS_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_TLS_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLS_SERVER,
-                      k_STREAM_CRYPTO_METHOD_TLS_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_0_SERVER,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_0_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_1_SERVER,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_1_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_2_SERVER,
-                      k_STREAM_CRYPTO_METHOD_TLSv1_2_SERVER);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_ANY_CLIENT,
-                      k_STREAM_CRYPTO_METHOD_ANY_CLIENT);
-    REGISTER_CONSTANT(STREAM_CRYPTO_METHOD_ANY_SERVER,
-                      k_STREAM_CRYPTO_METHOD_ANY_SERVER);
-    REGISTER_CONSTANT(STREAM_ENFORCE_SAFE_MODE, k_STREAM_ENFORCE_SAFE_MODE);
-    REGISTER_CONSTANT(STREAM_IGNORE_URL, k_STREAM_IGNORE_URL);
-    REGISTER_CONSTANT(STREAM_IPPROTO_ICMP, k_STREAM_IPPROTO_ICMP);
-    REGISTER_CONSTANT(STREAM_IPPROTO_IP, k_STREAM_IPPROTO_IP);
-    REGISTER_CONSTANT(STREAM_IPPROTO_RAW, k_STREAM_IPPROTO_RAW);
-    REGISTER_CONSTANT(STREAM_IPPROTO_TCP, k_STREAM_IPPROTO_TCP);
-    REGISTER_CONSTANT(STREAM_IPPROTO_UDP, k_STREAM_IPPROTO_UDP);
-    REGISTER_CONSTANT(STREAM_IS_URL, k_STREAM_IS_URL);
-    REGISTER_CONSTANT(STREAM_MKDIR_RECURSIVE, k_STREAM_MKDIR_RECURSIVE);
-    REGISTER_CONSTANT(STREAM_MUST_SEEK, k_STREAM_MUST_SEEK);
-    REGISTER_CONSTANT(STREAM_NOTIFY_AUTH_REQUIRED,
-                      k_STREAM_NOTIFY_AUTH_REQUIRED);
-    REGISTER_CONSTANT(STREAM_NOTIFY_AUTH_RESULT, k_STREAM_NOTIFY_AUTH_RESULT);
-    REGISTER_CONSTANT(STREAM_NOTIFY_COMPLETED, k_STREAM_NOTIFY_COMPLETED);
-    REGISTER_CONSTANT(STREAM_NOTIFY_CONNECT, k_STREAM_NOTIFY_CONNECT);
-    REGISTER_CONSTANT(STREAM_NOTIFY_FAILURE, k_STREAM_NOTIFY_FAILURE);
-    REGISTER_CONSTANT(STREAM_NOTIFY_FILE_SIZE_IS, k_STREAM_NOTIFY_FILE_SIZE_IS);
-    REGISTER_CONSTANT(STREAM_NOTIFY_MIME_TYPE_IS, k_STREAM_NOTIFY_MIME_TYPE_IS);
-    REGISTER_CONSTANT(STREAM_NOTIFY_PROGRESS, k_STREAM_NOTIFY_PROGRESS);
-    REGISTER_CONSTANT(STREAM_NOTIFY_REDIRECTED, k_STREAM_NOTIFY_REDIRECTED);
-    REGISTER_CONSTANT(STREAM_NOTIFY_RESOLVE, k_STREAM_NOTIFY_RESOLVE);
-    REGISTER_CONSTANT(STREAM_NOTIFY_SEVERITY_ERR, k_STREAM_NOTIFY_SEVERITY_ERR);
-    REGISTER_CONSTANT(STREAM_NOTIFY_SEVERITY_INFO,
-                      k_STREAM_NOTIFY_SEVERITY_INFO);
-    REGISTER_CONSTANT(STREAM_NOTIFY_SEVERITY_WARN,
-                      k_STREAM_NOTIFY_SEVERITY_WARN);
-    REGISTER_CONSTANT(STREAM_OOB, k_STREAM_OOB);
-    REGISTER_CONSTANT(STREAM_PEEK, k_STREAM_PEEK);
-    REGISTER_CONSTANT(STREAM_PF_INET, k_STREAM_PF_INET);
-    REGISTER_CONSTANT(STREAM_PF_INET6, k_STREAM_PF_INET6);
-    REGISTER_CONSTANT(STREAM_PF_UNIX, k_STREAM_PF_UNIX);
-    REGISTER_CONSTANT(STREAM_REPORT_ERRORS, k_STREAM_REPORT_ERRORS);
-    REGISTER_CONSTANT(STREAM_SHUT_RD, k_STREAM_SHUT_RD);
-    REGISTER_CONSTANT(STREAM_SHUT_RDWR, k_STREAM_SHUT_RDWR);
-    REGISTER_CONSTANT(STREAM_SHUT_WR, k_STREAM_SHUT_WR);
-    REGISTER_CONSTANT(STREAM_SOCK_DGRAM, k_STREAM_SOCK_DGRAM);
-    REGISTER_CONSTANT(STREAM_SOCK_RAW, k_STREAM_SOCK_RAW);
-    REGISTER_CONSTANT(STREAM_SOCK_RDM, k_STREAM_SOCK_RDM);
-    REGISTER_CONSTANT(STREAM_SOCK_SEQPACKET, k_STREAM_SOCK_SEQPACKET);
-    REGISTER_CONSTANT(STREAM_SOCK_STREAM, k_STREAM_SOCK_STREAM);
-    REGISTER_CONSTANT(STREAM_USE_PATH, k_STREAM_USE_PATH);
+    REGISTER_SAME_CONSTANT(PSFS_ERR_FATAL);
+    REGISTER_SAME_CONSTANT(PSFS_FEED_ME);
+    REGISTER_SAME_CONSTANT(PSFS_FLAG_FLUSH_CLOSE);
+    REGISTER_SAME_CONSTANT(PSFS_FLAG_FLUSH_INC);
+    REGISTER_SAME_CONSTANT(PSFS_FLAG_NORMAL);
+    REGISTER_SAME_CONSTANT(PSFS_PASS_ON);
 
-    REGISTER_CONSTANT(STREAM_AWAIT_READ, FileEventHandler::READ);
-    REGISTER_CONSTANT(STREAM_AWAIT_WRITE, FileEventHandler::WRITE);
-    REGISTER_CONSTANT(STREAM_AWAIT_READ_WRITE, FileEventHandler::READ_WRITE);
+    REGISTER_SAME_CONSTANT(STREAM_CLIENT_CONNECT);
+    REGISTER_SAME_CONSTANT(STREAM_CLIENT_ASYNC_CONNECT);
+    REGISTER_SAME_CONSTANT(STREAM_CLIENT_PERSISTENT);
+    REGISTER_SAME_CONSTANT(STREAM_META_TOUCH);
+    REGISTER_SAME_CONSTANT(STREAM_META_OWNER_NAME);
+    REGISTER_SAME_CONSTANT(STREAM_META_OWNER);
+    REGISTER_SAME_CONSTANT(STREAM_META_GROUP_NAME);
+    REGISTER_SAME_CONSTANT(STREAM_META_GROUP);
+    REGISTER_SAME_CONSTANT(STREAM_META_ACCESS);
+    REGISTER_SAME_CONSTANT(STREAM_BUFFER_NONE);
+    REGISTER_SAME_CONSTANT(STREAM_BUFFER_LINE);
+    REGISTER_SAME_CONSTANT(STREAM_BUFFER_FULL);
+    REGISTER_SAME_CONSTANT(STREAM_SERVER_BIND);
+    REGISTER_SAME_CONSTANT(STREAM_SERVER_LISTEN);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv23_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv23_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv2_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv2_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv3_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_SSLv3_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLS_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLS_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_0_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_1_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_TLSv1_2_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_ANY_CLIENT);
+    REGISTER_SAME_CONSTANT(STREAM_CRYPTO_METHOD_ANY_SERVER);
+    REGISTER_SAME_CONSTANT(STREAM_ENFORCE_SAFE_MODE);
+    REGISTER_SAME_CONSTANT(STREAM_IGNORE_URL);
+    REGISTER_SAME_CONSTANT(STREAM_IPPROTO_ICMP);
+    REGISTER_SAME_CONSTANT(STREAM_IPPROTO_IP);
+    REGISTER_SAME_CONSTANT(STREAM_IPPROTO_RAW);
+    REGISTER_SAME_CONSTANT(STREAM_IPPROTO_TCP);
+    REGISTER_SAME_CONSTANT(STREAM_IPPROTO_UDP);
+    REGISTER_SAME_CONSTANT(STREAM_IS_URL);
+    REGISTER_SAME_CONSTANT(STREAM_MKDIR_RECURSIVE);
+    REGISTER_SAME_CONSTANT(STREAM_MUST_SEEK);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_AUTH_REQUIRED);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_AUTH_RESULT);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_COMPLETED);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_CONNECT);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_FAILURE);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_FILE_SIZE_IS);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_MIME_TYPE_IS);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_PROGRESS);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_REDIRECTED);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_RESOLVE);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_SEVERITY_ERR);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_SEVERITY_INFO);
+    REGISTER_SAME_CONSTANT(STREAM_NOTIFY_SEVERITY_WARN);
+    REGISTER_SAME_CONSTANT(STREAM_OOB);
+    REGISTER_SAME_CONSTANT(STREAM_PEEK);
+    REGISTER_SAME_CONSTANT(STREAM_PF_INET);
+    REGISTER_SAME_CONSTANT(STREAM_PF_INET6);
+    REGISTER_SAME_CONSTANT(STREAM_PF_UNIX);
+    REGISTER_SAME_CONSTANT(STREAM_REPORT_ERRORS);
+    REGISTER_SAME_CONSTANT(STREAM_SHUT_RD);
+    REGISTER_SAME_CONSTANT(STREAM_SHUT_RDWR);
+    REGISTER_SAME_CONSTANT(STREAM_SHUT_WR);
+    REGISTER_SAME_CONSTANT(STREAM_SOCK_DGRAM);
+    REGISTER_SAME_CONSTANT(STREAM_SOCK_RAW);
+    REGISTER_SAME_CONSTANT(STREAM_SOCK_RDM);
+    REGISTER_SAME_CONSTANT(STREAM_SOCK_SEQPACKET);
+    REGISTER_SAME_CONSTANT(STREAM_SOCK_STREAM);
+    REGISTER_SAME_CONSTANT(STREAM_USE_PATH);
 
-    REGISTER_CONSTANT(STREAM_AWAIT_ERROR, FileAwait::ERROR);
-    REGISTER_CONSTANT(STREAM_AWAIT_TIMEOUT, FileAwait::TIMEOUT);
-    REGISTER_CONSTANT(STREAM_AWAIT_READY, FileAwait::READY);
-    REGISTER_CONSTANT(STREAM_AWAIT_CLOSED, FileAwait::CLOSED);
+    HHVM_RC_INT(STREAM_AWAIT_READ, FileEventHandler::READ);
+    HHVM_RC_INT(STREAM_AWAIT_WRITE, FileEventHandler::WRITE);
+    HHVM_RC_INT(STREAM_AWAIT_READ_WRITE, FileEventHandler::READ_WRITE);
 
-    REGISTER_CONSTANT(STREAM_URL_STAT_LINK, k_STREAM_URL_STAT_LINK);
-    REGISTER_CONSTANT(STREAM_URL_STAT_QUIET, k_STREAM_URL_STAT_QUIET);
+    HHVM_RC_INT(STREAM_AWAIT_ERROR, FileAwait::ERROR);
+    HHVM_RC_INT(STREAM_AWAIT_TIMEOUT, FileAwait::TIMEOUT);
+    HHVM_RC_INT(STREAM_AWAIT_READY, FileAwait::READY);
+    HHVM_RC_INT(STREAM_AWAIT_CLOSED, FileAwait::CLOSED);
+
+    REGISTER_SAME_CONSTANT(STREAM_URL_STAT_LINK);
+    REGISTER_SAME_CONSTANT(STREAM_URL_STAT_QUIET);
 
     HHVM_FE(stream_context_create);
     HHVM_FE(stream_context_get_options);
@@ -218,9 +204,9 @@ Variant HHVM_FUNCTION(stream_context_create,
     raise_warning("options should have the form "
                   "[\"wrappername\"][\"optionname\"] = $value");
     return Variant(
-      makeSmartPtr<StreamContext>(HPHP::null_array, HPHP::null_array));
+      req::make<StreamContext>(HPHP::null_array, HPHP::null_array));
   }
-  return Variant(makeSmartPtr<StreamContext>(arrOptions, arrParams));
+  return Variant(req::make<StreamContext>(arrOptions, arrParams));
 }
 
 Variant HHVM_FUNCTION(stream_context_get_options,
@@ -233,7 +219,7 @@ Variant HHVM_FUNCTION(stream_context_get_options,
   return context->getOptions();
 }
 
-static bool stream_context_set_option0(const SmartPtr<StreamContext>& context,
+static bool stream_context_set_option0(const req::ptr<StreamContext>& context,
                                        const Array& options) {
   if (!StreamContext::validateOptions(options)) {
     raise_warning("options should have the form "
@@ -244,7 +230,7 @@ static bool stream_context_set_option0(const SmartPtr<StreamContext>& context,
   return true;
 }
 
-static bool stream_context_set_option1(const SmartPtr<StreamContext>& context,
+static bool stream_context_set_option1(const req::ptr<StreamContext>& context,
                                        const String& wrapper,
                                        const String& option,
                                        const Variant& value) {
@@ -283,7 +269,7 @@ Variant HHVM_FUNCTION(stream_context_get_default,
   const Array& arrOptions = options.isNull() ? null_array : options.toArray();
   auto context = g_context->getStreamContext();
   if (!context) {
-    context = makeSmartPtr<StreamContext>(Array::Create(), Array::Create());
+    context = req::make<StreamContext>(Array::Create(), Array::Create());
     g_context->setStreamContext(context);
   }
   if (!arrOptions.isNull() &&
@@ -565,13 +551,13 @@ bool HHVM_FUNCTION(stream_wrapper_unregister,
 ///////////////////////////////////////////////////////////////////////////////
 // stream socket functions
 
-static SmartPtr<Socket> socket_accept_impl(
+static req::ptr<Socket> socket_accept_impl(
   const Resource& socket,
   struct sockaddr *addr,
   socklen_t *addrlen
 ) {
   auto sock = cast<Socket>(socket);
-  auto new_sock = makeSmartPtr<Socket>(
+  auto new_sock = req::make<Socket>(
     accept(sock->fd(), addr, addrlen), sock->getType());
   if (!new_sock->valid()) {
     SOCKET_ERROR(new_sock, "unable to accept incoming connection", errno);
@@ -607,6 +593,9 @@ static String get_sockaddr_name(struct sockaddr *sa, socklen_t sl) {
 
    case AF_UNIX:
      {
+#ifdef _MSC_VER
+       always_assert(false);
+#else
        struct sockaddr_un *ua = (struct sockaddr_un*)sa;
 
        if (sl == sizeof(sa_family_t)) {
@@ -623,6 +612,7 @@ static String get_sockaddr_name(struct sockaddr *sa, socklen_t sl) {
          textaddr = strndup(ua->sun_path, textaddrlen);
        }
        break;
+#endif
     }
 
   default:
@@ -656,7 +646,9 @@ Variant HHVM_FUNCTION(stream_socket_accept,
     struct sockaddr sa;
     socklen_t salen = sizeof(sa);
     auto new_sock = socket_accept_impl(server_socket, &sa, &salen);
-    peername = get_sockaddr_name(&sa, salen);
+    if (auto ref = peername.getVariantOrNull()) {
+      *ref = get_sockaddr_name(&sa, salen);
+    }
     if (new_sock) return Resource(new_sock);
   } else if (n < 0) {
     sock->setError(errno);
@@ -684,7 +676,10 @@ Variant HHVM_FUNCTION(stream_socket_client,
                       int flags /* = 0 */,
                       const Variant& context /* = null_variant */) {
   HostURL hosturl(static_cast<const std::string>(remote_socket));
-  return sockopen_impl(hosturl, errnum, errstr, timeout, false, context);
+  bool persistent = (flags & k_STREAM_CLIENT_PERSISTENT) ==
+    k_STREAM_CLIENT_PERSISTENT;
+
+  return sockopen_impl(hosturl, errnum, errstr, timeout, persistent, context);
 }
 
 bool HHVM_FUNCTION(stream_socket_enable_crypto,
@@ -784,11 +779,13 @@ Variant HHVM_FUNCTION(stream_socket_recvfrom,
   Variant retval = HHVM_FN(socket_recvfrom)(socket, ref(ret), length, flags,
                                             ref(host), ref(port));
   if (!same(retval, false) && retval.toInt64() >= 0) {
-    auto sock = cast<Socket>(socket);
-    if (sock->getType() == AF_INET6) {
-      address = "[" + host.toString() + "]:" + port.toInt32();
-    } else {
-      address = host.toString() + ":" + port.toInt32();
+    if (auto ref = address.getVariantOrNull()) {
+      auto sock = cast<Socket>(socket);
+      if (sock->getType() == AF_INET6) {
+        *ref = "[" + host.toString() + "]:" + port.toInt32();
+      } else {
+        *ref = host.toString() + ":" + port.toInt32();
+      }
     }
     return ret.toString(); // watch out, "ret", not "retval"
   }
@@ -825,7 +822,7 @@ bool HHVM_FUNCTION(stream_socket_shutdown,
 }
 
 static
-SmartPtr<StreamContext> get_stream_context(const Variant& stream_or_context) {
+req::ptr<StreamContext> get_stream_context(const Variant& stream_or_context) {
   if (!stream_or_context.isResource()) {
     return nullptr;
   }
@@ -836,7 +833,7 @@ SmartPtr<StreamContext> get_stream_context(const Variant& stream_or_context) {
   if (file != nullptr) {
     auto context = file->getStreamContext();
     if (!file->getStreamContext()) {
-      context = makeSmartPtr<StreamContext>(Array::Create(), Array::Create());
+      context = req::make<StreamContext>(Array::Create(), Array::Create());
       file->setStreamContext(context);
     }
     return context;

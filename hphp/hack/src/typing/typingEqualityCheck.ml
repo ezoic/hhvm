@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -20,11 +20,14 @@ module Phase = Typing_phase
 (* Check if a comparison is trivially true or false *)
 (*****************************************************************************)
 
-let trivial_comparison_error p bop (r1, ty1) (r2, ty2) trail1 trail2 =
-  let trivial_result = match bop with
+let trivial_result_str bop =
+  match bop with
     | Ast.EQeqeq -> "false"
     | Ast.Diff2 -> "true"
-    | _ -> assert false in
+    | _ -> assert false
+
+let trivial_comparison_error p bop (r1, ty1) (r2, ty2) trail1 trail2 =
+  let trivial_result = trivial_result_str bop in
   let tys1 = Typing_print.error ty1 in
   let tys2 = Typing_print.error ty2 in
   Errors.trivial_strict_eq p trivial_result
@@ -35,14 +38,12 @@ let trivial_comparison_error p bop (r1, ty1) (r2, ty2) trail1 trail2 =
 let rec assert_nontrivial p bop env ty1 ty2 =
   let ety_env = Phase.env_with_self env in
   let _, ty1 = Env.expand_type env ty1 in
-  let _, ty1, trail1 =
-    TDef.force_expand_typedef ~phase:Phase.locl ~ety_env env ty1 in
+  let _, ty1, trail1 = TDef.force_expand_typedef ~ety_env env ty1 in
   let _, ty2 = Env.expand_type env ty2 in
-  let _, ty2, trail2 =
-    TDef.force_expand_typedef ~phase:Phase.locl ~ety_env env ty2 in
+  let _, ty2, trail2 = TDef.force_expand_typedef ~ety_env env ty2 in
   match ty1, ty2 with
   | (_, Tprim N.Tnum),               (_, Tprim (N.Tint | N.Tfloat))
-  | (_, Tprim (N.Tint | N.Tfloat)),  (_, Tprim N.Tnum)
+  | (_, Tprim (N.Tint | N.Tfloat)),  (_, Tprim N.Tnum) -> ()
   | (_, Tprim N.Tarraykey),          (_, Tprim (N.Tint | N.Tstring))
   | (_, Tprim (N.Tint | N.Tstring)), (_, Tprim N.Tarraykey) -> ()
   | (r, Tprim N.Tnoreturn), _
@@ -57,7 +58,18 @@ let rec assert_nontrivial p bop env ty1 ty2 =
   | (_, Toption ty1), (_, Tprim _ as ty2)
   | (_, Tprim _ as ty1), (_, Toption ty2) ->
       assert_nontrivial p bop env ty1 ty2
-  | (_, (Tany | Tmixed | Tarray (_, _) | Tprim _ | Toption _
+  | (_, (Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _
     | Tanon (_, _) | Tunresolved _ | Tobject | Tshape _)
     ), _ -> ()
+
+let assert_nullable p bop env ty =
+  let _, ty = Env.expand_type env ty in
+  match ty with
+  | r, Tarraykind _ ->
+    let trivial_result = trivial_result_str bop in
+    let ty_str = Typing_print.error (snd ty) in
+    let msgl = Reason.to_string ("This is "^ty_str^" and cannot be null") r in
+    Errors.trivial_strict_not_nullable_compare_null p trivial_result msgl
+  | _, _ ->
+    ()

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -26,14 +26,15 @@
 
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/vm/jit/analysis.h"
-#include "hphp/runtime/vm/jit/guard-relaxation.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
 #include "hphp/runtime/vm/jit/mutation.h"
+#include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/print.h"
 #include "hphp/runtime/vm/jit/punt.h"
 #include "hphp/runtime/vm/jit/simplify.h"
 #include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/runtime/vm/jit/translator.h"
+#include "hphp/runtime/vm/jit/type-constraint.h"
 
 namespace HPHP { namespace jit {
 
@@ -64,13 +65,59 @@ SSATmp* fwdGuardSource(IRInstruction* inst) {
 
 }
 
+
+//////////////////////////////////////////////////////////////////////
+
+/* For each possible dest type, determine if its type might relax. */
+#define ND             always_assert(false);
+#define D(t)           return false; // fixed type
+#define DofS(n)        return typeMightRelax(inst->src(n));
+#define DRefineS(n)    return true;  // typeParam may relax
+#define DLdObjCls      return typeMightRelax(inst->src(0));
+#define DParamMayRelax return true;  // typeParam may relax
+#define DParam         return false;
+#define DParamPtr(k)   return false;
+#define DUnboxPtr      return false;
+#define DBoxPtr        return false;
+#define DAllocObj      return false; // fixed type from ExtraData
+#define DArrPacked     return false; // fixed type
+#define DArrElem       assertx(inst->is(LdStructArrayElem, ArrayGet));    \
+                         return typeMightRelax(inst->src(0));
+#define DCol           return false; // fixed in bytecode
+#define DThis          return false; // fixed type from ctx class
+#define DCtx           return false;
+#define DMulti         return true;  // DefLabel; value could be anything
+#define DSetElem       return false; // fixed type
+#define DBuiltin       return false; // from immutable typeParam
+#define DSubtract(n,t) DofS(n)
+#define DCns           return false; // fixed type
+
+bool typeMightRelax(const SSATmp* tmp) {
+  if (tmp == nullptr) return true;
+
+  if (tmp->isA(TCls) || tmp->type() == TGen) return false;
+  if (canonical(tmp)->inst()->is(DefConst)) return false;
+
+  auto inst = tmp->inst();
+  // Do the rest based on the opcode's dest type
+  switch (inst->op()) {
+#   define O(name, dst, src, flags) case name: dst
+  IR_OPCODES
+#   undef O
+  }
+
+  return true;
+}
+
+//////////////////////////////////////////////////////////////////////
+
 IRBuilder::IRBuilder(IRUnit& unit, BCMarker initMarker)
   : m_unit(unit)
   , m_initialMarker(initMarker)
   , m_curMarker(initMarker)
   , m_state(initMarker)
   , m_curBlock(m_unit.entry())
-  , m_constrainGuards(shouldHHIRRelaxGuards())
+  , m_constrainGuards(mcg->tx().mode() != TransKind::Optimize)
 {
   m_state.setBuilding();
   if (RuntimeOption::EvalHHIRGenOpts) {
@@ -476,6 +523,13 @@ SSATmp* IRBuilder::preOptimizeLdStk(IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* IRBuilder::preOptimizeLdMBase(IRInstruction* inst) {
+  if (auto ptr = m_state.memberBasePtr()) return ptr;
+
+  inst->setTypeParam(inst->typeParam() & m_state.memberBasePtrType());
+  return nullptr;
+}
+
 SSATmp* IRBuilder::preOptimize(IRInstruction* inst) {
 #define X(op) case op: return preOptimize##op(inst);
   switch (inst->op()) {
@@ -491,6 +545,7 @@ SSATmp* IRBuilder::preOptimize(IRInstruction* inst) {
   X(CoerceStk)
   X(CheckCtxThis)
   X(LdCtx)
+  X(LdMBase)
   default: break;
   }
 #undef X
@@ -587,15 +642,10 @@ void IRBuilder::exceptionStackBoundary() {
    * If this assert fires, we're trying to put things on the stack in a catch
    * trace that the unwinder won't be able to see.
    */
-  assertx(
-    syncedSpLevel() + m_state.evalStack().size() - m_state.stackDeficit() ==
-      m_curMarker.spOff()
-  );
-  m_exnStack.spOffset      = m_state.spOffset();
+  FTRACE(2, "exceptionStackBoundary()\n");
+  assertx(syncedSpLevel() == m_curMarker.spOff());
   m_exnStack.syncedSpLevel = m_state.syncedSpLevel();
-  m_exnStack.stackDeficit  = m_state.stackDeficit();
-  m_exnStack.evalStack     = m_state.evalStack();
-  m_exnStack.sp            = m_state.sp();
+  m_state.resetStackModified();
 }
 
 /*
@@ -699,7 +749,7 @@ bool IRBuilder::constrainValue(SSATmp* const val, TypeConstraint tc) {
     // Relax typeParam with its current constraint. This is used below to
     // recursively relax the constraint on the source, if needed.
     auto constraint = applyConstraint(m_constraints.guards[inst], guardTc);
-    auto const knownType = relaxType(typeParam, constraint);
+    auto const knownType = relaxType(typeParam, constraint.category);
 
     if (!typeFitsConstraint(knownType, tc)) {
       auto const newTc = relaxConstraint(tc, knownType, srcType);
@@ -808,7 +858,7 @@ bool IRBuilder::constrainSlot(int32_t idOrOffset,
   // Relax typeParam with its current constraint.  This is used below to
   // recursively relax the constraint on the source, if needed.
   auto constraint = applyConstraint(m_constraints.guards[guard], guardTc);
-  auto const knownType = relaxType(typeParam, constraint);
+  auto const knownType = relaxType(typeParam, constraint.category);
 
   if (!typeFitsConstraint(knownType, tc)) {
     auto const newTc = relaxConstraint(tc, knownType, prevType);
@@ -827,24 +877,24 @@ Type IRBuilder::localType(uint32_t id, TypeConstraint tc) {
   return m_state.localType(id);
 }
 
-Type IRBuilder::predictedInnerType(uint32_t id) {
-  auto const ty = m_state.predictedLocalType(id);
+Type IRBuilder::predictedLocalType(uint32_t id) const {
+  return m_state.predictedLocalType(id);
+}
+
+Type IRBuilder::predictedInnerType(uint32_t id) const {
+  auto const ty = predictedLocalType(id);
   assertx(ty <= TBoxedCell);
   return ldRefReturn(ty.unbox());
 }
 
-Type IRBuilder::stackInnerTypePrediction(IRSPOffset offset) const {
-  auto const ty = m_state.predictedStackType(offset);
-  assertx(ty <= TBoxedCell);
-  return ldRefReturn(ty.unbox());
-}
-
-Type IRBuilder::predictedStackType(IRSPOffset offset) {
+Type IRBuilder::predictedStackType(IRSPOffset offset) const {
   return m_state.predictedStackType(offset);
 }
 
-Type IRBuilder::predictedLocalType(uint32_t id) {
-  return m_state.predictedLocalType(id);
+Type IRBuilder::predictedStackInnerType(IRSPOffset offset) const {
+  auto const ty = predictedStackType(offset);
+  assertx(ty <= TBoxedCell);
+  return ldRefReturn(ty.unbox());
 }
 
 SSATmp* IRBuilder::localValue(uint32_t id, TypeConstraint tc) {
@@ -906,27 +956,27 @@ bool IRBuilder::startBlock(Block* block, bool hasUnprocessedPred) {
   return true;
 }
 
-Block* IRBuilder::makeBlock(Offset offset) {
-  auto it = m_offsetToBlockMap.find(offset);
-  if (it == m_offsetToBlockMap.end()) {
+Block* IRBuilder::makeBlock(SrcKey sk) {
+  auto it = m_skToBlockMap.find(sk);
+  if (it == m_skToBlockMap.end()) {
     auto const block = m_unit.defBlock();
-    m_offsetToBlockMap.insert(std::make_pair(offset, block));
+    m_skToBlockMap.emplace(sk, block);
     return block;
   }
   return it->second;
 }
 
 void IRBuilder::resetOffsetMapping() {
-  m_offsetToBlockMap.clear();
+  m_skToBlockMap.clear();
 }
 
-bool IRBuilder::hasBlock(Offset offset) const {
-  return m_offsetToBlockMap.count(offset);
+bool IRBuilder::hasBlock(SrcKey sk) const {
+  return m_skToBlockMap.count(sk);
 }
 
-void IRBuilder::setBlock(Offset offset, Block* block) {
-  assertx(!hasBlock(offset));
-  m_offsetToBlockMap[offset] = block;
+void IRBuilder::setBlock(SrcKey sk, Block* block) {
+  assertx(!hasBlock(sk));
+  m_skToBlockMap[sk] = block;
 }
 
 void IRBuilder::pushBlock(BCMarker marker, Block* b) {

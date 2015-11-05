@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,12 +21,13 @@
 #include <cstring>
 
 #include "hphp/runtime/base/array-iterator.h"
-#include "hphp/runtime/vm/unit.h"
-#include "hphp/runtime/base/zend-string.h"
-#include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
+#include "hphp/runtime/base/stats.h"
+#include "hphp/runtime/base/zend-string.h"
+#include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/repo-global-data.h"
+#include "hphp/runtime/vm/unit.h"
 #include "hphp/util/text-util.h"
 
 namespace HPHP {
@@ -49,7 +50,7 @@ int numImmediates(Op opcode) {
 #undef THREE
 #undef FOUR
   };
-  return values[uint8_t(opcode)];
+  return values[size_t(opcode)];
 }
 
 ArgType immType(const Op opcode, int idx) {
@@ -120,7 +121,7 @@ ArgType immType(const Op opcode, int idx) {
 #undef THREE
 #undef FOUR
   };
-  auto opInt = uint8_t(opcode);
+  auto opInt = size_t(opcode);
   switch (idx) {
     case 0: return (ArgType)arg0Types[opInt];
     case 1: return (ArgType)arg1Types[opInt];
@@ -130,9 +131,11 @@ ArgType immType(const Op opcode, int idx) {
   }
 }
 
-int immSize(const Op* opcode, int idx) {
-  assert(idx >= 0 && idx < numImmediates(*opcode));
-  always_assert(idx < 4); // No opcodes have more than four immediates
+int immSize(PC origPC, int idx) {
+  auto pc = origPC;
+  auto const op = decode_op(pc);
+  assert(idx >= 0 && idx < numImmediates(op));
+  always_assert(idx < 4); // No origPCs have more than four immediates
   static const int8_t argTypeToSizes[] = {
 #define ARGTYPE(nm, type) sizeof(type),
 #define ARGTYPEVEC(nm, type) 0,
@@ -141,33 +144,31 @@ int immSize(const Op* opcode, int idx) {
 #undef ARGTYPEVEC
   };
 
-  if (immType(*opcode, idx) == IVA ||
-      immType(*opcode, idx) == LA ||
-      immType(*opcode, idx) == IA) {
-    intptr_t offset = 1;
-    if (idx >= 1) offset += immSize(opcode, 0);
-    if (idx >= 2) offset += immSize(opcode, 1);
-    if (idx >= 3) offset += immSize(opcode, 2);
-    unsigned char imm = *(const unsigned char*)(opcode + offset);
+  if (immType(op, idx) == IVA ||
+      immType(op, idx) == LA ||
+      immType(op, idx) == IA) {
+    if (idx >= 1) pc += immSize(origPC, 0);
+    if (idx >= 2) pc += immSize(origPC, 1);
+    if (idx >= 3) pc += immSize(origPC, 2);
+    auto const imm = decode_raw<uint8_t>(pc);
+
     // Low order bit set => 4-byte.
     return (imm & 0x1 ? sizeof(int32_t) : sizeof(unsigned char));
   }
 
-  if (immType(*opcode, idx) == RATA) {
-    intptr_t offset = 1;
-    if (idx >= 1) offset += immSize(opcode, 0);
-    if (idx >= 2) offset += immSize(opcode, 1);
-    if (idx >= 3) offset += immSize(opcode, 2);
-    return encodedRATSize(reinterpret_cast<PC>(opcode) + offset);
+  if (immType(op, idx) == RATA) {
+    if (idx >= 1) pc += immSize(origPC, 0);
+    if (idx >= 2) pc += immSize(origPC, 1);
+    if (idx >= 3) pc += immSize(origPC, 2);
+    return encodedRATSize(pc);
   }
 
-  if (immIsVector(*opcode, idx)) {
-    intptr_t offset = 1;
-    if (idx >= 1) offset += immSize(opcode, 0);
-    if (idx >= 2) offset += immSize(opcode, 1);
-    if (idx >= 3) offset += immSize(opcode, 2);
+  if (immIsVector(op, idx)) {
+    if (idx >= 1) pc += immSize(origPC, 0);
+    if (idx >= 2) pc += immSize(origPC, 1);
+    if (idx >= 3) pc += immSize(origPC, 2);
     int prefixes, vecElemSz;
-    auto itype = immType(*opcode, idx);
+    auto itype = immType(op, idx);
     if (itype == MA) {
       prefixes = 2;
       vecElemSz = sizeof(uint8_t);
@@ -186,10 +187,10 @@ int immSize(const Op* opcode, int idx) {
       vecElemSz = sizeof(StrVecItem);
     }
     return prefixes * sizeof(int32_t) +
-      vecElemSz * *(int32_t*)((int8_t*)opcode + offset);
+      vecElemSz * decode_raw<int32_t>(pc);
   }
 
-  ArgType type = immType(*opcode, idx);
+  ArgType type = immType(op, idx);
   return (type >= 0) ? argTypeToSizes[type] : 0;
 }
 
@@ -207,38 +208,40 @@ bool hasImmVector(Op opcode) {
   return false;
 }
 
-ArgUnion getImm(const Op* opcode, int idx) {
-  const Op* p = opcode + 1;
-  assert(idx >= 0 && idx < numImmediates(*opcode));
+ArgUnion getImm(PC const origPC, int idx) {
+  auto pc = origPC;
+  auto const UNUSED op = decode_op(pc);
+  assert(idx >= 0 && idx < numImmediates(op));
   ArgUnion retval;
   retval.u_NA = 0;
   int cursor = 0;
   for (cursor = 0; cursor < idx; cursor++) {
     // Advance over this immediate.
-    p += immSize(opcode, cursor);
+    pc += immSize(origPC, cursor);
   }
   always_assert(cursor == idx);
-  auto const type = immType(*opcode, idx);
+  auto const type = immType(op, idx);
   if (type == IVA || type == LA || type == IA) {
-    retval.u_IVA = decodeVariableSizeImm((const uint8_t**)&p);
-  } else if (!immIsVector(*opcode, cursor)) {
+    retval.u_IVA = decodeVariableSizeImm(&pc);
+  } else if (!immIsVector(op, cursor)) {
     always_assert(type != RATA);  // Decode RATAs with a different function.
-    memcpy(&retval.bytes, p, immSize(opcode, idx));
+    memcpy(&retval.bytes, pc, immSize(origPC, idx));
   }
-  always_assert(numImmediates(*opcode) > idx);
+  always_assert(numImmediates(op) > idx);
   return retval;
 }
 
-ArgUnion* getImmPtr(const Op* opcode, int idx) {
-  assert(immType(*opcode, idx) != IVA);
-  assert(immType(*opcode, idx) != LA);
-  assert(immType(*opcode, idx) != IA);
-  assert(immType(*opcode, idx) != RATA);
-  const Op* ptr = opcode + 1;
+ArgUnion* getImmPtr(PC const origPC, int idx) {
+  auto pc = origPC;
+  auto const UNUSED op = decode_op(pc);
+  assert(immType(op, idx) != IVA);
+  assert(immType(op, idx) != LA);
+  assert(immType(op, idx) != IA);
+  assert(immType(op, idx) != RATA);
   for (int i = 0; i < idx; i++) {
-    ptr += immSize(opcode, i);
+    pc += immSize(origPC, i);
   }
-  return (ArgUnion*)ptr;
+  return (ArgUnion*)pc;
 }
 
 template<typename T>
@@ -288,17 +291,17 @@ void encodeIvaToVector(std::vector<unsigned char>& out, int32_t val) {
   out.resize(currentLen + encodeVariableSizeImm(val, &out[currentLen]));
 }
 
-int instrLen(const Op* opcode) {
-  auto op = *opcode;
-  int len = 1;
+int instrLen(PC const origPC) {
+  auto pc = origPC;
+  auto op = decode_op(pc);
   int nImm = numImmediates(op);
   for (int i = 0; i < nImm; i++) {
-    len += immSize(opcode, i);
+    pc += immSize(origPC, i);
   }
-  return len;
+  return pc - origPC;
 }
 
-Offset* instrJumpOffset(const Op* instr) {
+Offset* instrJumpOffset(PC const origPC) {
   static const int8_t jumpMask[] = {
 #define IMM_NA 0
 #define IMM_MA 0
@@ -345,21 +348,22 @@ Offset* instrJumpOffset(const Op* instr) {
 #undef O
   };
 
-  assert(!isSwitch(*instr));  // BLA doesn't work here
+  auto pc = origPC;
+  auto const op = decode_op(pc);
+  assert(!isSwitch(op));  // BLA doesn't work here
 
-  if (Op(*instr) == OpIterBreak) {
-    uint32_t veclen;
-    std::memcpy(&veclen, instr + 1, sizeof veclen);
+  if (op == OpIterBreak) {
+    auto const veclen = decode_raw<uint32_t>(pc);
     assert(veclen > 0);
     auto const target = const_cast<Offset*>(
       reinterpret_cast<const Offset*>(
-        reinterpret_cast<const uint32_t*>(instr + 1) + 2 * veclen + 1
+        reinterpret_cast<const uint32_t*>(pc) + 2 * veclen
       )
     );
     return target;
   }
 
-  int mask = jumpMask[uint8_t(*instr)];
+  int mask = jumpMask[size_t(op)];
   if (mask == 0) {
     return nullptr;
   }
@@ -373,10 +377,10 @@ Offset* instrJumpOffset(const Op* instr) {
   default: assert(false); return nullptr;
   }
 
-  return &getImmPtr(instr, immNum)->u_BA;
+  return &getImmPtr(origPC, immNum)->u_BA;
 }
 
-Offset instrJumpTarget(const Op* instrs, Offset pos) {
+Offset instrJumpTarget(PC instrs, Offset pos) {
   Offset* offset = instrJumpOffset(instrs + pos);
 
   if (!offset) {
@@ -386,25 +390,26 @@ Offset instrJumpTarget(const Op* instrs, Offset pos) {
   }
 }
 
-OffsetSet instrSuccOffsets(Op* opc, const Unit* unit) {
+OffsetSet instrSuccOffsets(PC opc, const Unit* unit) {
   OffsetSet succBcOffs;
-  Op* bcStart = (Op*)(unit->entry());
+  auto const bcStart = unit->entry();
+  auto const op = peek_op(opc);
 
-  if (!instrIsControlFlow(*opc)) {
+  if (!instrIsControlFlow(op)) {
     Offset succOff = opc + instrLen(opc) - bcStart;
     succBcOffs.insert(succOff);
     return succBcOffs;
   }
 
-  if (instrAllowsFallThru(*opc)) {
+  if (instrAllowsFallThru(op)) {
     Offset succOff = opc + instrLen(opc) - bcStart;
     succBcOffs.insert(succOff);
   }
 
-  if (isSwitch(*opc)) {
-    foreachSwitchTarget(opc, [&](Offset& offset) {
-        succBcOffs.insert(offset + opc - bcStart);
-      });
+  if (isSwitch(op)) {
+    foreachSwitchTarget(opc, [&](Offset offset) {
+      succBcOffs.insert(offset + opc - bcStart);
+    });
   } else {
     Offset target = instrJumpTarget(bcStart, opc - bcStart);
     if (target != InvalidAbsoluteOffset) {
@@ -418,16 +423,18 @@ OffsetSet instrSuccOffsets(Op* opc, const Unit* unit) {
  * Return the number of successor-edges including fall-through paths but not
  * implicit exception paths.
  */
-int numSuccs(const Op* instr) {
-  if ((instrFlags(*instr) & TF) != 0) {
-    if (isSwitch(*instr)) {
-      return *(int*)(instr + 1);
+int numSuccs(PC const origPC) {
+  auto pc = origPC;
+  auto const op = decode_op(pc);
+  if ((instrFlags(op) & TF) != 0) {
+    if (isSwitch(op)) {
+      return decode_raw<int32_t>(pc);
     }
-    if (isUnconditionalJmp(*instr) || *instr == OpIterBreak) return 1;
+    if (isUnconditionalJmp(op) || op == OpIterBreak) return 1;
     return 0;
   }
-  if (!instrIsControlFlow(*instr)) return 1;
-  if (instrJumpOffset(const_cast<Op*>(instr))) return 2;
+  if (!instrIsControlFlow(op)) return 1;
+  if (instrJumpOffset(origPC)) return 2;
   return 1;
 }
 
@@ -436,8 +443,8 @@ int numSuccs(const Op* instr) {
  * for a given push/pop instruction. For peek/poke instructions, this
  * function returns 0.
  */
-int instrNumPops(const Op* opcode) {
-  static const int8_t numberOfPops[] = {
+int instrNumPops(PC pc) {
+  static const int32_t numberOfPops[] = {
 #define NOV 0
 #define ONE(...) 1
 #define TWO(...) 2
@@ -447,11 +454,16 @@ int instrNumPops(const Op* opcode) {
 #define C_MMANY -2
 #define V_MMANY -2
 #define R_MMANY -2
+#define MFINAL -3
+#define C_MFINAL -5
+#define R_MFINAL C_MFINAL
+#define V_MFINAL C_MFINAL
 #define FMANY -3
 #define CVMANY -3
 #define CVUMANY -3
 #define CMANY -3
 #define SMANY -1
+#define IDX_A -4
 #define O(name, imm, pop, push, flags) pop,
     OPCODES
 #undef NOV
@@ -463,25 +475,35 @@ int instrNumPops(const Op* opcode) {
 #undef C_MMANY
 #undef V_MMANY
 #undef R_MMANY
+#undef MFINAL
+#undef C_MFINAL
+#undef R_MFINAL
+#undef V_MFINAL
 #undef FMANY
 #undef CVMANY
 #undef CVUMANY
 #undef CMANY
 #undef SMANY
+#undef IDX_A
 #undef O
   };
-  int n = numberOfPops[uint8_t(*opcode)];
+  int n = numberOfPops[size_t(peek_op(pc))];
   // For most instructions, we know how many values are popped based
   // solely on the opcode
   if (n >= 0) return n;
-  // FCall and NewPackedArray specify how many values are popped in their
-  // first immediate
-  if (n == -3) return getImm(opcode, 0).u_IVA;
+  // BaseSC and BaseSL remove an A that may be on the top of the stack or one
+  // element below the top, depending on the second immediate.
+  if (n == -4) return getImm(pc, 1).u_IVA + 1;
+  // FCall, NewPackedArray, and some final member operations specify how many
+  // values are popped in their first immediate
+  if (n == -3) return getImm(pc, 0).u_IVA;
+  // Other final member operations pop their first immediate + 1
+  if (n == -5) return getImm(pc, 0).u_IVA + 1;
   // For instructions with vector immediates, we have to scan the
   // contents of the vector immediate to determine how many values
   // are popped
   assert(n == -1 || n == -2);
-  ImmVector iv = getImmVector(opcode);
+  ImmVector iv = getImmVector(pc);
   // Count the number of values on the stack accounted for by the
   // ImmVector's location and members
   int k = iv.numStackValues();
@@ -495,7 +517,7 @@ int instrNumPops(const Op* opcode) {
  * for a given push/pop instruction. For peek/poke instructions or
  * InsertMid instructions, this function returns 0.
  */
-int instrNumPushes(const Op* opcode) {
+int instrNumPushes(PC pc) {
   static const int8_t numberOfPushes[] = {
 #define NOV 0
 #define ONE(...) 1
@@ -504,6 +526,7 @@ int instrNumPushes(const Op* opcode) {
 #define FOUR(...) 4
 #define INS_1(...) 0
 #define INS_2(...) 0
+#define IDX_A -1
 #define O(name, imm, pop, push, flags) push,
     OPCODES
 #undef NOV
@@ -513,9 +536,16 @@ int instrNumPushes(const Op* opcode) {
 #undef FOUR
 #undef INS_1
 #undef INS_2
+#undef IDX_A
 #undef O
   };
-  return numberOfPushes[uint8_t(*opcode)];
+  auto const op = peek_op(pc);
+  auto const pushes = numberOfPushes[size_t(op)];
+
+  // BaseSC and BaseSL may push back a C that was on top of the A they removed.
+  if (pushes == -1) return getImm(pc, 1).u_IVA;
+
+  return pushes;
 }
 
 namespace {
@@ -527,59 +557,56 @@ FlavorDesc doFlavor(uint32_t i, FlavorDesc f, Args&&... args) {
   return i == 0 ? f : doFlavor(i - 1, std::forward<Args>(args)...);
 }
 
-FlavorDesc minstrFlavor(const Op* op, uint32_t i, FlavorDesc top) {
+FlavorDesc minstrFlavor(PC op, uint32_t i, FlavorDesc top) {
   if (top != NOV) {
     if (i == 0) return top;
     --i;
   }
+
+  // First, check for location codes that have a non-Cell stack input.
   auto const location = getMLocation(op);
+  auto const numStack = getImmVector(op).numStackValues();
   switch (location.lcode) {
-    // No stack input for the location
+    // No stack input for the location.
     case LL: case LH: case LGL: case LNL: break;
 
-    // CV on top
-    case LC: case LGC: case LNC:
-      if (i == 0) return CV;
-      --i;
-      break;
+    // CV on top. Handled below.
+    case LC: case LGC: case LNC: break;
 
-    // AV on top
-    case LSL:
+    // AV on top.
+    case LSL: case LSC:
       if (i == 0) return AV;
-      --i;
       break;
 
-    // RV on top
+    // RV on the bottom.
     case LR:
-      if (i == 0) return RV;
-      --i;
-      break;
-
-    // AV on top, CV below
-    case LSC:
-      if (i == 0) return AV;
-      if (i == 1) return CV;
-      i -= 2;
+      if (i == numStack - 1) return RV;
       break;
 
     case InvalidLocationCode:
-      not_reached();
+      always_assert(false);
   }
 
-  if (i < getImmVector(op).numStackValues()) return CV;
+  if (i < numStack) return CV;
   always_assert(0 && "Invalid stack index");
 }
 
-FlavorDesc manyFlavor(const Op* op, uint32_t i, FlavorDesc flavor) {
+FlavorDesc manyFlavor(PC op, uint32_t i, FlavorDesc flavor) {
   always_assert(i < uint32_t(instrNumPops(op)));
   return flavor;
+}
+
+FlavorDesc baseSFlavor(PC pc, uint32_t i) {
+  always_assert(i <= 1);
+  auto clsIdx = getImm(pc, 1).u_IVA;
+  return i == clsIdx ? AV : CV;
 }
 }
 
 /**
  * Returns the expected input flavor of stack slot idx.
  */
-FlavorDesc instrInputFlavor(const Op* op, uint32_t idx) {
+FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
   auto constexpr nov = NOV;
 #define NOV always_assert(0 && "Opcode has no stack inputs");
 #define ONE(f1) return doFlavor(idx, f1);
@@ -590,13 +617,18 @@ FlavorDesc instrInputFlavor(const Op* op, uint32_t idx) {
 #define C_MMANY return minstrFlavor(op, idx, CV);
 #define V_MMANY return minstrFlavor(op, idx, VV);
 #define R_MMANY return minstrFlavor(op, idx, RV);
+#define MFINAL return manyFlavor(op, idx, CRV);
+#define C_MFINAL return idx == 0 ? CV : CRV;
+#define R_MFINAL return idx == 0 ? RV : CRV;
+#define V_MFINAL return idx == 0 ? VV : CRV;
 #define FMANY return manyFlavor(op, idx, FV);
 #define CVMANY return manyFlavor(op, idx, CVV);
 #define CVUMANY return manyFlavor(op, idx, CVUV);
 #define CMANY return manyFlavor(op, idx, CV);
 #define SMANY return manyFlavor(op, idx, CV);
+#define IDX_A return baseSFlavor(op, idx);
 #define O(name, imm, pop, push, flags) case Op::name: pop
-  switch (*op) {
+  switch (peek_op(op)) {
     OPCODES
   }
   not_reached();
@@ -609,21 +641,27 @@ FlavorDesc instrInputFlavor(const Op* op, uint32_t idx) {
 #undef C_MMANY
 #undef V_MMANY
 #undef R_MMANY
+#undef MFINAL
+#undef C_MFINAL
+#undef R_MFINAL
+#undef V_MFINAL
 #undef FMANY
 #undef CVMANY
 #undef CVUMANY
 #undef CMANY
 #undef SMANY
+#undef IDX_A
 #undef O
 }
 
-StackTransInfo instrStackTransInfo(const Op* opcode) {
+StackTransInfo instrStackTransInfo(PC opcode) {
   static const StackTransInfo::Kind transKind[] = {
 #define NOV StackTransInfo::Kind::PushPop
 #define ONE(...) StackTransInfo::Kind::PushPop
 #define TWO(...) StackTransInfo::Kind::PushPop
 #define THREE(...) StackTransInfo::Kind::PushPop
 #define FOUR(...) StackTransInfo::Kind::PushPop
+#define IDX_A StackTransInfo::Kind::PushPop
 #define INS_1(...) StackTransInfo::Kind::InsertMid
 #define INS_2(...) StackTransInfo::Kind::InsertMid
 #define O(name, imm, pop, push, flags) push,
@@ -635,6 +673,7 @@ StackTransInfo instrStackTransInfo(const Op* opcode) {
 #undef FOUR
 #undef INS_1
 #undef INS_2
+#undef IDX_A
 #undef O
   };
   static const int8_t peekPokeType[] = {
@@ -645,6 +684,7 @@ StackTransInfo instrStackTransInfo(const Op* opcode) {
 #define FOUR(...) -1
 #define INS_1(...) 0
 #define INS_2(...) 1
+#define IDX_A 0
 #define O(name, imm, pop, push, flags) push,
     OPCODES
 #undef NOV
@@ -654,10 +694,12 @@ StackTransInfo instrStackTransInfo(const Op* opcode) {
 #undef FOUR
 #undef INS_2
 #undef INS_1
+#undef IDX_A
 #undef O
   };
   StackTransInfo ret;
-  ret.kind = transKind[uint8_t(*opcode)];
+  auto const op = peek_op(opcode);
+  ret.kind = transKind[size_t(op)];
   switch (ret.kind) {
   case StackTransInfo::Kind::PushPop:
     ret.pos = 0;
@@ -667,7 +709,7 @@ StackTransInfo instrStackTransInfo(const Op* opcode) {
   case StackTransInfo::Kind::InsertMid:
     ret.numPops = 0;
     ret.numPushes = 0;
-    ret.pos = peekPokeType[uint8_t(*opcode)];
+    ret.pos = peekPokeType[size_t(op)];
     return ret;
   }
   not_reached();
@@ -708,9 +750,9 @@ void staticArrayStreamer(ArrayData* ad, std::ostream& out) {
       Variant key = it.first();
 
       // Key.
-      if (IS_INT_TYPE(key.getType())) {
+      if (isIntType(key.getType())) {
         out << *key.getInt64Data();
-      } else if (IS_STRING_TYPE(key.getType())) {
+      } else if (isStringType(key.getType())) {
         out << "\""
             << escapeStringForCPP(key.getStringData()->data(),
                                   key.getStringData()->size())
@@ -848,22 +890,19 @@ MemberCode parseMemberCode(const char* s) {
   return InvalidMemberCode;
 }
 
-std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
+std::string instrToString(PC it, const Unit* u /* = NULL */) {
   std::stringstream out;
-  PC iStart = reinterpret_cast<PC>(it);
-  Op op = *it;
-  ++it;
+  PC iStart = it;
+  Op op = decode_op(it);
 
   auto readRATA = [&] {
     if (!u) {
-      auto const pc = reinterpret_cast<const unsigned char*>(it);
+      auto const pc = it;
       it += encodedRATSize(pc);
       out << " <RepoAuthType>";
       return;
     }
-    auto pc = reinterpret_cast<const unsigned char*>(it);
-    auto const rat = decodeRAT(u, pc);
-    it = reinterpret_cast<const Op*>(pc);
+    auto const rat = decodeRAT(u, it);
     out << ' ' << show(rat);
   };
 
@@ -880,7 +919,9 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
   it += sizeof(Offset);                                             \
 } while (false)
 
-#define READV() out << " " << decodeVariableSizeImm((const uint8_t**)&it);
+#define READV() out << " " << decodeVariableSizeImm(&it);
+
+#define READLA() out << " L:" << decodeVariableSizeImm(&it);
 
 #define READIVA() do {                      \
   out << " ";                               \
@@ -940,7 +981,7 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
 } while (false)
 
 #define READLITSTR(sep) do {                                      \
-  Id id = readData<Id>(it);                                       \
+  Id id = decode_raw<Id>(it);                                       \
   if (id < 0) {                                                   \
     assert(op == OpSSwitch);                                      \
     out << sep << "-";                                            \
@@ -954,7 +995,7 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
 } while (false)
 
 #define READSVEC() do {                         \
-  int sz = readData<int>(it);                   \
+  int sz = decode_raw<int>(it);                   \
   out << " <";                                  \
   const char* sep = "";                         \
   for (int i = 0; i < sz; ++i) {                \
@@ -963,7 +1004,7 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
       READLITSTR("");                           \
       out << ":";                               \
     }                                           \
-    Offset o = readData<Offset>(it);            \
+    Offset o = decode_raw<Offset>(it);            \
     if (u != nullptr) {                         \
       if (iStart + o == u->entry() - 1) {       \
         out << "Invalid";                       \
@@ -979,18 +1020,18 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
 } while (false)
 
 #define READIVEC() do {                           \
-  int sz = readData<int>(it);                     \
+  int sz = decode_raw<int>(it);                     \
   out << " <";                                    \
   const char* sep = "";                           \
   for (int i = 0; i < sz; ++i) {                  \
     out << sep;                                   \
-    IterKind k = (IterKind)readData<Id>(it);      \
+    IterKind k = (IterKind)decode_raw<Id>(it);      \
     switch(k) {                                   \
       case KindOfIter:  out << "(Iter) ";  break; \
       case KindOfMIter: out << "(MIter) "; break; \
       case KindOfCIter: out << "(CIter) "; break; \
     }                                             \
-    out << readData<Id>(it);                      \
+    out << decode_raw<Id>(it);                      \
     sep = ", ";                                   \
   }                                               \
   out << ">";                                     \
@@ -1007,7 +1048,7 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
 #define H_ILA READIVEC()
 #define H_IVA READIVA()
 #define H_I64A READ(int64_t)
-#define H_LA READV()
+#define H_LA READLA()
 #define H_IA READV()
 #define H_DA READ(double)
 #define H_BA READOFF()
@@ -1023,7 +1064,7 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
   }                                                           \
   it += sizeof(Id)
 #define H_VSA do {                                      \
-  int sz = readData<int32_t>(it);                       \
+  int sz = decode_raw<int32_t>(it);                       \
   out << " <";                                          \
   for (int i = 0; i < sz; ++i) {                        \
     H_SA;                                               \
@@ -1041,6 +1082,8 @@ std::string instrToString(const Op* it, const Unit* u /* = NULL */) {
 OPCODES
 #undef O
 #undef READ
+#undef READV
+#undef READLA
 #undef ONE
 #undef TWO
 #undef THREE
@@ -1073,7 +1116,7 @@ const char* opcodeToName(Op op) {
 #undef O
   };
   if (op >= Op::LowInvalid && op <= Op::HighInvalid) {
-    return namesArr[uint8_t(op)];
+    return namesArr[size_t(op)];
   }
   return "Invalid";
 }
@@ -1140,6 +1183,18 @@ static const char* SwitchKind_names[] = {
 #undef KIND
 };
 
+static const char* QueryMOp_names[] = {
+#define OP(x) #x,
+  QUERY_M_OPS
+#undef OP
+};
+
+static const char* PropElemOp_names[] = {
+#define OP(x) #x,
+  PROP_ELEM_OPS
+#undef OP
+};
+
 template<class T, size_t Sz>
 const char* subopToNameImpl(const char* (&arr)[Sz], T opcode) {
   static_assert(
@@ -1149,6 +1204,12 @@ const char* subopToNameImpl(const char* (&arr)[Sz], T opcode) {
   auto const idx = static_cast<uint8_t>(opcode);
   always_assert(idx < Sz);
   return arr[idx];
+}
+
+template<class T, size_t Sz>
+bool subopValidImpl(const char* (&arr)[Sz], T op) {
+  auto const raw = static_cast<typename std::underlying_type<T>::type>(op);
+  return raw >= 0 && raw < Sz;
 }
 
 template<class T, size_t Sz>
@@ -1171,6 +1232,9 @@ template<class T> folly::Optional<T> nameToSubop(const char* str) {
   const char* subopToName(subop op) {                       \
     return subopToNameImpl(subop##_names, op);              \
   }                                                         \
+  template<> bool subopValid(subop op) {                    \
+    return subopValidImpl(subop##_names, op);               \
+  }                                                         \
   namespace {                                               \
   template<> struct NameToSubopHelper<subop> {              \
     static folly::Optional<subop> conv(const char* str) {   \
@@ -1190,8 +1254,42 @@ X(SilenceOp)
 X(OODeclExistsOp)
 X(ObjMethodOp)
 X(SwitchKind)
+X(QueryMOp)
+X(PropElemOp)
 
 #undef X
+
+/*
+ * MOpFlags is a bitmask so it doesn't fit into the [0,n) pattern of the other
+ * subops above.
+ */
+const char* subopToName(MOpFlags f) {
+  switch (f) {
+#define FLAG(name, val) case MOpFlags::name: return #name;
+  M_OP_FLAGS
+#undef FLAG
+  }
+  always_assert_flog(false, "Invalid MOpFlags: {}", uint8_t(f));
+}
+
+template<>
+bool subopValid(MOpFlags f) {
+  switch (f) {
+#define FLAG(name, val) case MOpFlags::name: return true;
+  M_OP_FLAGS
+#undef FLAG
+  }
+  return false;
+}
+
+template<>
+folly::Optional<MOpFlags> nameToSubop<MOpFlags>(const char* str) {
+#define FLAG(name, val) if (!strcmp(str, #name)) return MOpFlags::name;
+  M_OP_FLAGS
+#undef FLAG
+
+  return folly::none;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -1217,29 +1315,6 @@ bool instrIsNonCallControlFlow(Op opcode) {
   }
 }
 
-bool instrHasConditionalBranch(Op opcode) {
-  switch (opcode) {
-    case OpJmpZ:
-    case OpJmpNZ:
-    case OpIterInit:
-    case OpMIterInit:
-    case OpWIterInit:
-    case OpIterInitK:
-    case OpMIterInitK:
-    case OpWIterInitK:
-    case OpIterNext:
-    case OpMIterNext:
-    case OpWIterNext:
-    case OpIterNextK:
-    case OpMIterNextK:
-    case OpWIterNextK:
-    case OpDecodeCufIter:
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool instrAllowsFallThru(Op opcode) {
   InstrFlags opFlags = instrFlags(opcode);
   return (opFlags & TF) == 0;
@@ -1250,10 +1325,11 @@ bool instrReadsCurrentFpi(Op opcode) {
   return (opFlags & FF) != 0;
 }
 
-ImmVector getImmVector(const Op* opcode) {
-  int numImm = numImmediates(*opcode);
+ImmVector getImmVector(PC opcode) {
+  auto const op = peek_op(opcode);
+  int numImm = numImmediates(op);
   for (int k = 0; k < numImm; ++k) {
-    ArgType t = immType(*opcode, k);
+    ArgType t = immType(op, k);
     if (t == MA) {
       void* vp = getImmPtr(opcode, k);
       return ImmVector::createFromStream(
@@ -1263,7 +1339,7 @@ ImmVector getImmVector(const Op* opcode) {
       return ImmVector::createFromStream(
         static_cast<const int32_t*>(vp));
     } else if (t == VSA) {
-      const int32_t* vp = (int32_t*) getImmPtr(opcode, k);
+      const int32_t* vp = (int32_t*)getImmPtr(opcode, k);
       return ImmVector(reinterpret_cast<const uint8_t*>(vp + 1),
                        vp[0], vp[0]);
     }
@@ -1272,7 +1348,7 @@ ImmVector getImmVector(const Op* opcode) {
   not_reached();
 }
 
-MInstrLocation getMLocation(const Op* opcode) {
+MInstrLocation getMLocation(PC opcode) {
   auto immVec = getImmVector(opcode);
   auto vec = immVec.vec();
   auto const lcode = LocationCode(*vec++);
@@ -1289,7 +1365,7 @@ bool hasMVector(Op op) {
   return false;
 }
 
-std::vector<MVectorItem> getMVector(const Op* opcode) {
+std::vector<MVectorItem> getMVector(PC opcode) {
   auto immVec = getImmVector(opcode);
   std::vector<MVectorItem> result;
   auto it = immVec.vec();
@@ -1351,10 +1427,11 @@ bool ImmVector::decodeLastMember(const Unit* u,
   return false;
 }
 
-int instrSpToArDelta(const Op* opcode) {
+int instrSpToArDelta(PC opcode) {
   // This function should only be called for instructions that read
   // the current FPI
-  assert(instrReadsCurrentFpi(*opcode));
+  auto const op = peek_op(opcode);
+  assert(instrReadsCurrentFpi(op));
   // The delta from sp to ar is equal to the number of values on the stack
   // that will be consumed by this instruction (numPops) plus the number of
   // parameters pushed onto the stack so far that are not being consumed by
@@ -1363,8 +1440,28 @@ int instrSpToArDelta(const Op* opcode) {
   // instructions, numExtra will be 0 because all of the parameters on the
   // stack are already accounted for by numPops.
   int numPops = instrNumPops(opcode);
-  int numExtra = isFCallStar(*opcode) ? 0 : getImm(opcode, 0).u_IVA;
+  int numExtra = isFCallStar(op) ? 0 : getImm(opcode, 0).u_IVA;
   return numPops + numExtra;
+}
+
+std::string show(MInstrAttr mia) {
+  if (mia == MIA_none) return "none";
+
+  std::string ret;
+  auto sep = "";
+#define X(n) if (mia & MIA_##n) {               \
+    folly::toAppend(sep, #n, &ret);             \
+    sep = "|";                                  \
+  }
+  X(warn);
+  X(define);
+  X(reffy);
+  X(unset);
+  X(new);
+  X(final_get);
+#undef X
+
+  return ret;
 }
 
 const MInstrInfo& getMInstrInfo(Op op) {

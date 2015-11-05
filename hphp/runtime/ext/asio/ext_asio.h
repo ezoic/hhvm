@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -34,6 +34,21 @@
 #include "hphp/runtime/ext/asio/ext_waitable-wait-handle.h"
 
 namespace HPHP {
+
+
+class AsioExtension final : public Extension {
+public:
+  AsioExtension() : Extension("asio", "0.1") {}
+
+  void moduleInit() override {
+    initAsyncGenerator();
+    initFunctions();
+  }
+
+private:
+  void initAsyncGenerator();
+  void initFunctions();
+};
 
 Object HHVM_FUNCTION(asio_get_running);
 

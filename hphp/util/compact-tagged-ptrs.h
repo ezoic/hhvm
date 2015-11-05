@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,7 +38,7 @@ namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(_M_X64) || defined(__powerpc64__)
 
 template<class T, class TagType = uint32_t>
 struct CompactTaggedPtr {

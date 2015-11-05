@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,6 +21,7 @@
 #include "hphp/compiler/statement/statement.h"
 #include "hphp/compiler/statement/use_trait_statement.h"
 #include "hphp/compiler/statement/class_require_statement.h"
+#include "hphp/compiler/statement/class_statement.h"
 #include "hphp/compiler/statement/trait_prec_statement.h"
 #include "hphp/compiler/statement/trait_alias_statement.h"
 #include "hphp/compiler/statement/typedef_statement.h"
@@ -164,11 +165,6 @@ struct SymbolicStack {
     CLS_PARENT
   };
 
-  enum MetaType {
-    META_NONE,
-    META_LITSTR,
-  };
-
 private:
   /**
    * Symbolic stack (m_symStack)
@@ -188,17 +184,14 @@ private:
   struct SymEntry {
     explicit SymEntry(char s = 0)
       : sym(s)
-      , metaType(META_NONE)
+      , name(nullptr)
       , className(nullptr)
       , intval(-1)
       , unnamedLocalStart(InvalidAbsoluteOffset)
       , clsBaseType(CLS_INVALID)
     {}
     char sym;
-    MetaType metaType;
-    union {
-      const StringData* name;   // META_LITSTR
-    }   metaData;
+    const StringData* name;
     const StringData* className;
     int64_t intval; // used for L and I symbolic flavors
 
@@ -212,6 +205,8 @@ private:
     // early.  How this works depends on the type of class base---see
     // emitResolveClsBase for details.
     ClassBaseType clsBaseType;
+
+    std::string pretty() const;
   };
   std::vector<SymEntry> m_symStack;
 
@@ -251,7 +246,8 @@ public:
   bool isCls(int index) const;
   bool isTypePredicted(int index = -1 /* stack top */) const;
   void set(int index, char sym);
-  unsigned size() const;
+  size_t size() const;
+  size_t actualSize() const;
   bool empty() const;
   void clear();
 
@@ -439,6 +435,7 @@ class EmitterVisitor {
   friend class FuncFinisher;
 public:
   typedef std::vector<int> IndexChain;
+  typedef std::pair<ExpressionPtr, IndexChain> IndexPair;
   typedef Emitter::IterPair IterPair;
   typedef std::vector<IterPair> IterVec;
 
@@ -455,9 +452,9 @@ public:
 
   void listAssignmentVisitLHS(Emitter& e, ExpressionPtr exp,
                               IndexChain& indexChain,
-                              std::vector<IndexChain*>& chainList);
+                              std::vector<IndexPair>& chainList);
   void listAssignmentAssignElements(Emitter& e,
-                                    std::vector<IndexChain*>& indexChains,
+                                    std::vector<IndexPair>& indexChains,
                                     std::function<void()> emitSrc);
 
   void visitIfCondition(ExpressionPtr cond, Emitter& e, Label& tru, Label& fals,
@@ -673,9 +670,19 @@ public:
   void unexpectedStackSym(char sym, const char* where) const;
 
   int scanStackForLocation(int iLast);
+
   void buildVectorImm(std::vector<unsigned char>& vectorImm,
                       int iFirst, int iLast, bool allowW,
                       Emitter& e);
+  /*
+   * Emit bytecodes for the base and intermediate dims, returning the number of
+   * eval stack slots containing member keys that should be consumed by the
+   * final operation.
+   */
+  size_t emitMOp(int iFirst, int& iLast, bool allowW, bool rhsVal,
+                 Emitter& e, MOpFlags flags);
+  void emitQueryMOp(int iFirst, int iLast, Emitter& e, QueryMOp op);
+
   enum class PassByRefKind {
     AllowCell,
     WarnOnCell,
@@ -689,7 +696,7 @@ public:
   void emitCGetL3(Emitter& e);
   void emitPushL(Emitter& e);
   void emitCGet(Emitter& e);
-  void emitVGet(Emitter& e);
+  bool emitVGet(Emitter& e, bool skipCells = false);
   void emitIsset(Emitter& e);
   void emitIsType(Emitter& e, IsTypeOp op);
   void emitEmpty(Emitter& e);
@@ -763,10 +770,11 @@ public:
   void emitDeprecationWarning(Emitter& e, MethodStatementPtr meth);
   void emitMethod(MethodStatementPtr meth);
   void emitMemoizeProp(Emitter& e, MethodStatementPtr meth, Id localID,
-                       const std::vector<Id>& paramIDs, uint numParams);
+                       const std::vector<Id>& paramIDs, uint32_t numParams);
   void addMemoizeProp(MethodStatementPtr meth);
   void emitMemoizeMethod(MethodStatementPtr meth, const StringData* methName);
-  void emitConstMethodCallNoParams(Emitter& e, string name);
+  void emitConstMethodCallNoParams(Emitter& e, const std::string& name);
+  bool emitInlineGenva(Emitter& e, const ExpressionPtr);
   bool emitHHInvariant(Emitter& e, SimpleFunctionCallPtr);
   void emitMethodDVInitializers(Emitter& e,
                                 MethodStatementPtr& meth,
@@ -797,13 +805,13 @@ public:
                     ExpressionListPtr paramsOverride = nullptr);
   void emitFuncCallArg(Emitter& e, ExpressionPtr exp, int paramId,
                        bool isUnpack);
-  void emitBuiltinCallArg(Emitter& e, ExpressionPtr exp, int paramId,
-                         bool byRef);
+  bool emitBuiltinCallArg(Emitter& e, ExpressionPtr exp, int paramId,
+                          bool byRef, bool mustBeRef);
   void emitLambdaCaptureArg(Emitter& e, ExpressionPtr exp);
   void emitBuiltinDefaultArg(Emitter& e, Variant& v,
                              MaybeDataType t, int paramId);
   void emitClass(Emitter& e, ClassScopePtr cNode, bool topLevel);
-  void emitTypedef(Emitter& e, TypedefStatementPtr);
+  Id emitTypedef(Emitter& e, TypedefStatementPtr);
   void emitForeachListAssignment(Emitter& e,
                                  ListAssignmentPtr la,
                                  std::function<void()> emitSrc);

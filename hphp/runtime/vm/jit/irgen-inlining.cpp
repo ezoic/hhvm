@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,8 @@
 #include "hphp/runtime/vm/jit/irgen-guards.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-sprop-global.h"
+
+#include "hphp/runtime/vm/hhbc-codec.h"
 
 namespace HPHP { namespace jit { namespace irgen {
 
@@ -53,8 +55,12 @@ bool isInlining(const IRGS& env) {
 bool beginInlining(IRGS& env,
                    unsigned numParams,
                    const Func* target,
-                   Offset returnBcOffset) {
-  assertx(!env.fpiStack.empty() &&
+                   Offset returnBcOffset,
+                   Block* returnTarget,
+                   bool multipleReturns) {
+  auto const& fpiStack = env.irb->fpiStack();
+
+  assertx(!fpiStack.empty() &&
     "Inlining does not support calls with the FPush* in a different Tracelet");
   assertx(returnBcOffset >= 0 && "returnBcOffset before beginning of caller");
   assertx(curFunc(env)->base() + returnBcOffset < curFunc(env)->past() &&
@@ -62,14 +68,13 @@ bool beginInlining(IRGS& env,
 
   FTRACE(1, "[[[ begin inlining: {}\n", target->fullName()->data());
 
-  SSATmp* params[numParams];
+  SSATmp** params = (SSATmp**)alloca(sizeof(SSATmp*) * numParams);
   for (unsigned i = 0; i < numParams; ++i) {
     params[numParams - i - 1] = popF(env);
   }
 
-  auto const prevSP    = env.fpiStack.top().returnSP;
-  auto const prevSPOff = env.fpiStack.top().returnSPOff;
-  spillStack(env);
+  auto const prevSP    = fpiStack.front().returnSP;
+  auto const prevSPOff = fpiStack.front().returnSPOff;
   auto const calleeSP  = sp(env);
 
   always_assert_flog(
@@ -77,19 +82,39 @@ bool beginInlining(IRGS& env,
     "FPI stack pointer and callee stack pointer didn't match in beginInlining"
   );
 
-  // This can only happen if the code is unreachable, in which case
-  // the FPush* can punt if it gets a TBottom.
-  if (env.fpiStack.top().spillFrame == nullptr) return false;
+  auto const& info = fpiStack.front();
+  always_assert(!isFPushCuf(info.fpushOpc) && !info.interp);
 
-  auto const sframe = env.fpiStack.top().spillFrame;
+  auto ctx = [&] {
+    if (info.ctx || isFPushFunc(info.fpushOpc)) {
+      return info.ctx;
+    }
+
+    constexpr int32_t adjust = offsetof(ActRec, m_r) - offsetof(ActRec, m_this);
+    IRSPOffset ctxOff{invSPOff(env) - info.returnSPOff - adjust};
+    return gen(env, LdStk, TCtx, IRSPOffsetData{ctxOff}, sp(env));
+  }();
+
+  if (debug) {
+    IRSPOffset arOff = offsetFromIRSP(env, BCSPOffset{0});
+    auto arFunc = gen(env, LdARFuncPtr, IRSPOffsetData{arOff}, sp(env));
+    gen(env, DbgAssertFunc, arFunc, cns(env, target));
+  }
+
+  auto fpiFunc = fpiStack.front().func;
+  always_assert_flog(fpiFunc == nullptr || fpiFunc == target,
+                     "fpiFunc = {}  ;  target = {}",
+                     fpiFunc ? fpiFunc->fullName()->data() : "null",
+                     target  ? target->fullName()->data()  : "null");
 
   DefInlineFPData data;
   data.target        = target;
   data.retBCOff      = returnBcOffset;
-  data.fromFPushCtor = sframe->extra<ActRecInfo>()->fromFPushCtor;
-  data.ctx           = sframe->src(2);
+  data.fromFPushCtor = isFPushCtor(info.fpushOpc);
+  data.ctx           = ctx;
   data.retSPOff      = prevSPOff;
   data.spOffset      = offsetFromIRSP(env, BCSPOffset{0});
+  data.numNonDefault = numParams;
 
   // Push state and update the marker before emitting any instructions so
   // they're all given markers in the callee.
@@ -99,6 +124,9 @@ bool beginInlining(IRGS& env,
     false
   };
   env.bcStateStack.emplace_back(key);
+  env.inlineReturnTarget.emplace_back(
+    ReturnTarget { returnTarget, multipleReturns }
+  );
   env.inlineLevel++;
   updateMarker(env);
 
@@ -121,15 +149,10 @@ bool beginInlining(IRGS& env,
     stLocRaw(env, argNum, calleeFP, cns(env, staticEmptyArray()));
   }
 
-  env.fpiActiveStack.push(std::make_pair(env.fpiStack.top().returnSP,
-                                         env.fpiStack.top().returnSPOff));
-  env.fpiStack.pop();
-
   return true;
 }
 
 void endInlinedCommon(IRGS& env) {
-  assertx(!env.fpiActiveStack.empty());
   assertx(!curFunc(env)->isPseudoMain());
 
   assertx(!resumed(env));
@@ -143,36 +166,28 @@ void endInlinedCommon(IRGS& env) {
   // updateMarker() below, where the caller state isn't entirely set up.
   env.inlineLevel--;
   env.bcStateStack.pop_back();
+  env.inlineReturnTarget.pop_back();
   always_assert(env.bcStateStack.size() > 0);
 
-  env.fpiActiveStack.pop();
-
   updateMarker(env);
-
-  /*
-   * After the end of inlining, we are restoring to a previously defined stack
-   * that we know is entirely materialized (i.e. in memory), so stackDeficit
-   * needs to be slammed to zero.
-   *
-   * The push of the return value in the caller of this function is not yet
-   * materialized.
-   */
-  assertx(env.irb->evalStack().empty());
-  env.irb->clearStackDeficit();
 
   FTRACE(1, "]]] end inlining: {}\n", curFunc(env)->fullName()->data());
 }
 
-void retFromInlined(IRGS& env) {
+void endInlining(IRGS& env) {
   auto const retVal = pop(env, DataTypeGeneric);
   endInlinedCommon(env);
   push(env, retVal);
 }
 
+void retFromInlined(IRGS& env) {
+  gen(env, Jmp, env.inlineReturnTarget.back().target);
+}
+
 //////////////////////////////////////////////////////////////////////
 
-void inlSingletonSLoc(IRGS& env, const Func* func, const Op* op) {
-  assertx(*op == Op::StaticLocInit);
+void inlSingletonSLoc(IRGS& env, const Func* func, PC op) {
+  assertx(peek_op(op) == Op::StaticLocInit);
 
   TransFlags trflags;
   trflags.noinlineSingleton = true;
@@ -195,10 +210,10 @@ void inlSingletonSLoc(IRGS& env, const Func* func, const Op* op) {
 
 void inlSingletonSProp(IRGS& env,
                        const Func* func,
-                       const Op* clsOp,
-                       const Op* propOp) {
-  assertx(*clsOp == Op::String);
-  assertx(*propOp == Op::String);
+                       PC clsOp,
+                       PC propOp) {
+  assertx(peek_op(clsOp) == Op::String);
+  assertx(peek_op(propOp) == Op::String);
 
   TransFlags trflags;
   trflags.noinlineSingleton = true;

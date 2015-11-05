@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -34,6 +34,13 @@
 
 namespace HPHP {
 
+enum php_xml_option {
+    PHP_XML_OPTION_CASE_FOLDING = 1,
+    PHP_XML_OPTION_TARGET_ENCODING,
+    PHP_XML_OPTION_SKIP_TAGSTART,
+    PHP_XML_OPTION_SKIP_WHITE
+};
+
 static class XMLExtension final : public Extension {
 public:
   XMLExtension() : Extension("xml", NO_EXTENSION_VERSION_YET) {}
@@ -62,6 +69,36 @@ public:
     HHVM_FE(xml_error_string);
     HHVM_FE(utf8_decode);
     HHVM_FE(utf8_encode);
+
+    HHVM_RC_INT_SAME(XML_ERROR_ASYNC_ENTITY);
+    HHVM_RC_INT_SAME(XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF);
+    HHVM_RC_INT_SAME(XML_ERROR_BAD_CHAR_REF);
+    HHVM_RC_INT_SAME(XML_ERROR_BINARY_ENTITY_REF);
+    HHVM_RC_INT_SAME(XML_ERROR_DUPLICATE_ATTRIBUTE);
+    HHVM_RC_INT_SAME(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
+    HHVM_RC_INT_SAME(XML_ERROR_INCORRECT_ENCODING);
+    HHVM_RC_INT_SAME(XML_ERROR_INVALID_TOKEN);
+    HHVM_RC_INT_SAME(XML_ERROR_JUNK_AFTER_DOC_ELEMENT);
+    HHVM_RC_INT_SAME(XML_ERROR_MISPLACED_XML_PI);
+    HHVM_RC_INT_SAME(XML_ERROR_NONE);
+    HHVM_RC_INT_SAME(XML_ERROR_NO_ELEMENTS);
+    HHVM_RC_INT_SAME(XML_ERROR_NO_MEMORY);
+    HHVM_RC_INT_SAME(XML_ERROR_PARAM_ENTITY_REF);
+    HHVM_RC_INT_SAME(XML_ERROR_PARTIAL_CHAR);
+    HHVM_RC_INT_SAME(XML_ERROR_RECURSIVE_ENTITY_REF);
+    HHVM_RC_INT_SAME(XML_ERROR_SYNTAX);
+    HHVM_RC_INT_SAME(XML_ERROR_TAG_MISMATCH);
+    HHVM_RC_INT_SAME(XML_ERROR_UNCLOSED_CDATA_SECTION);
+    HHVM_RC_INT_SAME(XML_ERROR_UNCLOSED_TOKEN);
+    HHVM_RC_INT_SAME(XML_ERROR_UNDEFINED_ENTITY);
+    HHVM_RC_INT_SAME(XML_ERROR_UNKNOWN_ENCODING);
+
+    HHVM_RC_INT(XML_OPTION_CASE_FOLDING,    PHP_XML_OPTION_CASE_FOLDING);
+    HHVM_RC_INT(XML_OPTION_TARGET_ENCODING, PHP_XML_OPTION_TARGET_ENCODING);
+    HHVM_RC_INT(XML_OPTION_SKIP_TAGSTART,   PHP_XML_OPTION_SKIP_TAGSTART);
+    HHVM_RC_INT(XML_OPTION_SKIP_WHITE,      PHP_XML_OPTION_SKIP_WHITE);
+
+    HHVM_RC_STR(XML_SAX_IMPL, "expat");
 
     loadSystemlib();
   }
@@ -136,16 +173,16 @@ const String& XmlParser::o_getClassNameHook() const {
 
 namespace {
 
-inline SmartPtr<XmlParser> getParserFromToken(void* userData) {
+inline req::ptr<XmlParser> getParserFromToken(void* userData) {
   auto token = reinterpret_cast<MemoryManager::RootId>(userData);
   return MM().lookupRoot<XmlParser>(token);
 }
 
-inline void* getParserToken(const SmartPtr<XmlParser>& parser) {
+inline void* getParserToken(const req::ptr<XmlParser>& parser) {
   return reinterpret_cast<void*>(MM().addRoot(parser));
 }
 
-inline void clearParser(const SmartPtr<XmlParser>& p) {
+inline void clearParser(const req::ptr<XmlParser>& p) {
   MM().removeRoot(p);
 }
 
@@ -156,13 +193,6 @@ typedef struct {
   char (*decoding_function)(unsigned short);
   unsigned short (*encoding_function)(unsigned char);
 } xml_encoding;
-
-enum php_xml_option {
-    PHP_XML_OPTION_CASE_FOLDING = 1,
-    PHP_XML_OPTION_TARGET_ENCODING,
-    PHP_XML_OPTION_SKIP_TAGSTART,
-    PHP_XML_OPTION_SKIP_WHITE
-};
 
 static XML_Char * xml_globals_default_encoding = (XML_Char*)"UTF-8";
 // for xml_parse_into_struct
@@ -194,16 +224,16 @@ xml_encoding xml_encodings[] = {
 };
 
 static void *php_xml_malloc_wrapper(size_t sz) {
-  return smart_malloc(sz);
+  return req::malloc(sz);
 }
 
 static void *php_xml_realloc_wrapper(void *ptr, size_t sz) {
-  return smart_realloc(ptr, sz);
+  return req::realloc(ptr, sz);
 }
 
 static void php_xml_free_wrapper(void *ptr) {
   if (ptr) {
-    smart_free(ptr);
+    req::free(ptr);
   }
 }
 
@@ -279,7 +309,7 @@ static Variant _xml_xmlchar_zval(const XML_Char *s, int len,
 }
 
 static
-String _xml_decode_tag(const SmartPtr<XmlParser>& parser, const char *tag) {
+String _xml_decode_tag(const req::ptr<XmlParser>& parser, const char *tag) {
   auto newstr = xml_utf8_decode((const XML_Char*)tag, strlen(tag),
                                 parser->target_encoding);
   if (parser->case_folding) {
@@ -323,7 +353,7 @@ static Variant php_xml_parser_create_impl(const String& encoding_param,
     separator = ns_param;
   }
 
-  auto parser = makeSmartPtr<XmlParser>();
+  auto parser = req::make<XmlParser>();
   parser->parser = XML_ParserCreate_MM
     ((auto_detect ? NULL : encoding), &php_xml_mem_hdlrs,
      !separator.empty() ? (const XML_Char*)separator.data() : NULL);
@@ -338,7 +368,7 @@ static Variant php_xml_parser_create_impl(const String& encoding_param,
   return Variant(std::move(parser));
 }
 
-static Variant xml_call_handler(const SmartPtr<XmlParser>& parser,
+static Variant xml_call_handler(const req::ptr<XmlParser>& parser,
                                 const Variant& handler,
                                 const Array& args) {
   if (parser && handler.toBoolean()) {
@@ -363,7 +393,7 @@ static Variant xml_call_handler(const SmartPtr<XmlParser>& parser,
   return init_null();
 }
 
-static void _xml_add_to_info(const SmartPtr<XmlParser>& parser,
+static void _xml_add_to_info(const req::ptr<XmlParser>& parser,
                              const String& nameStr) {
   if (parser->info.isNull()) {
     return;
@@ -763,10 +793,10 @@ int64_t HHVM_FUNCTION(xml_parse_into_struct,
   SYNC_VM_REGS_SCOPED();
   int ret;
   auto p = cast<XmlParser>(parser);
-  values = Array::Create();
-  p->data.assignRef(values);
-  index = Array::Create();
-  p->info.assignRef(index);
+  p->data.setWithRef(values);
+  p->data = Array::Create();
+  p->info.setWithRef(index);
+  p->info = Array::Create();
   p->level = 0;
   p->ltags = (char**)malloc(XML_MAXLEVEL * sizeof(char*));
 
@@ -920,7 +950,7 @@ bool HHVM_FUNCTION(xml_set_object,
                    const Resource& parser,
                    VRefParam object) {
   auto p = cast<XmlParser>(parser);
-  p->object.assignRef(object);
+  p->object.setWithRef(object);
   return true;
 }
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,6 +29,7 @@
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
 #include "hphp/util/text-color.h"
+#include "hphp/util/service-data.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/debuggable.h"
@@ -44,7 +45,7 @@
 #include "hphp/runtime/base/type-conversions.h"
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/debugger/debugger.h"
-#include "hphp/runtime/ext/ext_system_profiler.h"
+#include "hphp/runtime/base/system-profiler.h"
 #include "hphp/runtime/ext/std/ext_std_output.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/server/server-stats.h"
@@ -53,7 +54,6 @@
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/runtime/vm/runtime.h"
-#include "hphp/system/constants.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -83,32 +83,22 @@ ExecutionContext::ExecutionContext()
   , m_executingSetprofileCallback(false)
 {
   resetCoverageCounters();
-  // We don't want a new execution context to cause any smart allocations
-  // (because it will cause us to hold a slab, even while idle)
+  // We don't want a new execution context to cause any request-heap
+  // allocations (because it will cause us to hold a slab, even while idle).
   static auto s_cwd = makeStaticString(Process::CurrentWorkingDirectory);
   m_cwd = s_cwd;
-
-  // We want this to run on every request, instead of just once per thread
-  std::string memory_limit = "memory_limit";
-  auto hasSystemDefault = IniSetting::ResetSystemDefault(memory_limit);
-  if (!hasSystemDefault) {
-    auto max_mem = std::to_string(RuntimeOption::RequestMemoryMaxBytes);
-    IniSetting::SetUser(memory_limit, max_mem, IniSetting::FollyDynamic());
-  }
-
-  // This one is hot so we don't want to go through the ini_set() machinery to
-  // change it in error_reporting(). Because of that, we have to set it back to
-  // the default on every request.
-  hasSystemDefault = IniSetting::ResetSystemDefault("error_reporting");
-  if (!hasSystemDefault) {
-    RID().setErrorReportingLevel(RuntimeOption::RuntimeErrorReportingLevel);
-  }
+  RID().setMemoryLimit(std::to_string(RuntimeOption::RequestMemoryMaxBytes));
+  RID().setErrorReportingLevel(RuntimeOption::RuntimeErrorReportingLevel);
 
   VariableSerializer::serializationSizeLimit =
     RuntimeOption::SerializationSizeLimit;
 }
 
-template<> void ThreadLocalNoCheck<ExecutionContext>::destroy() {
+// See header for why this is required.
+#ifndef _MSC_VER
+template<>
+#endif
+void ThreadLocalNoCheck<ExecutionContext>::destroy() {
   if (!isNull()) {
     getNoCheck()->sweep();
     setNull();
@@ -121,6 +111,7 @@ void ExecutionContext::cleanup() {
 
   // Discard all units that were created via create_function().
   for (auto& v : m_createdFuncs) delete v;
+  m_createdFuncs.clear();
 
   always_assert(m_activeSims.empty());
 }
@@ -408,7 +399,7 @@ Array ExecutionContext::obGetStatus(bool full) {
     }
     status.set(s_level, level);
     status.set(s_chunk_size, buffer.chunk_size);
-    status.set(s_buffer_used, buffer.oss.size());
+    status.set(s_buffer_used, static_cast<uint64_t>(buffer.oss.size()));
 
     if (full) {
       ret.append(status);
@@ -527,15 +518,31 @@ void ExecutionContext::popUserExceptionHandler() {
   }
 }
 
-void ExecutionContext::registerRequestEventHandler(
+std::size_t ExecutionContext::registerRequestEventHandler(
   RequestEventHandler *handler) {
   assert(handler && handler->getInited());
   m_requestEventHandlers.push_back(handler);
+  return m_requestEventHandlers.size()-1;
+}
+
+void ExecutionContext::unregisterRequestEventHandler(
+  RequestEventHandler* handler,
+  std::size_t index) {
+  assert(index < m_requestEventHandlers.size() &&
+         m_requestEventHandlers[index] == handler);
+  assert(!handler->getInited());
+  if (index == m_requestEventHandlers.size()-1) {
+    m_requestEventHandlers.pop_back();
+  } else {
+    m_requestEventHandlers[index] = nullptr;
+  }
 }
 
 static bool requestEventHandlerPriorityComp(RequestEventHandler *a,
                                             RequestEventHandler *b) {
-  return a->priority() < b->priority();
+  if (!a) return b;
+  else if (!b) return false;
+  else return a->priority() < b->priority();
 }
 
 void ExecutionContext::onRequestShutdown() {
@@ -550,6 +557,7 @@ void ExecutionContext::onRequestShutdown() {
     sort(tmp.begin(), tmp.end(),
          requestEventHandlerPriorityComp);
     for (auto* handler : tmp) {
+      if (!handler) continue;
       assert(handler->getInited());
       handler->requestShutdown();
       handler->setInited(false);
@@ -588,6 +596,7 @@ void ExecutionContext::onShutdownPreSend() {
     try { obFlushAll(); } catch (...) {}
   };
 
+  MM().resetCouldOOM(isStandardRequest());
   executeFunctions(ShutDown);
 }
 
@@ -734,21 +743,17 @@ void ExecutionContext::handleError(const std::string& msg,
 
     if (RID().hasTrackErrors() && fp) {
       // Set $php_errormsg in the parent scope
-      Variant varFrom(ee.getMessage());
-      const auto tvFrom(varFrom.asTypedValue());
+      Variant msg(ee.getMessage());
       if (fp->func()->isBuiltin()) {
         fp = getPrevVMState(fp);
       }
       assert(fp);
       auto id = fp->func()->lookupVarId(s_php_errormsg.get());
       if (id != kInvalidId) {
-        auto tvTo = frame_local(fp, id);
-        if (tvTo->m_type == KindOfRef) {
-          tvTo = tvTo->m_data.pref->tv();
-        }
-        tvDup(*tvFrom, *tvTo);
+        auto local = frame_local(fp, id);
+        tvSet(*msg.asTypedValue(), *tvToCell(local));
       } else if ((fp->func()->attrs() & AttrMayUseVV) && fp->hasVarEnv()) {
-        fp->getVarEnv()->set(s_php_errormsg.get(), tvFrom);
+        fp->getVarEnv()->set(s_php_errormsg.get(), msg.asTypedValue());
       }
     }
 
@@ -790,7 +795,39 @@ bool ExecutionContext::callUserErrorHandler(const Exception &e, int errnum,
                 false)) {
         return true;
       }
+    } catch (const RequestTimeoutException& e) {
+      static auto requestErrorHandlerTimeoutCounter =
+          ServiceData::createTimeseries("requests_timed_out_error_handler",
+                                        {ServiceData::StatsType::COUNT});
+      requestErrorHandlerTimeoutCounter->addValue(1);
+      ServerStats::Log("request.timed_out.error_handler", 1);
+
+      if (!swallowExceptions) throw;
+    } catch (const RequestCPUTimeoutException& e) {
+      static auto requestErrorHandlerCPUTimeoutCounter =
+          ServiceData::createTimeseries("requests_cpu_timed_out_error_handler",
+                                        {ServiceData::StatsType::COUNT});
+      requestErrorHandlerCPUTimeoutCounter->addValue(1);
+      ServerStats::Log("request.cpu_timed_out.error_handler", 1);
+
+      if (!swallowExceptions) throw;
+    } catch (const RequestMemoryExceededException& e) {
+      static auto requestErrorHandlerMemoryExceededCounter =
+          ServiceData::createTimeseries(
+              "requests_memory_exceeded_error_handler",
+              {ServiceData::StatsType::COUNT});
+      requestErrorHandlerMemoryExceededCounter->addValue(1);
+      ServerStats::Log("request.memory_exceeded.error_handler", 1);
+
+      if (!swallowExceptions) throw;
     } catch (...) {
+      static auto requestErrorHandlerOtherExceptionCounter =
+          ServiceData::createTimeseries(
+              "requests_other_exception_error_handler",
+              {ServiceData::StatsType::COUNT});
+      requestErrorHandlerOtherExceptionCounter->addValue(1);
+      ServerStats::Log("request.other_exception.error_handler", 1);
+
       if (!swallowExceptions) throw;
     }
   }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -53,6 +53,7 @@ TRACE_SET_MOD(hhir);
 #define DParamMayRelax HasDest
 #define DParam         HasDest
 #define DParamPtr(k)   HasDest
+#define DLdObjCls      HasDest
 #define DUnboxPtr      HasDest
 #define DBoxPtr        HasDest
 #define DAllocObj      HasDest
@@ -110,6 +111,7 @@ OpInfo g_opInfo[] = {
 #undef DParamMayRelax
 #undef DParam
 #undef DParamPtr
+#undef DLdObjCls
 #undef DUnboxPtr
 #undef DBoxPtr
 #undef DArrElem
@@ -170,218 +172,64 @@ bool isGuardOp(Opcode opc) {
   }
 }
 
-bool isQueryOp(Opcode opc) {
+folly::Optional<Opcode> negateCmpOp(Opcode opc) {
   switch (opc) {
-  case Gt:
-  case Gte:
-  case Lt:
-  case Lte:
-  case Eq:
-  case Neq:
-  case GtInt:
-  case GteInt:
-  case LtInt:
-  case LteInt:
-  case EqInt:
-  case NeqInt:
-  case GtDbl:
-  case GteDbl:
-  case LtDbl:
-  case LteDbl:
-  case EqDbl:
-  case NeqDbl:
-  case GtStr:
-  case GteStr:
-  case LtStr:
-  case LteStr:
-  case EqStr:
-  case NeqStr:
-  case SameStr:
-  case NSameStr:
-  case Same:
-  case NSame:
-  case InstanceOfBitmask:
-  case NInstanceOfBitmask:
-  case IsType:
-  case IsNType:
-    return true;
-  default:
-    return false;
-  }
-}
+    case GtBool:              return LteBool;
+    case GteBool:             return LtBool;
+    case LtBool:              return GteBool;
+    case LteBool:             return GtBool;
+    case EqBool:              return NeqBool;
+    case NeqBool:             return EqBool;
 
-bool isIntQueryOp(Opcode opc) {
-  switch (opc) {
-  case GtInt:
-  case GteInt:
-  case LtInt:
-  case LteInt:
-  case EqInt:
-  case NeqInt:
-    return true;
-  default:
-    return false;
-  }
-}
+    case GtInt:               return LteInt;
+    case GteInt:              return LtInt;
+    case LtInt:               return GteInt;
+    case LteInt:              return GtInt;
+    case EqInt:               return NeqInt;
+    case NeqInt:              return EqInt;
 
-bool isDblQueryOp(Opcode opc) {
-  switch (opc) {
-  case GtDbl:
-  case GteDbl:
-  case LtDbl:
-  case LteDbl:
-  case EqDbl:
-  case NeqDbl:
-    return true;
-  default:
-    return false;
-  }
-}
+    // Due to NaN only equality comparisons with doubles can be negated.
+    case EqDbl:               return NeqDbl;
+    case NeqDbl:              return EqDbl;
 
-bool isStrQueryOp(Opcode opc) {
-  switch (opc) {
-  case GtStr:
-  case GteStr:
-  case LtStr:
-  case LteStr:
-  case EqStr:
-  case NeqStr:
-  case SameStr:
-  case NSameStr:
-    return true;
- default:
-   return false;
-  }
-}
+    case GtStr:               return LteStr;
+    case GteStr:              return LtStr;
+    case LtStr:               return GteStr;
+    case LteStr:              return GtStr;
+    case EqStr:               return NeqStr;
+    case NeqStr:              return EqStr;
+    case SameStr:             return NSameStr;
+    case NSameStr:            return SameStr;
 
-Opcode negateQueryOp(Opcode opc) {
-  assertx(isQueryOp(opc));
-  switch (opc) {
-  case Gt:                  return Lte;
-  case Gte:                 return Lt;
-  case Lt:                  return Gte;
-  case Lte:                 return Gt;
-  case Eq:                  return Neq;
-  case Neq:                 return Eq;
-  case GtInt:               return LteInt;
-  case GteInt:              return LtInt;
-  case LtInt:               return GteInt;
-  case LteInt:              return GtInt;
-  case EqInt:               return NeqInt;
-  case NeqInt:              return EqInt;
-  case EqDbl:               return NeqDbl;
-  case NeqDbl:              return EqDbl;
-  case GtStr:               return LteStr;
-  case GteStr:              return LtStr;
-  case LtStr:               return GteStr;
-  case LteStr:              return GtStr;
-  case EqStr:               return NeqStr;
-  case NeqStr:              return EqStr;
-  case SameStr:             return NSameStr;
-  case NSameStr:            return SameStr;
-  case Same:                return NSame;
-  case NSame:               return Same;
-  case InstanceOfBitmask:   return NInstanceOfBitmask;
-  case NInstanceOfBitmask:  return InstanceOfBitmask;
-  case IsType:              return IsNType;
-  case IsNType:             return IsType;
-  case GtDbl:
-  case GteDbl:
-  case LtDbl:
-  case LteDbl:
-    // Negating dbl relational ops probably isn't what you want:
-    // (X < Y) != !(X >= Y)  --  when NaN gets involved
-    always_assert(false);
-  default:                  always_assert(0);
-  }
-}
+    case GtStrInt:            return LteStrInt;
+    case GteStrInt:           return LtStrInt;
+    case LtStrInt:            return GteStrInt;
+    case LteStrInt:           return GtStrInt;
+    case EqStrInt:            return NeqStrInt;
+    case NeqStrInt:           return EqStrInt;
 
-Opcode commuteQueryOp(Opcode opc) {
-  assertx(isQueryOp(opc));
-  switch (opc) {
-  case Gt:    return Lt;
-  case Gte:   return Lte;
-  case Lt:    return Gt;
-  case Lte:   return Gte;
-  case Eq:    return Eq;
-  case Neq:   return Neq;
-  case GtInt: return LtInt;
-  case GteInt:return LteInt;
-  case LtInt: return GtInt;
-  case LteInt:return GteInt;
-  case EqInt: return EqInt;
-  case NeqInt:return NeqInt;
-  case GtDbl: return LtDbl;
-  case GteDbl:return LteDbl;
-  case LtDbl: return GtDbl;
-  case LteDbl:return GteDbl;
-  case EqDbl: return EqDbl;
-  case NeqDbl:return NeqDbl;
-  case GtStr: return LtStr;
-  case GteStr:return LteStr;
-  case LtStr: return GtStr;
-  case LteStr:return GteStr;
-  case EqStr:
-  case NeqStr:
-  case SameStr:
-  case NSameStr:
-    return opc;
-  case Same:  return Same;
-  case NSame: return NSame;
-  default:      always_assert(0);
-  }
-}
+    // Objects can contain a property with NaN, so only equality comparisons can
+    // be negated.
+    case EqObj:               return NeqObj;
+    case NeqObj:              return EqObj;
+    case SameObj:             return NSameObj;
+    case NSameObj:            return SameObj;
 
-Opcode queryToIntQueryOp(Opcode opc) {
-  assertx(isQueryOp(opc));
-  switch (opc) {
-  case Gt:    return GtInt;
-  case Gte:   return GteInt;
-  case Lt:    return LtInt;
-  case Lte:   return LteInt;
-  case Eq:    return EqInt;
-  case Neq:   return NeqInt;
-  case GtDbl: return GtInt;
-  case GteDbl:return GteInt;
-  case LtDbl: return LtInt;
-  case LteDbl:return LteInt;
-  case EqDbl: return EqInt;
-  case NeqDbl:return NeqInt;
-  default: always_assert(0);
-  }
-}
+    // Arrays can contain an element with NaN, so only equality comparisons can
+    // be negated.
+    case EqArr:               return NeqArr;
+    case NeqArr:              return EqArr;
+    case SameArr:             return NSameArr;
+    case NSameArr:            return SameArr;
 
-Opcode queryToDblQueryOp(Opcode opc) {
-  assertx(isQueryOp(opc));
-  switch (opc) {
-  case Gt:    return GtDbl;
-  case Gte:   return GteDbl;
-  case Lt:    return LtDbl;
-  case Lte:   return LteDbl;
-  case Eq:    return EqDbl;
-  case Neq:   return NeqDbl;
-  case GtInt: return GtDbl;
-  case GteInt:return GteDbl;
-  case LtInt: return LtDbl;
-  case LteInt:return LteDbl;
-  case EqInt: return EqDbl;
-  case NeqInt:return NeqDbl;
-  default: always_assert(0);
-  }
-}
+    case GtRes:               return LteRes;
+    case GteRes:              return LtRes;
+    case LtRes:               return GteRes;
+    case LteRes:              return GtRes;
+    case EqRes:               return NeqRes;
+    case NeqRes:              return EqRes;
 
-Opcode queryToStrQueryOp(Opcode opc) {
-  assertx(isQueryOp(opc));
-  switch (opc) {
-    case Gt: return GtStr;
-    case Gte: return GteStr;
-    case Lt: return LtStr;
-    case Lte: return LteStr;
-    case Eq: return EqStr;
-    case Neq: return NeqStr;
-    case Same: return SameStr;
-    case NSame: return NSameStr;
-    default: always_assert(0);
+    default:                  return folly::none;
   }
 }
 

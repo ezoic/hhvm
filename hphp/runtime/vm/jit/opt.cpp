@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,7 +17,6 @@
 #include "hphp/runtime/vm/jit/opt.h"
 
 #include "hphp/runtime/vm/jit/check.h"
-#include "hphp/runtime/vm/jit/guard-relaxation.h"
 #include "hphp/runtime/vm/jit/ir-builder.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
 #include "hphp/runtime/vm/jit/mutation.h"
@@ -65,25 +64,6 @@ void optimize(IRUnit& unit, IRBuilder& irBuilder, TransKind kind) {
 
   assertx(checkEverything(unit));
 
-  auto const hasLoop = RuntimeOption::EvalJitLoops && cfgHasLoop(unit);
-
-  if (shouldHHIRRelaxGuards() && !hasLoop) {
-    Timer _t(Timer::optimize_relaxGuards);
-    const bool simple = kind == TransKind::Profile;
-    RelaxGuardsFlags flags = (RelaxGuardsFlags)
-      (RelaxReflow | (simple ? RelaxSimple : RelaxNormal));
-    auto changed = relaxGuards(unit, *irBuilder.guards(), flags);
-    if (changed) {
-      printUnit(6, unit, "after guard relaxation");
-      mandatoryDCE(unit);  // relaxGuards can leave unreachable preds.
-    }
-
-    if (RuntimeOption::EvalHHIRSimplification) {
-      doPass(unit, simplifyPass, DCE::Minimal);
-      doPass(unit, cleanCfg, DCE::None);
-    }
-  }
-
   fullDCE(unit);
   printUnit(6, unit, " after initial DCE ");
   assertx(checkEverything(unit));
@@ -91,7 +71,6 @@ void optimize(IRUnit& unit, IRBuilder& irBuilder, TransKind kind) {
   if (RuntimeOption::EvalHHIRTypeCheckHoisting) {
     doPass(unit, hoistTypeChecks, DCE::Minimal);
   }
-  doPass(unit, removeExitPlaceholders, DCE::Minimal);
 
   if (RuntimeOption::EvalHHIRPredictionOpts) {
     doPass(unit, optimizePredictions, DCE::None);
@@ -118,23 +97,23 @@ void optimize(IRUnit& unit, IRBuilder& irBuilder, TransKind kind) {
     doPass(unit, optimizeRefcounts2, DCE::Full);
   }
 
-  if (RuntimeOption::EvalHHIRLICM) {
-    if (kind != TransKind::Profile && hasLoop) {
-      // The clean pass is just to stress lack of pre_headers for now, since
-      // LICM is a disabled prototype pass.
-      doPass(unit, cleanCfg, DCE::None);
-      doPass(unit, optimizeLoopInvariantCode, DCE::Minimal);
-    }
-    doPass(unit, removeExitPlaceholders, DCE::Full);
+  if (RuntimeOption::EvalHHIRLICM && RuntimeOption::EvalJitLoops &&
+      cfgHasLoop(unit) && kind != TransKind::Profile) {
+    doPass(unit, optimizeLoopInvariantCode, DCE::Minimal);
   }
+
+  doPass(unit, removeExitPlaceholders, DCE::Full);
 
   if (RuntimeOption::EvalHHIRGenerateAsserts) {
     doPass(unit, insertAsserts, DCE::None);
   }
 
-  // Perform a final clean pass to collapse any critical edges that were
-  // split.
+  // Perform final cleanup passes to collapse any critical edges that were
+  // split, and simplify our instructions before shipping off to codegen.
   doPass(unit, cleanCfg, DCE::None);
+  if (kind != TransKind::Profile && RuntimeOption::EvalHHIRSimplification) {
+    doPass(unit, simplifyPass, DCE::Full);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////

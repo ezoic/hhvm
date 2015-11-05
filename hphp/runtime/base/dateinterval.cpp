@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,7 +20,7 @@
 #include "hphp/runtime/base/type-conversions.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/runtime-error.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/util/logger.h"
 
 namespace HPHP {
@@ -71,15 +71,11 @@ bool DateInterval::setInterval(const String& date_interval) {
   timelib_rel_time *di = nullptr;
   timelib_error_container *errors = nullptr;
 
-#ifdef TIMELIB_HAVE_INTERVAL
   timelib_time *start = nullptr, *end = nullptr;
   int r = 0;
 
   timelib_strtointerval((char*)date_interval.data(), date_interval.size(),
                         &start, &end, &di, &r, &errors);
-#else
-  throw_not_implemented("timelib too old");
-#endif
 
   int error_count  = errors->error_count;
   DateTime::setLastErrors(errors);
@@ -87,13 +83,11 @@ bool DateInterval::setInterval(const String& date_interval) {
     timelib_rel_time_dtor(di);
     return false;
   } else {
-#ifdef TIMELIB_HAVE_INTERVAL
     if (UNLIKELY(!di && start && end)) {
       timelib_update_ts(start, nullptr);
       timelib_update_ts(end, nullptr);
       di = timelib_diff(start, end);
     }
-#endif
     m_di = DateIntervalPtr(di, dateinterval_deleter());
     return true;
   }
@@ -165,9 +159,9 @@ String DateInterval::format(const String& format_spec) {
   return s.detach();
 }
 
-SmartPtr<DateInterval> DateInterval::cloneDateInterval() const {
-  if (!m_di) return makeSmartPtr<DateInterval>();
-  return makeSmartPtr<DateInterval>(timelib_rel_time_clone(m_di.get()));
+req::ptr<DateInterval> DateInterval::cloneDateInterval() const {
+  if (!m_di) return req::make<DateInterval>();
+  return req::make<DateInterval>(timelib_rel_time_clone(m_di.get()));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

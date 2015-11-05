@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,6 +16,8 @@
 
 #ifndef incl_HPHP_JIT_INLINING_H_
 #define incl_HPHP_JIT_INLINING_H_
+
+#include "hphp/runtime/vm/jit/region-selection.h"
 
 #include <vector>
 
@@ -88,6 +90,7 @@ struct InliningDecider {
    */
   bool disabled() const { return m_disabled; }
   int  depth()    const { return m_callDepth; }
+  bool inlining() const { return depth() != 0; }
 
   /////////////////////////////////////////////////////////////////////////////
   // Core API.
@@ -108,8 +111,7 @@ struct InliningDecider {
    * NOTE: Inlining will fail during translation if the FPush was interpreted.
    * It is up to the client to ensure that this is not the case.
    */
-  bool canInlineAt(SrcKey callSK, const Func* callee,
-                   const RegionDesc& region) const;
+  bool canInlineAt(SrcKey callSK, const Func* callee) const;
 
   /*
    * Check that `region' of `callee' can be inlined (possibly via other inlined
@@ -123,7 +125,8 @@ struct InliningDecider {
    * If inlining is not performed when true is returned, registerEndInlining()
    * must be called immediately to correctly reset the internal inlining costs.
    */
-  bool shouldInline(const Func* callee, const RegionDesc& region);
+  bool shouldInline(const Func* callee, const RegionDesc& region,
+                    bool& needsMerge);
 
   /*
    * Update internal state for when an inlining event ends.
@@ -155,6 +158,14 @@ private:
   // Stack of costs, popped in registerEndInlining().
   std::vector<int> m_costStack;
 };
+
+/*
+ * Select an inlining region for the call to `callee' at `sk'.
+ */
+RegionDescPtr selectCalleeRegion(const SrcKey& sk,
+                                 const Func* callee,
+                                 const IRGS& irgs,
+                                 int32_t maxBCInstrs);
 
 ///////////////////////////////////////////////////////////////////////////////
 }}

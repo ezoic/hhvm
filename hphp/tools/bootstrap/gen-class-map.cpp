@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -178,8 +178,8 @@ static void outputConstants(const fbstring &invocation_trace,
   out << "#ifndef _H_SYSTEM_CONSTANTS\n"
       << "#define _H_SYSTEM_CONSTANTS\n"
       << "namespace HPHP {\n"
-      << "class StaticString;\n"
-      << "class Variant;\n";
+      << "struct StaticString;\n"
+      << "struct Variant;\n";
   declareConstants(out, consts, true);
   out << "} // namespace HPHP\n"
       << "#endif // _H_SYSTEM_CONSTANTS\n";

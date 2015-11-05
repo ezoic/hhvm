@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,15 +28,6 @@ DECLARE_BOOST_TYPES(LoopStatement);
 class LoopStatement : public Statement {
 protected:
   explicit LoopStatement(STATEMENT_CONSTRUCTOR_BASE_PARAMETERS);
-public:
-  void clearStringBufs();
-  void addStringBuf(const std::string &name);
-  void removeStringBuf(const std::string &name);
-  int numStringBufs() const { return m_string_bufs.size(); }
-  bool checkStringBuf(const std::string &name);
-private:
-  std::set<std::string>  m_string_bufs;
-  LoopStatementWeakPtr m_outer;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

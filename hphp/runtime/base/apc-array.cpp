@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -33,21 +33,20 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 APCHandle::Pair
-APCArray::MakeSharedArray(ArrayData* arr, bool inner, bool unserializeObj) {
-  if (!inner) {
+APCArray::MakeSharedArray(ArrayData* arr, APCHandleLevel level,
+                          bool unserializeObj) {
+  if (level == APCHandleLevel::Outer) {
     // only need to call traverseData() on the toplevel array
     DataWalker walker(DataWalker::LookupFeature::HasObjectOrResource);
     DataWalker::DataFeature features = walker.traverseData(arr);
     if (features.isCircular) {
-      String s = apc_serialize(arr);
-      auto pair = APCString::MakeSharedString(KindOfArray, s.get());
-      pair.handle->setSerializedArray();
-      return pair;
+      String s = apc_serialize(Variant{arr});
+      return APCString::MakeSerializedArray(s.get());
     }
 
     if (apcExtension::UseUncounted && !features.hasObjectOrResource &&
         !arr->empty()) {
-      return {APCTypedValue::MakeSharedArray(arr),
+      return {MakeUncountedArray(arr),
               getMemSize(arr) + sizeof(APCTypedValue)};
     }
   }
@@ -74,11 +73,11 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, bool unserializeObj) {
 
   try {
     for (ArrayIter it(arr); !it.end(); it.next()) {
-      auto key = APCHandle::Create(it.first(), false, true,
+      auto key = APCHandle::Create(it.first(), false, APCHandleLevel::Inner,
                                    unserializeObj);
       size += key.size;
-      auto val = APCHandle::Create(it.secondRef(), false, true,
-                                   unserializeObj);
+      auto val = APCHandle::Create(it.secondRef(), false,
+                                   APCHandleLevel::Inner, unserializeObj);
       size += val.size;
       ret->add(key.handle, val.handle);
     }
@@ -90,6 +89,19 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, bool unserializeObj) {
   return {ret->getHandle(), size};
 }
 
+APCHandle* APCArray::MakeUncountedArray(ArrayData* array) {
+  assert(apcExtension::UseUncounted);
+  APCTypedValue* value;
+  if (array->isPacked()) {
+    value = new APCTypedValue(MixedArray::MakeUncountedPacked(array));
+  } else if (array->isStruct()) {
+    value = new APCTypedValue(StructArray::MakeUncounted(array));
+  } else {
+    value = new APCTypedValue(MixedArray::MakeUncounted(array));
+  }
+  return value->getHandle();
+}
+
 APCHandle::Pair APCArray::MakePacked(ArrayData* arr, bool unserializeObj) {
   auto num_elems = arr->size();
   auto size = sizeof(APCArray) + sizeof(APCHandle*) * num_elems;
@@ -99,8 +111,8 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, bool unserializeObj) {
   try {
     size_t i = 0;
     for (ArrayIter it(arr); !it.end(); it.next()) {
-      auto val = APCHandle::Create(it.secondRef(), false, true,
-                                   unserializeObj);
+      auto val = APCHandle::Create(it.secondRef(), false,
+                                   APCHandleLevel::Inner, unserializeObj);
       size += val.size;
       ret->vals()[i++] = val.handle;
     }
@@ -113,19 +125,26 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, bool unserializeObj) {
   return {ret->getHandle(), size};
 }
 
-Variant APCArray::MakeArray(const APCHandle* handle) {
+Variant APCArray::MakeLocalArray(const APCHandle* handle) {
   if (handle->isUncounted()) {
-    return APCTypedValue::fromHandle(handle)->getArrayData();
+    return Variant{APCTypedValue::fromHandle(handle)->getArrayData()};
   } else if (handle->isSerializedArray()) {
     auto const serArr = APCString::fromHandle(handle)->getStringData();
     return apc_unserialize(serArr->data(), serArr->size());
   }
-  return APCLocalArray::Make(APCArray::fromHandle(handle))->asArrayData();
+  return Variant::attach(
+    APCLocalArray::Make(APCArray::fromHandle(handle))->asArrayData()
+  );
 }
 
 void APCArray::Delete(APCHandle* handle) {
-  handle->isSerializedArray() ? delete APCString::fromHandle(handle)
-                              : delete APCArray::fromHandle(handle);
+  if (handle->isSerializedArray()) {
+    APCString::Delete(APCString::fromHandle(handle));
+    return;
+  }
+  auto const arr = APCArray::fromHandle(handle);
+  arr->~APCArray();
+  std::free(arr);
 }
 
 APCArray::~APCArray() {
@@ -152,7 +171,7 @@ void APCArray::add(APCHandle *key, APCHandle *val) {
   bucket->val = val;
   m.m_num++;
   int hash_pos;
-  if (!IS_REFCOUNTED_TYPE(key->type())) {
+  if (!isRefcountedType(key->type())) {
     auto const k = APCTypedValue::fromHandle(key);
     hash_pos = (key->type() == KindOfInt64 ?
         k->getInt64() : k->getStringData()->hash()) & m.m_capacity_mask;
@@ -172,7 +191,7 @@ ssize_t APCArray::indexOf(const StringData* key) const {
   ssize_t bucket = hash()[h & m.m_capacity_mask];
   Bucket* b = buckets();
   while (bucket != -1) {
-    if (!IS_REFCOUNTED_TYPE(b[bucket].key->type())) {
+    if (!isRefcountedType(b[bucket].key->type())) {
       auto const k = APCTypedValue::fromHandle(b[bucket].key);
       if (b[bucket].key->type() != KindOfInt64 &&
           key->same(k->getStringData())) {

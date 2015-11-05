@@ -1321,6 +1321,11 @@ Gte    [C C]  ->  [C:Bool]
 
   Greater than or equal to (>=). Pushes ($2 >= $1) onto the stack.
 
+Cmp    [C C]  ->  [C:Int]
+
+  Comparison. Pushes either -1, 0, or 1 onto the stack if ($1 < $2), ($1 ==
+  $2), or ($1 > $2), respectively.
+
 BitAnd    [C:<T2> C:<T1>]  ->  [C:Int]    (where T1 != Str || T2 != Str)
           [C:Str C:Str]  ->  [C:Str]
 
@@ -1961,8 +1966,9 @@ FPushFuncD <num params> <litstr id>    []  ->  []
   Otherwise this instruction pushes a new entry on the FPI stack, initializing
   it with the number of parameters being passed (given by %1) and a reference
   to the FPI structure for the function named x. With FPushFuncD the litstr in
-  %2 must not start with a '\' character. Function names should be normalized
-  with respect to namespace and never start with a '\'.
+  %2 must not start with a '\' character, or be of the form "Class::Method".
+  Function names should be normalized with respect to namespace and never start
+  with a '\'.
 
   If x is an object, this instruction checks if the object has an __invoke
   method. If the object does not have an __invoke method, this instruction
@@ -1971,7 +1977,13 @@ FPushFuncD <num params> <litstr id>    []  ->  []
   by %1) and a reference to the FPI structure for the __invoke method from
   object x.
 
-  If x is not a string or object, this instruction throws a fatal error.
+  if x is an array, this instruction will check that the first array element is
+  either the name of a class, or an instance of one, and that the second array
+  element is the name of a method.  If no such class exists, or no such method
+  on that class exists, then this instruction throws a fatal error.  Otherwise
+  this instruction does the same FPI manipulation mentioned above.
+
+  If x is not a string, object, or array, this instruction throws a fatal error.
 
 FPushFuncU <num params> <litstr id> <litstr fallback> []  ->  []
 
@@ -3432,8 +3444,103 @@ identical, but each instruction utilizes a distinct set of operations. For each
 member instruction, first use a Base* operation depending on the kind of
 location code. Next perform a series of intermediate operations depending on
 member code to process all but the last member. Finally, perform a final
-operation depending on member code to process the last member. See the
-instruction-specific tables for details.
+operation depending on member code to process the last member. We currently
+have two ways to encode this sequence of operations: a single bytecode with a
+variable-length vector of subops, or a variable-length series of bytecodes,
+each representing a single operation. Work is underway to replace the member
+vector instructions with the smaller, simpler bytecodes.
+
+10.1 New member instructions
+----------------------------
+
+All bytecodes in this section produce and/or consume a value in the member base
+register (often referred to as MBR or just "member base"). The MBR is live
+starting after a Base* bytecode, modified by zero or more Dim* bytecodes, then
+finally consumed by a final operation:
+
+  bytecode  | MBR in-state | MBR out-state
+  ----------+--------------+--------------
+  Base*     | dead         | live
+  Dim*      | live         | live
+  Final Ops | live         | dead
+
+The bytecodes in this section also refer to member operations in section 9 to
+describe their semantics. Once the bytecodes in section 10.2 are eliminated,
+the documentation from section 9 can be folded into this section.
+
+10.1a Base Operations
+---------------------
+
+BaseNC <stack index> <member op flags>    []  ->  []
+BaseNL <local id>    <member op flags>    []  ->  []
+
+  BaseN{C,L}{,W,D,WD} member operation, depending on the flags immediate.
+
+BaseGC <stack index> <member op flags>    []  ->  []
+BaseGL <local id>    <member op flags>    []  ->  []
+
+  BaseG{C,L}{,W,D,WD} member operation, depending on the flags immediate.
+
+BaseSC <stack index> <stack index>    [A C?]  ->  [C?]
+BaseSL <local id>    <stack index>    [A C?]  ->  [C?]
+
+  BaseS{C,L} member operation. %1 gives the location of the static property
+  name, and %2 gives the index of the class input. The class is consumed from
+  the stack, leaving an optional cell above the class undisturbed.
+
+BaseL <local id> <member op flags>    []  ->  []
+
+  Base{L,LW,LD,LWD} member operation, depending on the flags immediate.
+
+BaseC <stack index>    []  ->  []
+BaseR <stack index>    []  ->  []
+
+  Base{C,R} member operation.
+
+BaseH    []  ->  []
+
+  BaseH member operation.
+
+10.1b Intermediate operations
+-----------------------------
+
+DimL   <local id>    <prop/elem op> <member op flags>    []  ->  []
+DimC   <stack index> <prop/elem op> <member op flags>    []  ->  []
+DimInt <int64>       <prop/elem op> <member op flags>    []  ->  []
+DimStr <litstr id>   <prop/elem op> <member op flags>    []  ->  []
+
+  {Prop,Elem}{L,C,I,T}{W,D,WD,U} member operation, depending on the prop/elem
+  op and flags immediates.
+
+10.1c Final operations
+----------------------
+
+All final operations take a <stack count> immediate as %0, which indicates the
+number of member keys on the eval stack that must be consumed before pushing
+the final result, if any.
+
+QueryML   <stack count> <query op> <prop/elem op> <local id>    [...]  ->  [C]
+QueryMC   <stack count> <query op> <prop/elem op>               [...]  ->  [C]
+QueryMInt <stack count> <query op> <prop/elem op> <int64>       [...]  ->  [C]
+QueryMStr <stack count> <query op> <prop/elem op> <litstr id>   [...]  ->  [C]
+
+  {CGet,Isset,Empty}{Prop,Elem}{L,C,I,T} member operation, depending on the
+  query op and prop/elem op immediates.
+
+SetML   <stack count> <prop/elem op> <local id>     [... C]  ->  [C]
+SetMC   <stack count> <prop/elem op>                [... C]  ->  [C]
+SetMInt <stack count> <prop/elem op> <int64>        [... C]  ->  [C]
+SetMStr <stack count> <prop/elem op> <litstr id>    [... C]  ->  [C]
+
+  Set{Prop,Elem}{L,C,I,T} member operation, depending on the prop/elem op
+  immediate.
+
+SetMNewElem <stack count>
+
+  SetNewElem member operation.
+
+10.2 Legacy member instructions
+-------------------------------
 
 The member codes that represent immediate literal data (ET, EI, PT) are
 implemented using the corresponding EC or PC intermediate operation: they
@@ -4214,6 +4321,12 @@ ContValid    []  ->  [C:Bool]
   Check generator validity. $this must be a Generator object. Pushes true
   onto the stack if the generator can be iterated further, false otherwise.
 
+ContStarted    []  ->  [C:Bool]
+
+  Check whether a generator was started. $this must be a Generator object.
+  Pushes true onto the stack if the generator has already been run once,
+  false otherwise.
+
 ContKey    []  ->  [C]
 
   Get generator key. $this must be a Generator object. Pushes the most
@@ -4224,8 +4337,20 @@ ContCurrent    []  ->  [C]
   Get generator value. $this must be a Generator object. Pushes the most
   recently yielded value from the generator onto the stack.
 
+ContGetReturn    [] -> [C]
+
+  Get generator's return value. $this must be a Generator object. Pushes the
+  return value of the generator onto the stack.
+
 15. Async functions
 -------------------
+
+WHResult [C:Obj] -> [C]
+
+  If $1 is not a subclass of WaitHandle, raises a fatal error. If $1 succeeded,
+  this instruction pushes the result value from the WaitHandle. If $1 failed,
+  this instruction throws the exception stored in the WaitHandle. If $1 is not
+  finished, throws an Exception.
 
 Await  <number of iterators>   [C]  ->  [C]
 

@@ -100,8 +100,8 @@
 
 
 // macros for rules
-#define BEXP(e...) _p->onBinaryOpExp(e);
-#define UEXP(e...) _p->onUnaryOpExp(e);
+#define BEXP(...) _p->onBinaryOpExp(__VA_ARGS__);
+#define UEXP(...) _p->onUnaryOpExp(__VA_ARGS__);
 
 using namespace HPHP::HPHP_PARSER_NS;
 
@@ -589,7 +589,7 @@ static int yylex(YYSTYPE *token, HPHP::Location *loc, Parser *_p) {
 %left '^'
 %left '&'
 %nonassoc T_IS_EQUAL T_IS_NOT_EQUAL T_IS_IDENTICAL T_IS_NOT_IDENTICAL
-%nonassoc '<' T_IS_SMALLER_OR_EQUAL '>' T_IS_GREATER_OR_EQUAL
+%nonassoc '<' T_IS_SMALLER_OR_EQUAL '>' T_IS_GREATER_OR_EQUAL T_SPACESHIP
 %left T_SL T_SR
 %left '+' '-' '.'
 %left '*' '/' '%'
@@ -715,21 +715,6 @@ static int yylex(YYSTYPE *token, HPHP::Location *loc, Parser *_p) {
 %token T_COMPILER_HALT_OFFSET
 %token T_ASYNC
 
-%right T_FROM
-%token T_WHERE
-%token T_JOIN
-%token T_IN
-%token T_ON
-%token T_EQUALS
-%token T_INTO
-%token T_LET
-%token T_ORDERBY
-%token T_ASCENDING
-%token T_DESCENDING
-%token T_SELECT
-%token T_GROUP
-%token T_BY
-
 %token T_LAMBDA_OP
 %token T_LAMBDA_CP
 %token T_UNRESOLVED_OP
@@ -775,7 +760,7 @@ top_statement:
                                          _p->finishStatement($$, $1); $$ = 1;}
 ;
 
-ident:
+ident_no_semireserved:
     T_STRING                           { $$ = $1;}
   | T_SUPER                            { $$ = $1;}
   | T_XHP_ATTRIBUTE                    { $$ = $1;}
@@ -783,19 +768,79 @@ ident:
   | T_XHP_CHILDREN                     { $$ = $1;}
   | T_XHP_REQUIRED                     { $$ = $1;}
   | T_ENUM                             { $$ = $1;}
-  | T_WHERE                            { $$ = $1;}
-  | T_JOIN                             { $$ = $1;}
-  | T_ON                               { $$ = $1;}
-  | T_IN                               { $$ = $1;}
-  | T_EQUALS                           { $$ = $1;}
-  | T_INTO                             { $$ = $1;}
-  | T_LET                              { $$ = $1;}
-  | T_ORDERBY                          { $$ = $1;}
-  | T_ASCENDING                        { $$ = $1;}
-  | T_DESCENDING                       { $$ = $1;}
-  | T_SELECT                           { $$ = $1;}
-  | T_GROUP                            { $$ = $1;}
-  | T_BY                               { $$ = $1;}
+;
+
+ident_for_class_const:
+  ident_no_semireserved
+  | T_CALLABLE
+  | T_TRAIT
+  | T_EXTENDS
+  | T_IMPLEMENTS
+  | T_STATIC
+  | T_ABSTRACT
+  | T_FINAL
+  | T_PRIVATE
+  | T_PROTECTED
+  | T_PUBLIC
+  | T_CONST
+  | T_ENDDECLARE
+  | T_ENDFOR
+  | T_ENDFOREACH
+  | T_ENDIF
+  | T_ENDWHILE
+  | T_LOGICAL_AND
+  | T_GLOBAL
+  | T_GOTO
+  | T_INSTANCEOF
+  | T_INSTEADOF
+  | T_INTERFACE
+  | T_NAMESPACE
+  | T_NEW
+  | T_LOGICAL_OR
+  | T_LOGICAL_XOR
+  | T_TRY
+  | T_USE
+  | T_VAR
+  | T_EXIT
+  | T_LIST
+  | T_CLONE
+  | T_INCLUDE
+  | T_INCLUDE_ONCE
+  | T_THROW
+  | T_ARRAY
+  | T_PRINT
+  | T_ECHO
+  | T_REQUIRE
+  | T_REQUIRE_ONCE
+  | T_RETURN
+  | T_ELSE
+  | T_ELSEIF
+  | T_DEFAULT
+  | T_BREAK
+  | T_CONTINUE
+  | T_SWITCH
+  | T_YIELD
+  | T_FUNCTION
+  | T_IF
+  | T_ENDSWITCH
+  | T_FINALLY
+  | T_FOR
+  | T_FOREACH
+  | T_DECLARE
+  | T_CASE
+  | T_DO
+  | T_WHILE
+  | T_AS
+  | T_CATCH
+  /* no T_DIE ? */
+  /** The following must be made semi-reserved since they were keywords in HHVM
+    * but not PHP. */
+  | T_UNSET
+;
+
+ident:
+  ident_for_class_const
+  | T_CLASS
 ;
 
 use_declarations:
@@ -805,13 +850,13 @@ use_declarations:
 ;
 
 use_fn_declarations:
-    use_fn_declaration ','
+    use_fn_declarations ','
     use_fn_declaration                 { }
   | use_fn_declaration                 { }
 ;
 
 use_const_declarations:
-    use_const_declaration ','
+    use_const_declarations ','
     use_const_declaration              { }
   | use_const_declaration              { }
 ;
@@ -819,31 +864,31 @@ use_const_declarations:
 use_declaration:
     namespace_name                     { _p->onUse($1.text(),"");}
   | T_NS_SEPARATOR namespace_name      { _p->onUse($2.text(),"");}
-  | namespace_name T_AS ident          { _p->onUse($1.text(),$3.text());}
+  | namespace_name T_AS ident_no_semireserved          { _p->onUse($1.text(),$3.text());}
   | T_NS_SEPARATOR namespace_name
-    T_AS ident                         { _p->onUse($2.text(),$4.text());}
+    T_AS ident_no_semireserved                         { _p->onUse($2.text(),$4.text());}
 ;
 
 use_fn_declaration:
     namespace_name                     { _p->onUseFunction($1.text(),"");}
   | T_NS_SEPARATOR namespace_name      { _p->onUseFunction($2.text(),"");}
-  | namespace_name T_AS ident          { _p->onUseFunction($1.text(),$3.text());}
+  | namespace_name T_AS ident_no_semireserved          { _p->onUseFunction($1.text(),$3.text());}
   | T_NS_SEPARATOR namespace_name
-    T_AS ident                         { _p->onUseFunction($2.text(),$4.text());}
+    T_AS ident_no_semireserved                         { _p->onUseFunction($2.text(),$4.text());}
 ;
 
 use_const_declaration:
     namespace_name                     { _p->onUseConst($1.text(),"");}
   | T_NS_SEPARATOR namespace_name      { _p->onUseConst($2.text(),"");}
-  | namespace_name T_AS ident          { _p->onUseConst($1.text(),$3.text());}
+  | namespace_name T_AS ident_no_semireserved          { _p->onUseConst($1.text(),$3.text());}
   | T_NS_SEPARATOR namespace_name
-    T_AS ident                         { _p->onUseConst($2.text(),$4.text());}
+    T_AS ident_no_semireserved                         { _p->onUseConst($2.text(),$4.text());}
 ;
 
 namespace_name:
-    ident                              { $$ = $1;}
+    ident_no_semireserved                              { $$ = $1;}
   | namespace_name T_NS_SEPARATOR
-    ident                              { $$ = $1 + $2 + $3; $$ = $1.num() | 2;}
+    ident_no_semireserved                              { $$ = $1 + $2 + $3; $$ = $1.num() | 2;}
 ;
 namespace_string_base:
     namespace_name                     { $$ = $1; $$ = $$.num() | 1;}
@@ -936,6 +981,7 @@ statement:
   | T_GLOBAL global_var_list ';'       { _p->onGlobal($$, $2);}
   | T_STATIC static_var_list ';'       { _p->onStatic($$, $2);}
   | T_ECHO expr_list ';'               { _p->onEcho($$, $2, 0);}
+  | T_OPEN_TAG_WITH_ECHO expr_list ';' { _p->onEcho($$, $2, 0);}
   | T_UNSET '(' variable_list ')' ';'  { _p->onUnset($$, $3);}
   | ';'                                { $$.reset(); $$ = ';';}
   | T_INLINE_HTML                      { _p->onEcho($$, $1, 1);}
@@ -970,7 +1016,7 @@ statement:
     T_FINALLY                          { _p->onCompleteLabelScope(false);}
     finally_statement_list             { _p->onTry($$, $2, $5);}
   | T_THROW expr ';'                   { _p->onThrow($$, $2);}
-  | T_GOTO ident ';'                   { _p->onGoto($$, $2, true);
+  | T_GOTO ident_no_semireserved ';'   { _p->onGoto($$, $2, true);
                                          _p->addGoto($2.text(),
                                                      _p->getRange(),
                                                      &$$);}
@@ -982,9 +1028,7 @@ statement:
   | await_assign_expr ';'              { _p->onExpStatement($$, $1);}
   | T_RETURN await_expr ';'            { _p->onReturn($$, &$2); }
   | await_list_assign_expr ';'         { _p->onExpStatement($$, $1);}
-  | query_assign_expr ';'              { _p->onExpStatement($$, $1);}
-  | T_RETURN query_expr ';'            { _p->onReturn($$, &$2); }
-  | ident ':'                          { _p->onLabel($$, $1);
+  | ident_no_semireserved ':'          { _p->onLabel($$, $1);
                                          _p->addLabel($1.text(),
                                                       _p->getRange(),
                                                       &$$);
@@ -1030,7 +1074,8 @@ function_loc:
 
 function_declaration_statement:
     function_loc
-    is_reference hh_name_with_typevar  { $3.setText(_p->nsDecl($3.text()));
+    is_reference
+    hh_name_no_semireserved_with_typevar  { $3.setText(_p->nsDecl($3.text()));
                                          _p->onNewLabelScope(true);
                                          _p->onFunctionStart($3);
                                          _p->pushLabelInfo();}
@@ -1042,7 +1087,8 @@ function_declaration_statement:
                                          _p->onCompleteLabelScope(true);}
   | non_empty_member_modifiers
     function_loc
-    is_reference hh_name_with_typevar  { $4.setText(_p->nsDecl($4.text()));
+    is_reference
+    hh_name_no_semireserved_with_typevar  { $4.setText(_p->nsDecl($4.text()));
                                          _p->onNewLabelScope(true);
                                          _p->onFunctionStart($4);
                                          _p->pushLabelInfo();}
@@ -1054,7 +1100,8 @@ function_declaration_statement:
                                          _p->onCompleteLabelScope(true);}
   | non_empty_user_attributes
     method_modifiers function_loc
-    is_reference hh_name_with_typevar  { $5.setText(_p->nsDecl($5.text()));
+    is_reference
+    hh_name_no_semireserved_with_typevar  { $5.setText(_p->nsDecl($5.text()));
                                          _p->onNewLabelScope(true);
                                          _p->onFunctionStart($5);
                                          _p->pushLabelInfo();}
@@ -1068,7 +1115,7 @@ function_declaration_statement:
 
 enum_declaration_statement:
     T_ENUM
-    ident                              { $2.setText(_p->nsClassDecl($2.text()));
+    ident_no_semireserved              { $2.setText(_p->nsClassDecl($2.text()));
                                          _p->onClassStart(T_ENUM,$2);}
     ':' hh_type
     hh_opt_constraint
@@ -1076,7 +1123,7 @@ enum_declaration_statement:
 
   | non_empty_user_attributes
     T_ENUM
-    ident                              { $3.setText(_p->nsClassDecl($3.text()));
+    ident_no_semireserved              { $3.setText(_p->nsClassDecl($3.text()));
                                          _p->onClassStart(T_ENUM,$3);}
     ':' hh_type
     hh_opt_constraint
@@ -1137,6 +1184,12 @@ class_declaration_statement:
                                          _p->popTypeScope();}
 ;
 
+class_expression:
+    T_CLASS                            { _p->onClassExpressionStart(); }
+    ctor_arguments
+    extends_from implements_list '{'
+    class_statement_list '}'           { _p->onClassExpression($$, $3, $4, $5, $7); }
+
 trait_declaration_statement:
     T_TRAIT
     trait_decl_name                    { $2.setText(_p->nsClassDecl($2.text()));
@@ -1161,15 +1214,15 @@ trait_declaration_statement:
                                          _p->popTypeScope();}
 ;
 class_decl_name:
-    hh_name_with_typevar               { _p->pushClass(false); $$ = $1;}
-  | T_XHP_LABEL                        { $1.xhpLabel(); _p->pushTypeScope();
-                                         _p->pushClass(true); $$ = $1;}
+    hh_name_no_semireserved_with_typevar  { _p->pushClass(false); $$ = $1;}
+  | T_XHP_LABEL                           { $1.xhpLabel(); _p->pushTypeScope();
+                                            _p->pushClass(true); $$ = $1;}
 ;
 interface_decl_name:
-    hh_name_with_typevar               { _p->pushClass(false); $$ = $1;}
+    hh_name_no_semireserved_with_typevar  { _p->pushClass(false); $$ = $1;}
 ;
 trait_decl_name:
-    hh_name_with_typevar               { _p->pushClass(false); $$ = $1;}
+    hh_name_no_semireserved_with_typevar  { _p->pushClass(false); $$ = $1;}
 ;
 class_entry_type:
     T_CLASS                            { $$ = T_CLASS;}
@@ -1236,9 +1289,9 @@ declare_statement:
 ;
 
 declare_list:
-    ident '=' static_expr
+    ident_no_semireserved '=' static_expr
   | declare_list ','
-    ident '=' static_expr
+    ident_no_semireserved '=' static_expr
 ;
 
 switch_case_list:
@@ -1479,7 +1532,7 @@ enum_statement:
                                          ($$,NULL,$1,NULL);}
 ;
 enum_constant_declaration:
-    hh_name_with_type '='
+    hh_constname_with_type '='
     static_expr                         { _p->onClassConstant($$,0,$1,$3);}
 ;
 
@@ -1517,7 +1570,8 @@ class_statement:
                                          _p->onCompleteLabelScope(true);}
   | non_empty_user_attributes
     method_modifiers function_loc
-    is_reference hh_name_with_typevar '('
+    is_reference
+    hh_name_no_semireserved_with_typevar '('
                                        { _p->onNewLabelScope(true);
                                          _p->onMethodStart($5, $2);
                                          _p->pushLabelInfo();}
@@ -1551,12 +1605,13 @@ trait_rules:
 trait_precedence_rule:
     class_namespace_string_typeargs
     T_DOUBLE_COLON
-    ident
+    ident_no_semireserved
     T_INSTEADOF trait_list ';'         { _p->onTraitPrecRule($$,$1,$3,$5);}
 ;
 trait_alias_rule:
     trait_alias_rule_method T_AS
-    method_modifiers ident ';'         { _p->onTraitAliasRuleModify($$,$1,$3,
+    method_modifiers ident_no_semireserved ';'
+                                       { _p->onTraitAliasRuleModify($$,$1,$3,
                                                                     $4);}
   | trait_alias_rule_method T_AS
     non_empty_member_modifiers ';'     { Token t; t.reset();
@@ -1566,8 +1621,8 @@ trait_alias_rule:
 trait_alias_rule_method:
     class_namespace_string_typeargs
     T_DOUBLE_COLON
-    ident                              { _p->onTraitAliasRuleStart($$,$1,$3);}
-  | ident                              { Token t; t.reset();
+    ident_no_semireserved              { _p->onTraitAliasRuleStart($$,$1,$3);}
+  | ident_no_semireserved              { Token t; t.reset();
                                          _p->onTraitAliasRuleStart($$,t,$1);}
 ;
 
@@ -1610,11 +1665,15 @@ xhp_attribute_decl_type:
   | T_CALLABLE                         { $$ = 9; }
 ;
 
-xhp_attribute_enum:
+non_empty_xhp_attribute_enum:
     common_scalar                      { _p->onArrayPair($$,  0,0,$1,0);}
-  | xhp_attribute_enum ','
+  | non_empty_xhp_attribute_enum ','
     common_scalar                      { _p->onArrayPair($$,&$1,0,$3,0);}
 ;
+
+xhp_attribute_enum:
+  non_empty_xhp_attribute_enum
+  possible_comma                       { $$ = $1;}
 
 xhp_attribute_default:
     '=' static_expr                    { $$ = $2;}
@@ -1641,7 +1700,7 @@ xhp_category_decl:
 
 xhp_children_stmt:
     xhp_children_paren_expr            { $$ = $1; $$ = 2;}
-  | ident                              { $$ = -1;
+  | ident_no_semireserved              { $$ = -1;
                                          if ($1.same("any")) $$ = 1;}
   | T_EMPTY                            { $$ = 0;}
 ;
@@ -1666,7 +1725,7 @@ xhp_children_decl_expr:
 ;
 
 xhp_children_decl_tag:
-    ident                              { $$ = -1;
+    ident_no_semireserved              { $$ = -1;
                                          if ($1.same("any")) $$ = 1; else
                                          if ($1.same("pcdata")) $$ = 2;}
   | T_XHP_LABEL                        { $1.xhpLabel();  $$ = $1; $$ = 3;}
@@ -1724,14 +1783,14 @@ class_variable_declaration:
 ;
 class_constant_declaration:
     class_constant_declaration ','
-    hh_name_with_type '=' static_expr   { _p->onClassConstant($$,&$1,$3,$5);}
-  | T_CONST hh_name_with_type '='
+    hh_constname_with_type '=' static_expr   { _p->onClassConstant($$,&$1,$3,$5);}
+  | T_CONST hh_constname_with_type '='
     static_expr                         { _p->onClassConstant($$,0,$2,$4);}
 ;
 class_abstract_constant_declaration:
     class_abstract_constant_declaration ','
-    hh_name_with_type                   { _p->onClassAbstractConstant($$,&$1,$3);}
-  | T_ABSTRACT T_CONST hh_name_with_type
+    hh_constname_with_type              { _p->onClassAbstractConstant($$,&$1,$3);}
+  | T_ABSTRACT T_CONST hh_constname_with_type
                                         { _p->onClassAbstractConstant($$,NULL,$3);}
 ;
 class_type_constant_declaration:
@@ -1743,13 +1802,15 @@ class_type_constant_declaration:
       hh_opt_constraint '=' hh_type     { _p->onClassTypeConstant($$, $1, $4);
                                           _p->popTypeScope(); }
 class_type_constant:
-    T_CONST T_TYPE hh_name_with_typevar { $$ = $3; }
+    T_CONST T_TYPE
+    hh_name_no_semireserved_with_typevar { $$ = $3; }
 ;
 
 expr_with_parens:
     '(' expr_with_parens ')'           { $$ = $2;}
   | T_NEW class_name_reference
     ctor_arguments                     { _p->onNewObject($$, $2, $3);}
+  | T_NEW class_expression             { $$ = $2;}
   | T_CLONE expr                       { UEXP($$,$2,T_CLONE,1);}
   | xhp_tag                            { $$ = $1;}
   | collection_literal                 { $$ = $1;}
@@ -1772,6 +1833,7 @@ yield_expr:
     T_YIELD                            { _p->onYield($$, NULL);}
   | T_YIELD expr                       { _p->onYield($$, &$2);}
   | T_YIELD expr T_DOUBLE_ARROW expr   { _p->onYieldPair($$, &$2, &$4);}
+  | '(' yield_expr ')'                 { $$ = $2; }
 ;
 
 yield_assign_expr:
@@ -1859,6 +1921,7 @@ expr_no_variable:
   | expr '>' expr                      { BEXP($$,$1,$3,'>');}
   | expr T_IS_GREATER_OR_EQUAL expr    { BEXP($$,$1,$3,
                                               T_IS_GREATER_OR_EQUAL);}
+  | expr T_SPACESHIP expr              { BEXP($$,$1,$3,T_SPACESHIP);}
   | expr T_INSTANCEOF
     class_name_reference               { BEXP($$,$1,$3,T_INSTANCEOF);}
   | '(' expr_no_variable ')'           { $$ = $2;}
@@ -1921,22 +1984,7 @@ closure_expression:
 ;
 
 lambda_expression:
-    T_VARIABLE                         { _p->pushFuncLocation();
-                                         Token t;
-                                         _p->onNewLabelScope(true);
-                                         _p->onClosureStart(t);
-                                         _p->pushLabelInfo();
-                                         Token u;
-                                         _p->onParam($1,NULL,u,$1,0,
-                                                     NULL,NULL,NULL);}
-    lambda_body                        { Token v; Token w; Token x;
-                                         _p->finishStatement($3, $3); $3 = 1;
-                                         $$ = _p->onClosure(ClosureType::Short,
-                                                            nullptr,
-                                                            v,$1,w,$3,x);
-                                         _p->popLabelInfo();
-                                         _p->onCompleteLabelScope(true);}
-  | T_ASYNC
+    T_ASYNC
     T_VARIABLE                         { _p->pushFuncLocation();
                                          Token t;
                                          _p->onNewLabelScope(true);
@@ -1952,21 +2000,6 @@ lambda_expression:
                                          $$ = _p->onClosure(ClosureType::Short,
                                                             &$1,
                                                             v,$2,w,$4,x);
-                                         _p->popLabelInfo();
-                                         _p->onCompleteLabelScope(true);}
-  | T_LAMBDA_OP                        { _p->pushFuncLocation();
-                                         Token t;
-                                         _p->onNewLabelScope(true);
-                                         _p->onClosureStart(t);
-                                         _p->pushLabelInfo();}
-    parameter_list
-    T_LAMBDA_CP
-    hh_opt_return_type
-    lambda_body                        { Token u; Token v;
-                                         _p->finishStatement($6, $6); $6 = 1;
-                                         $$ = _p->onClosure(ClosureType::Short,
-                                                            nullptr,
-                                                            u,$3,v,$6,$5);
                                          _p->popLabelInfo();
                                          _p->onCompleteLabelScope(true);}
   | T_ASYNC
@@ -2005,6 +2038,36 @@ lambda_expression:
                                          _p->popLabelInfo();
                                          _p->onCompleteLabelScope(true);
                                          _p->onCall($$,1,$$,y,NULL);}
+  | T_VARIABLE                         { _p->pushFuncLocation();
+                                         Token t;
+                                         _p->onNewLabelScope(true);
+                                         _p->onClosureStart(t);
+                                         _p->pushLabelInfo();
+                                         Token u;
+                                         _p->onParam($1,NULL,u,$1,0,
+                                                     NULL,NULL,NULL);}
+    lambda_body                        { Token v; Token w; Token x;
+                                         _p->finishStatement($3, $3); $3 = 1;
+                                         $$ = _p->onClosure(ClosureType::Short,
+                                                            nullptr,
+                                                            v,$1,w,$3,x);
+                                         _p->popLabelInfo();
+                                         _p->onCompleteLabelScope(true);}
+  | T_LAMBDA_OP                        { _p->pushFuncLocation();
+                                         Token t;
+                                         _p->onNewLabelScope(true);
+                                         _p->onClosureStart(t);
+                                         _p->pushLabelInfo();}
+    parameter_list
+    T_LAMBDA_CP
+    hh_opt_return_type
+    lambda_body                        { Token u; Token v;
+                                         _p->finishStatement($6, $6); $6 = 1;
+                                         $$ = _p->onClosure(ClosureType::Short,
+                                                            nullptr,
+                                                            u,$3,v,$6,$5);
+                                         _p->popLabelInfo();
+                                         _p->onCompleteLabelScope(true);}
 ;
 
 lambda_body:
@@ -2091,102 +2154,6 @@ dim_expr_base:
   | '(' expr_no_variable ')'           { $$ = $2;}
 ;
 
-query_expr:
-    query_head query_body            { _p->onQuery($$, $1, $2); }
-;
-
-query_assign_expr:
-    variable '=' query_expr          { _p->onAssign($$, $1, $3, 0, true);}
-;
-
-query_head:
-  T_FROM T_VARIABLE T_IN expr        { _p->onFromClause($$, $2, $4); }
-;
-
-query_body:
-    query_body_clauses select_or_group_clause
-                                     { _p->onQueryBody($$, &$1, $2, NULL); }
-  | query_body_clauses select_or_group_clause query_continuation
-                                     { _p->onQueryBody($$, &$1, $2, &$3); }
-  | select_or_group_clause
-                                     { _p->onQueryBody($$, NULL, $1, NULL); }
-  | select_or_group_clause query_continuation
-                                     { _p->onQueryBody($$, NULL, $1, &$2); }
-;
-
-query_body_clauses:
-    query_body_clause                { _p->onQueryBodyClause($$, NULL, $1); }
-  | query_body_clauses query_body_clause
-                                     { _p->onQueryBodyClause($$, &$1, $2); }
-;
-
-query_body_clause:
-    from_clause                      { $$ = $1;}
-  | let_clause                       { $$ = $1;}
-  | where_clause                     { $$ = $1;}
-  | join_clause                      { $$ = $1;}
-  | join_into_clause                 { $$ = $1;}
-  | orderby_clause                   { $$ = $1;}
-;
-
-from_clause:
-    T_FROM T_VARIABLE T_IN expr      { _p->onFromClause($$, $2, $4); }
-;
-
-let_clause:
-    T_LET T_VARIABLE '=' expr        { _p->onLetClause($$, $2, $4); }
-;
-
-where_clause:
-    T_WHERE expr                     { _p->onWhereClause($$, $2); }
-;
-
-join_clause:
-    T_JOIN T_VARIABLE T_IN expr T_ON expr T_EQUALS expr
-                                     { _p->onJoinClause($$, $2, $4, $6, $8); }
-;
-
-join_into_clause:
-    T_JOIN T_VARIABLE T_IN expr T_ON expr T_EQUALS expr T_INTO T_VARIABLE
-                              { _p->onJoinIntoClause($$, $2, $4, $6, $8, $10); }
-;
-
-orderby_clause:
-    T_ORDERBY orderings              { _p->onOrderbyClause($$, $2); }
-;
-
-orderings:
-    ordering                         { _p->onOrdering($$, NULL, $1); }
-  | orderings ',' ordering           { _p->onOrdering($$, &$1, $3); }
-;
-
-ordering:
-    expr                             { _p->onOrderingExpr($$, $1, NULL); }
-  | expr ordering_direction          { _p->onOrderingExpr($$, $1, &$2); }
-;
-
-ordering_direction:
-    T_ASCENDING                      { $$ = $1;}
-  | T_DESCENDING                     { $$ = $1;}
-;
-
-select_or_group_clause:
-    select_clause                    { $$ = $1;}
-  | group_clause                     { $$ = $1;}
-;
-
-select_clause:
-    T_SELECT expr                    { _p->onSelectClause($$, $2); }
-;
-
-group_clause:
-    T_GROUP expr T_BY expr           { _p->onGroupClause($$, $2, $4); }
-;
-
-query_continuation:
-    T_INTO T_VARIABLE query_body     { _p->onIntoClause($$, $2, $3); }
-;
-
 lexical_var_list:
     lexical_var_list ',' T_VARIABLE    { _p->onClosureParam($$,&$1,$3,0);}
   | lexical_var_list ',' '&'T_VARIABLE { _p->onClosureParam($$,&$1,$4,1);}
@@ -2266,7 +2233,7 @@ xhp_label_ws:
     xhp_bareword                       { $$ = $1 + "-" + $3;}
 ;
 xhp_bareword:
-    ident                              { $$ = $1;}
+    ident_no_semireserved              { $$ = $1;}
   | T_EXIT                             { $$ = $1;}
   | T_FUNCTION                         { $$ = $1;}
   | T_CONST                            { $$ = $1;}
@@ -2357,12 +2324,43 @@ fully_qualified_class_name:
     class_namespace_string_typeargs    { $$ = $1;}
   | T_XHP_LABEL                        { $1.xhpLabel(); $$ = $1;}
 ;
-static_class_name:
+
+static_class_name_base:
     fully_qualified_class_name         { _p->onName($$,$1,Parser::StringName);}
+  | common_scalar                      { _p->onName($$,$1,Parser::StringName);}
   | T_STATIC                           { _p->onName($$,$1,Parser::StaticName);}
   | reference_variable                 { _p->onName($$,$1,
                                          Parser::StaticClassExprName);}
+  | '(' expr_no_variable ')'           { _p->onName($$,$2,
+                                         Parser::StaticClassExprName);}
 ;
+static_class_name_no_calls:
+    static_class_name_base             { $$ = $1; }
+  | static_class_name_no_calls
+    T_DOUBLE_COLON
+    /* !PHP5_ONLY */
+    variable_no_objects
+    /* !END */
+    /* !PHP7_ONLY */
+    compound_variable
+    /* !END */
+                                       { _p->onStaticMember($$,$1,$3);}
+;
+static_class_name:
+    static_class_name_base             { $$ = $1; }
+  | class_method_call                  { _p->onName($$,$1,
+                                         Parser::StaticClassExprName);}
+  | static_class_name
+    T_DOUBLE_COLON
+    /* !PHP5_ONLY */
+    variable_no_objects
+    /* !END */
+    /* !PHP7_ONLY */
+    compound_variable
+    /* !END */
+                                       { _p->onStaticMember($$,$1,$3);}
+;
+
 class_name_reference:
     fully_qualified_class_name         { _p->onName($$,$1,Parser::StringName);}
   | T_STATIC                           { _p->onName($$,$1,Parser::StaticName);}
@@ -2462,6 +2460,10 @@ static_expr:
     T_IS_GREATER_OR_EQUAL
     static_expr                        { BEXP($$,$1,$3,
                                               T_IS_GREATER_OR_EQUAL);}
+  | static_expr
+    T_SPACESHIP
+    static_expr                        { BEXP($$,$1,$3,T_SPACESHIP);}
+
   | static_expr '?' static_expr ':'
     static_expr                        { _p->onQOp($$, $1, &$3, $5);}
   | static_expr '?' ':' static_expr    { _p->onQOp($$, $1,   0, $4);}
@@ -2470,9 +2472,9 @@ static_expr:
 static_class_constant:
     class_namespace_string_typeargs
     T_DOUBLE_COLON
-    ident                              { _p->onClassConst($$, $1, $3, 1);}
+    ident_for_class_const              { _p->onClassConst($$, $1, $3, 1);}
   | T_XHP_LABEL T_DOUBLE_COLON
-    ident                              { $1.xhpLabel();
+    ident_for_class_const              { $1.xhpLabel();
                                          _p->onClassConst($$, $1, $3, 1);}
   | class_namespace_string_typeargs
     T_DOUBLE_COLON
@@ -2530,7 +2532,7 @@ static_numeric_scalar_ae:
     T_LNUMBER                          { _p->onScalar($$,T_LNUMBER,$1);}
   | T_DNUMBER                          { _p->onScalar($$,T_DNUMBER,$1);}
   | T_ONUMBER                          { _p->onScalar($$,T_ONUMBER,$1);}
-  | ident                              { constant_ae(_p,$$,$1);}
+  | ident_no_semireserved              { constant_ae(_p,$$,$1);}
 ;
 
 static_string_expr_ae:
@@ -2545,7 +2547,7 @@ static_string_expr_ae:
 static_scalar_ae:
     common_scalar_ae
   | static_string_expr_ae              { $$ = $1;}
-  | ident                              { constant_ae(_p,$$,$1);}
+  | ident_no_semireserved              { constant_ae(_p,$$,$1);}
   | '+' static_numeric_scalar_ae       { UEXP($$,$2,'+',1);}
   | '-' static_numeric_scalar_ae       { UEXP($$,$2,'-',1);}
   | T_ARRAY '('
@@ -2603,9 +2605,9 @@ attribute_static_scalar_list:
 
 non_empty_user_attribute_list:
     non_empty_user_attribute_list
-    ',' ident
+    ',' ident_no_semireserved
     attribute_static_scalar_list       { _p->onUserAttribute($$,&$1,$3,$4);}
-  | ident
+  | ident_no_semireserved
     attribute_static_scalar_list       { _p->onUserAttribute($$,  0,$1,$2);}
 ;
 user_attribute_list:
@@ -2627,24 +2629,34 @@ object_operator:
 ;
 
 object_property_name_no_variables:
-    ident                              { $$ = $1; $$ = HPHP::ObjPropNormal;}
+    ident_no_semireserved              { $$ = $1; $$ = HPHP::ObjPropNormal;}
   | T_XHP_LABEL                        { $$ = $1; $$ = HPHP::ObjPropXhpAttr;}
   | '{' expr '}'                       { $$ = $2; $$ = HPHP::ObjPropNormal;}
 ;
 
 object_property_name:
     object_property_name_no_variables  { $$ = $1;}
+  /* !PHP5_ONLY */
   | variable_no_objects                { $$ = $1; $$ = HPHP::ObjPropNormal;}
+  /* !END */
+  /* !PHP7_ONLY */
+  | compound_variable                  { $$ = $1; $$ = HPHP::ObjPropNormal;}
+  /* !END */
 ;
 
 object_method_name_no_variables:
-    ident                              { $$ = $1;}
+    ident_no_semireserved              { $$ = $1;}
   | '{' expr '}'                       { $$ = $2;}
 ;
 
 object_method_name:
     object_method_name_no_variables    { $$ = $1;}
+  /* !PHP5_ONLY */
   | variable_no_objects                { $$ = $1;}
+  /* !END */
+  /* !PHP7_ONLY */
+  | compound_variable                  { $$ = $1;}
+  /* !END */
 ;
 
 array_access:
@@ -2665,23 +2677,8 @@ dimmable_variable_no_calls_access:
     array_access                       { _p->onRefDim($$, $2, $4);}
 ;
 
-variable:
-    variable_no_objects                { $$ = $1;}
-  | simple_function_call               { $$ = $1;}
-  | object_method_call                 { $$ = $1;}
-  | class_method_call                  { $$ = $1;}
-  | dimmable_variable_access           { $$ = $1;}
-  | variable object_operator
-    object_property_name            { _p->onObjectProperty(
-                                        $$,
-                                        $1,
-                                        !$2.num()
-                                          ? HPHP::PropAccessType::Normal
-                                          : HPHP::PropAccessType::NullSafe,
-                                        $3
-                                      );
-                                    }
-  | '(' expr_with_parens ')'
+object_property_access_on_expr:
+    '(' expr_with_parens ')'
     object_operator
     object_property_name            { _p->onObjectProperty(
                                         $$,
@@ -2692,9 +2689,72 @@ variable:
                                         $5
                                       );
                                     }
+  | '(' expr_no_variable ')'
+    object_operator
+    object_property_name            { _p->onObjectProperty(
+                                        $$,
+                                        $2,
+                                        !$4.num()
+                                          ? HPHP::PropAccessType::Normal
+                                          : HPHP::PropAccessType::NullSafe,
+                                        $5
+                                      );
+                                    }
+;
+
+object_property_access_on_expr_no_variables:
+    '(' expr_with_parens ')'
+    object_operator
+    object_property_name_no_variables
+                                    { _p->onObjectProperty(
+                                        $$,
+                                        $2,
+                                        !$4.num()
+                                          ? HPHP::PropAccessType::Normal
+                                          : HPHP::PropAccessType::NullSafe,
+                                        $5
+                                      );
+                                    }
+  | '(' expr_no_variable ')'
+    object_operator
+    object_property_name_no_variables
+                                    { _p->onObjectProperty(
+                                        $$,
+                                        $2,
+                                        !$4.num()
+                                          ? HPHP::PropAccessType::Normal
+                                          : HPHP::PropAccessType::NullSafe,
+                                        $5
+                                      );
+                                    }
+;
+
+variable:
+    variable_no_objects                { $$ = $1;}
+  | simple_function_call               { $$ = $1;}
+  | object_method_call                 { $$ = $1;}
+  | class_method_call                  { $$ = $1;}
+  | dimmable_variable_access           { $$ = $1;}
+  | object_property_access_on_expr     { $$ = $1;}
+  | variable object_operator
+    object_property_name            { _p->onObjectProperty(
+                                        $$,
+                                        $1,
+                                        !$2.num()
+                                          ? HPHP::PropAccessType::Normal
+                                          : HPHP::PropAccessType::NullSafe,
+                                        $3
+                                      );
+                                    }
   | static_class_name
     T_DOUBLE_COLON
-    variable_no_objects                { _p->onStaticMember($$,$1,$3);}
+    /* !PHP5_ONLY */
+    variable_no_objects
+    /* !END */
+    /* !PHP7_ONLY */
+    compound_variable
+    /* !END */
+                                       { _p->onStaticMember($$,$1,$3);}
   | callable_variable '('
     function_call_parameter_list ')'   { _p->onCall($$,1,$1,$3,NULL);}
   | lambda_or_closure_with_parens '('
@@ -2708,7 +2768,12 @@ dimmable_variable:
   | class_method_call                  { $$ = $1;}
   | dimmable_variable_access           { $$ = $1;}
   | variable object_operator
+    /* !PHP5_ONLY */
     object_property_name_no_variables
+    /* !END */
+    /* !PHP7_ONLY */
+    object_property_name
+    /* !END */
                                     { _p->onObjectProperty(
                                         $$,
                                         $1,
@@ -2718,27 +2783,29 @@ dimmable_variable:
                                         $3
                                       );
                                     }
-  | '(' expr_with_parens ')'
-    object_operator
-    object_property_name_no_variables
-                                    { _p->onObjectProperty(
-                                        $$,
-                                        $2,
-                                        !$4.num()
-                                          ? HPHP::PropAccessType::Normal
-                                          : HPHP::PropAccessType::NullSafe,
-                                        $5
-                                      );
-                                    }
+  | object_property_access_on_expr_no_variables { $$ = $1;}
   | callable_variable '('
     function_call_parameter_list ')'   { _p->onCall($$,1,$1,$3,NULL);}
   | '(' variable ')'                   { $$ = $2;}
+  /* !PHP7_ONLY */
+  | static_class_name
+    T_DOUBLE_COLON
+    compound_variable                  { _p->onStaticMember($$,$1,$3);}
+  /* !END */
 ;
 
 callable_variable:
     variable_no_objects                { $$ = $1;}
   | dimmable_variable_access           { $$ = $1;}
+  | simple_function_call               { $$ = $1;}
+  | array_literal                      { $$ = $1;}
+  | common_scalar                      { $$ = $1;}
   | '(' variable ')'                   { $$ = $2;}
+  | '(' expr_no_variable ')'           { $$ = $2;}
+  | lambda_or_closure_with_parens '('
+    function_call_parameter_list ')'   { _p->onCall($$,1,$1,$3,NULL);}
+  | callable_variable '('
+    function_call_parameter_list ')'   { _p->onCall($$,1,$1,$3,NULL);}
 ;
 
 lambda_or_closure_with_parens:
@@ -2767,7 +2834,12 @@ class_method_call:
     function_call_parameter_list ')'   { _p->onCall($$,0,$3,$6,&$1);}
   | static_class_name
     T_DOUBLE_COLON
+    /* !PHP5_ONLY */
     variable_no_objects '('
+    /* !END */
+    /* !PHP7_ONLY */
+    compound_variable '('
+    /* !END */
     function_call_parameter_list ')'   { _p->onCall($$,1,$3,$5,&$1);}
   | static_class_name
     T_DOUBLE_COLON
@@ -2777,8 +2849,10 @@ class_method_call:
 
 variable_no_objects:
     reference_variable                 { $$ = $1;}
+  /* !PHP5_ONLY */
   | simple_indirect_reference
     reference_variable                 { _p->onIndirectRef($$,$1,$2);}
+  /* !END */
 ;
 
 reference_variable:
@@ -2787,23 +2861,31 @@ reference_variable:
   | reference_variable '{' expr '}'    { _p->onRefDim($$, $1, $3);}
   | compound_variable                  { $$ = $1;}
 ;
+
 compound_variable:
     T_VARIABLE                         { _p->onSimpleVariable($$, $1);}
   | '$' '{' expr '}'                   { _p->onDynamicVariable($$, $3, 0);}
+  /* !PHP7_ONLY */
+  | '$' compound_variable              { $1 = 1; _p->onIndirectRef($$, $1, $2);}
+  /* !END */
 ;
+
 dim_offset:
     expr                               { $$ = $1;}
   |                                    { $$.reset();}
 ;
 
+/* !PHP5_ONLY */
 simple_indirect_reference:
     '$'                                { $$ = 1;}
   | simple_indirect_reference '$'      { $$++;}
 ;
+/* !END */
 
 variable_no_calls:
     variable_no_objects                { $$ = $1;}
   | dimmable_variable_no_calls_access  { $$ = $1;}
+  | object_property_access_on_expr     { $$ = $1;}
   | variable_no_calls
     object_operator
     object_property_name            { _p->onObjectProperty(
@@ -2815,18 +2897,7 @@ variable_no_calls:
                                         $3
                                       );
                                     }
-  | '(' expr_with_parens ')'
-    object_operator
-    object_property_name            { _p->onObjectProperty(
-                                        $$,
-                                        $2,
-                                        !$4.num()
-                                          ? HPHP::PropAccessType::Normal
-                                          : HPHP::PropAccessType::NullSafe,
-                                        $5
-                                      );
-                                    }
-  | static_class_name
+  | static_class_name_no_calls
     T_DOUBLE_COLON
     variable_no_objects                { _p->onStaticMember($$,$1,$3);}
   | '(' variable ')'                   { $$ = $2;}
@@ -2834,6 +2905,7 @@ variable_no_calls:
 
 dimmable_variable_no_calls:
   | dimmable_variable_no_calls_access  { $$ = $1;}
+  | object_property_access_on_expr_no_variables { $$ = $1;}
   | variable_no_calls object_operator
     object_property_name_no_variables
                                     { _p->onObjectProperty(
@@ -2843,18 +2915,6 @@ dimmable_variable_no_calls:
                                           ? HPHP::PropAccessType::Normal
                                           : HPHP::PropAccessType::NullSafe,
                                         $3
-                                      );
-                                    }
-  | '(' expr_with_parens ')'
-    object_operator
-    object_property_name_no_variables
-                                    { _p->onObjectProperty(
-                                        $$,
-                                        $2,
-                                        !$4.num()
-                                          ? HPHP::PropAccessType::Normal
-                                          : HPHP::PropAccessType::NullSafe,
-                                        $5
                                       );
                                     }
   | '(' variable ')'                   { $$ = $2;}
@@ -2934,7 +2994,7 @@ encaps_var:
   | T_VARIABLE '['
     encaps_var_offset ']'              { _p->encapRefDim($$, $1, $3);}
   | T_VARIABLE object_operator
-    ident                              { _p->encapObjProp(
+    ident_no_semireserved              { _p->encapObjProp(
                                            $$,
                                            $1,
                                            !$2.num()
@@ -2950,13 +3010,13 @@ encaps_var:
   | T_CURLY_OPEN variable '}'          { $$ = $2;}
 ;
 encaps_var_offset:
-    ident                              { $$ = $1; $$ = T_STRING;}
+    ident_no_semireserved              { $$ = $1; $$ = T_STRING;}
   | T_NUM_STRING                       { $$ = $1; $$ = T_NUM_STRING;}
   | T_VARIABLE                         { $$ = $1; $$ = T_VARIABLE;}
 ;
 
 internal_functions:
-    T_ISSET '(' variable_list ')'      { UEXP($$,$3,T_ISSET,1);}
+    T_ISSET '(' expr_list ')'          { UEXP($$,$3,T_ISSET,1);}
   | T_EMPTY '(' variable ')'           { UEXP($$,$3,T_EMPTY,1);}
   | T_EMPTY '(' expr_no_variable ')'   { UEXP($$,$3,'!',1);}
   | T_EMPTY '(' lambda_or_closure ')'  { UEXP($$,$3,'!',1);}
@@ -2976,7 +3036,7 @@ variable_list:
 
 class_constant:
     static_class_name
-    T_DOUBLE_COLON ident               { _p->onClassConst($$, $1, $3, 0);}
+    T_DOUBLE_COLON ident_for_class_const  { _p->onClassConst($$, $1, $3, 0);}
   | static_class_name
     T_DOUBLE_COLON T_CLASS             { _p->onClassClass($$, $1, $3, 0);}
 ;
@@ -2991,23 +3051,23 @@ hh_opt_constraint:
   ;
 
 hh_type_alias_statement:
-    T_TYPE hh_name_with_typevar
+    T_TYPE hh_name_no_semireserved_with_typevar
       '=' hh_type ';'                  { $2.setText(_p->nsClassDecl($2.text()));
                                          _p->onTypedef($$, $2, $4);
                                          _p->popTypeScope(); }
   | non_empty_user_attributes
-    T_TYPE hh_name_with_typevar
+    T_TYPE hh_name_no_semireserved_with_typevar
       '=' hh_type ';'                  { $3.setText(_p->nsClassDecl($3.text()));
-                                         _p->onTypedef($$, $3, $5);
+                                         _p->onTypedef($$, $3, $5, &$1);
                                          _p->popTypeScope(); }
-  | T_NEWTYPE hh_name_with_typevar
+  | T_NEWTYPE hh_name_no_semireserved_with_typevar
     hh_opt_constraint '=' hh_type ';'  { $2.setText(_p->nsClassDecl($2.text()));
                                          _p->onTypedef($$, $2, $5);
                                          _p->popTypeScope(); }
   | non_empty_user_attributes
-    T_NEWTYPE hh_name_with_typevar
+    T_NEWTYPE hh_name_no_semireserved_with_typevar
     hh_opt_constraint '=' hh_type ';'  { $3.setText(_p->nsClassDecl($3.text()));
-                                         _p->onTypedef($$, $3, $6);
+                                         _p->onTypedef($$, $3, $6, &$1);
                                          _p->popTypeScope(); }
 ;
 
@@ -3016,14 +3076,30 @@ hh_name_with_type:  /* foo -> int foo */
   | hh_type ident                      { only_in_hh_syntax(_p); $$ = $2; }
 ;
 
-hh_name_with_typevar:  /* foo -> foo<X,Y>; this adds a typevar scope
-                        * and must be followed by a call to
-                        * popTypeScope() */
+hh_constname_with_type:  /* foo -> int foo, but in class constants */
+    ident_for_class_const              { $$ = $1; }
+  | hh_type ident_for_class_const      { only_in_hh_syntax(_p); $$ = $2; }
+;
+
+hh_name_with_typevar:                  /* foo -> foo<X,Y>; this adds a typevar
+                                       * scope and must be followed by a call to
+                                       * popTypeScope() */
     ident                              { _p->pushTypeScope(); $$ = $1; }
   | ident
     T_TYPELIST_LT
     hh_typevar_list
     T_TYPELIST_GT                      { _p->pushTypeScope(); $$ = $1; }
+;
+
+hh_name_no_semireserved_with_typevar:  /* foo -> foo<X,Y>; this adds a typevar
+                                        * scope and must be followed by a call
+                                        * to popTypeScope() */
+    ident_no_semireserved              { _p->pushTypeScope(); $$ = $1; }
+  | ident_no_semireserved
+    T_TYPELIST_LT
+    hh_typevar_list
+    T_TYPELIST_GT                      { Token t; _p->setTypeVars(t, $1);
+                                         _p->pushTypeScope(); $$ = t; }
 ;
 
 hh_typeargs_opt:
@@ -3065,12 +3141,16 @@ hh_constraint:
 
 hh_typevar_list:
     hh_typevar_list ','
-    hh_typevar_variance ident          { _p->addTypeVar($4.text()); }
- |  hh_typevar_variance ident          { _p->addTypeVar($2.text()); }
+    hh_typevar_variance
+    ident_no_semireserved              { _p->addTypeVar($4.text()); }
+ |  hh_typevar_variance
+    ident_no_semireserved              { _p->addTypeVar($2.text()); }
  |  hh_typevar_list ','
-    hh_typevar_variance ident
+    hh_typevar_variance
+    ident_no_semireserved
     hh_constraint                      { _p->addTypeVar($4.text()); }
- |  hh_typevar_variance ident
+ |  hh_typevar_variance
+    ident_no_semireserved
     hh_constraint                      { _p->addTypeVar($2.text()); }
 ;
 
@@ -3083,44 +3163,55 @@ hh_typevar_variance:
 hh_shape_member_type:
     T_CONSTANT_ENCAPSED_STRING
       T_DOUBLE_ARROW
-      hh_type                      { validate_shape_keyname($1, _p); }
+      hh_type                      { validate_shape_keyname($1, _p);
+                                     _p->onTypeAnnotation($$, $1, $3); }
  |   '?'
       T_CONSTANT_ENCAPSED_STRING
       T_DOUBLE_ARROW
-      hh_type                      { validate_shape_keyname($2, _p); }
+      hh_type                      {
+                                     /* should not reach here as
+                                      * optional shape fields are not
+                                      * supported in strict mode */
+                                     validate_shape_keyname($2, _p);
+                                     _p->onTypeAnnotation($$, $2, $4);
+                                   }
  |  class_namespace_string_typeargs
       T_DOUBLE_COLON
-      ident
-     T_DOUBLE_ARROW
-      hh_type                      { }
-
+      ident_no_semireserved
+      T_DOUBLE_ARROW
+      hh_type                      { _p->onClsCnsShapeField($$, $1, $3, $5); }
 ;
 
 hh_non_empty_shape_member_list:
     hh_non_empty_shape_member_list ','
-      hh_shape_member_type
-  | hh_shape_member_type
+    hh_shape_member_type               { _p->onTypeList($$, $3); }
+  | hh_shape_member_type               { }
 ;
 
 hh_shape_member_list:
     hh_non_empty_shape_member_list
-    possible_comma                     { $$ = $1; }
-  | /* empty */
-{}
+    possible_comma                     { _p->onShape($$, $1); }
+  | /* empty */                        { Token t; t.reset();
+                                         _p->onShape($$, t); }
+;
 
 hh_shape_type:
     T_SHAPE
-     '(' hh_shape_member_list ')'      { $$.setText("array"); }
+    '(' hh_shape_member_list ')'      { $$ = $3;
+                                        $$.setText("array"); }
 ;
 
 hh_access_type_start:
     class_namespace_string_typeargs         { $$ = $1; }
 ;
 hh_access_type:
-    ident T_DOUBLE_COLON hh_access_type { Token t; t.reset();
-                                          _p->onTypeAnnotation($$, $1, t);
-                                          _p->onTypeList($$, $3); }
-  | ident hh_typeargs_opt               { _p->onTypeAnnotation($$, $1, $2); }
+    ident_no_semireserved
+    T_DOUBLE_COLON
+    hh_access_type                    { Token t; t.reset();
+                                        _p->onTypeAnnotation($$, $1, t);
+                                        _p->onTypeList($$, $3); }
+  | ident_no_semireserved
+    hh_typeargs_opt                   { _p->onTypeAnnotation($$, $1, $2); }
 ;
 
 /* extends non_empty_type_decl with some more types */
@@ -3178,6 +3269,11 @@ hh_type_opt:
 ;
 
 %%
-bool Parser::parseImpl() {
+/* !PHP5_ONLY*/
+bool Parser::parseImpl5() {
+/* !END */
+/* !PHP7_ONLY*/
+bool Parser::parseImpl7() {
+/* !END */
   return yyparse(this) == 0;
 }

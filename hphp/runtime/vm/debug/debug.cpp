@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -27,7 +27,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#ifndef _MSC_VER
 #include <cxxabi.h>
+#endif
 
 #ifdef HAVE_LIBBFD
 #include <bfd.h>
@@ -222,7 +224,7 @@ void DebugInfo::recordBCInstr(TCRange range, uint32_t op) {
 }
 
 void DebugInfo::recordTracelet(TCRange range, const Func* func,
-    const Op* instr, bool exit, bool inPrologue) {
+    PC instr, bool exit, bool inPrologue) {
   if (range.isAcold()) {
     m_acoldDwarfInfo.addTracelet(range, folly::none, func,
                                  instr, exit, inPrologue);
@@ -246,7 +248,7 @@ void DebugInfo::recordDataMap(void* from, void* to, const std::string& desc) {
 void DebugInfo::recordRelocMap(void* from, void* to,
                                const String& transInfo) {
   if (m_relocMap) {
-    fprintf(m_relocMap, "%" PRIxPTR " %" PRIx64 " %s\n",
+    fprintf(m_relocMap, "%" PRIxPTR " %" PRIxPTR " %s\n",
             uintptr_t(from),
             uintptr_t(to),
             transInfo.c_str());

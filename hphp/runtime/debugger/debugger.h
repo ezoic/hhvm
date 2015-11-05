@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -59,7 +59,7 @@ struct Debugger {
   static void UnregisterSandbox(const String& id);
 
   // Add/remove/change DebuggerProxy.
-  static DebuggerProxyPtr CreateProxy(SmartPtr<Socket> socket, bool local);
+  static DebuggerProxyPtr CreateProxy(req::ptr<Socket> socket, bool local);
   static void RemoveProxy(DebuggerProxyPtr proxy);
   static bool SwitchSandbox(DebuggerProxyPtr proxy, const std::string &newId,
                             bool force);
@@ -184,7 +184,7 @@ private:
   void requestInterrupt(DebuggerProxyPtr proxy);
   void setDebuggerFlag(const StringData* sandboxId, bool flag);
 
-  DebuggerProxyPtr createProxy(SmartPtr<Socket> socket, bool local);
+  DebuggerProxyPtr createProxy(req::ptr<Socket> socket, bool local);
   void removeProxy(DebuggerProxyPtr proxy);
   DebuggerProxyPtr findProxy(const StringData* sandboxId);
   int countConnectedProxy() { return m_proxyMap.size(); } ;

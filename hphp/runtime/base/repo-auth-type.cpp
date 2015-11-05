@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,6 +19,7 @@
 
 #include <folly/Hash.h>
 
+#include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/tv-helpers.h"
@@ -237,7 +238,7 @@ bool tvMatchesRepoAuthType(TypedValue tv, RepoAuthType ty) {
     if (initNull) return true;
     // fallthrough
   case T::Str:
-    return IS_STRING_TYPE(tv.m_type);
+    return isStringType(tv.m_type);
 
   case T::OptSArr:
     if (initNull) return true;
@@ -289,7 +290,7 @@ bool tvMatchesRepoAuthType(TypedValue tv, RepoAuthType ty) {
     if (tv.m_type == KindOfUninit) return false;
     // fallthrough
   case T::Unc:
-    return !IS_REFCOUNTED_TYPE(tv.m_type) ||
+    return !isRefcountedType(tv.m_type) ||
            (tv.m_type == KindOfString && tv.m_data.pstr->isStatic()) ||
            (tv.m_type == KindOfArray && tv.m_data.parr->isStatic());
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -24,23 +24,22 @@
 // Super temporary
 #ifndef USE_CMAKE
 #include "hphp/facebook/extensions/phpmc/ext_phpmc.h"
+#define ENABLE_EXTENSION_ASIO
+#define ENABLE_EXTENSION_CLOSURE
+#define ENABLE_EXTENSION_COLLECTIONS
+#define ENABLE_EXTENSION_SIMPLEXML
 #endif
 
-#include "hphp/runtime/ext/array/ext_array_idl.h"
-#include "hphp/runtime/ext/async_mysql/ext_async_mysql.h"
-#include "hphp/runtime/ext/ext_closure.h"
-#include "hphp/runtime/ext/ext_collections.h"
-#include "hphp/runtime/ext/ext_generator.h"
-#include "hphp/runtime/ext/fb/ext_fb.h"
-#include "hphp/runtime/ext/std/ext_std_file.h"
-#include "hphp/runtime/ext/ext_hash.h"
-#include "hphp/runtime/ext/ext_simplexml.h"
-#include "hphp/runtime/ext/soap/ext_soap.h"
-#include "hphp/runtime/ext/spl/ext_spl.h"
-#include "hphp/runtime/ext/string/ext_string.h"
-#include "hphp/runtime/ext/mysql/ext_mysql.h"
+#ifdef ENABLE_EXTENSION_CLOSURE
+#include "hphp/runtime/ext/closure/ext_closure.h"
+#endif
+#ifdef ENABLE_EXTENSION_COLLECTIONS
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
+#endif
 
 // half-IDL, half-HNI
+#ifdef ENABLE_EXTENSION_ASIO
 #include "hphp/runtime/ext/asio/ext_asio.h"
+#endif
 
 #endif // incl_EXT_LIST_EXT_H_

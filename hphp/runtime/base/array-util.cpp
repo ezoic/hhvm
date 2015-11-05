@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -430,7 +430,7 @@ Variant ArrayUtil::RegularSortUnique(const Array& input) {
   ArrayInit ret(indices.size() - duplicates_count, ArrayInit::Map{});
   int i = 0;
   for (ArrayIter iter(input); iter; ++iter, ++i) {
-    if (!duplicates[i]) ret.set(iter.first(), iter.secondRef());
+    if (!duplicates[i]) ret.setValidKey(iter.first(), iter.secondRef());
   }
   return ret.toVariant();
 }
@@ -460,7 +460,7 @@ static void create_miter_for_walk(folly::Optional<MArrayIter>& miter,
   miter.emplace(properties.detach());
 }
 
-void ArrayUtil::Walk(VRefParam input, PFUNC_WALK walk_function,
+void ArrayUtil::Walk(Variant& input, PFUNC_WALK walk_function,
                      const void *data, bool recursive /* = false */,
                      PointerSet *seen /* = NULL */,
                      const Variant& userdata /* = null_variant */) {
@@ -488,12 +488,12 @@ void ArrayUtil::Walk(VRefParam input, PFUNC_WALK walk_function,
         seen->insert((void*)arr);
       }
 
-      Walk(directRef(v), walk_function, data, recursive, seen, userdata);
+      Walk(v, walk_function, data, recursive, seen, userdata);
       if (v.isReferenced()) {
         seen->erase((void*)arr);
       }
     } else {
-      walk_function(directRef(v), k, userdata, data);
+      walk_function(v, k, userdata, data);
     }
   }
 }

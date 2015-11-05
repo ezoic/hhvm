@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,8 +25,7 @@ namespace HPHP {
 /**
  * If an object may be shared by multiple threads but we want to reclaim it
  * when all threads are finished using it, we need to allocate it with the C++
- * new operator (instead of SmartAllocator) and we need to use AtomicSharedPtr
- * instead of SmartPtr.
+ * new operator (instead of MemoryManager) and we need to use AtomicSharedPtr.
  */
 struct AtomicCountable {
   using RefCount = int32_t;

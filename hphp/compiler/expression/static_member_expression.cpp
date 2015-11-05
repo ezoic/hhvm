@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,7 +39,7 @@ StaticMemberExpression::StaticMemberExpression
     StaticClassName(classExp), m_exp(exp), m_valid(false),
     m_dynamicClass(false) {
   if (exp->is(KindOfSimpleVariable)) {
-    SimpleVariablePtr s(dynamic_pointer_cast<SimpleVariable>(exp));
+    auto s = dynamic_pointer_cast<SimpleVariable>(exp);
     m_exp = ExpressionPtr
       (new ScalarExpression(getScope(), getRange(),
                             T_STRING, s->getName(), true));
@@ -64,10 +64,10 @@ ExpressionPtr StaticMemberExpression::clone() {
 ///////////////////////////////////////////////////////////////////////////////
 // static analysis functions
 
-bool StaticMemberExpression::findMember(AnalysisResultPtr ar, string &name,
+bool StaticMemberExpression::findMember(AnalysisResultPtr ar, std::string &name,
                                         Symbol *&sym) {
   if (m_exp->is(Expression::KindOfScalarExpression)) {
-    ScalarExpressionPtr var = dynamic_pointer_cast<ScalarExpression>(m_exp);
+    auto var = dynamic_pointer_cast<ScalarExpression>(m_exp);
     name = var->getString();
   }
 
@@ -101,7 +101,7 @@ void StaticMemberExpression::analyzeProgram(AnalysisResultPtr ar) {
     m_class->analyzeProgram(ar);
   } else if (ar->getPhase() >= AnalysisResult::AnalyzeAll) {
     Symbol *sym;
-    string name;
+    std::string name;
     if (findMember(ar, name, sym)) {
       if (m_resolvedClass) {
         m_resolvedClass->addUse(getScope(), BlockScope::UseKindStaticRef);
@@ -152,46 +152,6 @@ ExpressionPtr StaticMemberExpression::preOptimize(AnalysisResultConstPtr ar) {
   return ExpressionPtr();
 }
 
-/**
- * static_member can only be one of these two forms:
- *
- *   T::$member
- *   T::$$member or T::${$member}, where $member can be an arbitrary expression
- *   The former is represented by a ScalarExpression with value "member",
- *   the latter by the expression $member.
- */
-
-unsigned StaticMemberExpression::getCanonHash() const {
-  int64_t val = Expression::getCanonHash() +
-    hash_string_i_unsafe(m_className.c_str(), m_className.size());
-  return ~unsigned(val) ^ unsigned(val >> 32);
-}
-
-bool StaticMemberExpression::canonCompare(ExpressionPtr e) const {
-  if (!Expression::canonCompare(e)) return false;
-  StaticMemberExpressionPtr s =
-    static_pointer_cast<StaticMemberExpression>(e);
-  return m_className == s->m_className;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void StaticMemberExpression::outputCodeModel(CodeGenerator &cg) {
-  cg.printObjectHeader("ClassPropertyExpression", 3);
-  StaticClassName::outputCodeModel(cg);
-  if (m_exp->is(Expression::KindOfScalarExpression)) {
-    cg.printPropertyHeader("propertyName");
-    ScalarExpressionPtr var = dynamic_pointer_cast<ScalarExpression>(m_exp);
-    cg.printValue(var->getString());
-  } else {
-    cg.printPropertyHeader("propertyExpression");
-    m_exp->outputCodeModel(cg);
-  }
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // code generation functions
 
@@ -204,7 +164,7 @@ void StaticMemberExpression::outputPHP(CodeGenerator &cg,
   switch (m_exp->getKindOf()) {
   case KindOfScalarExpression:
     {
-      ScalarExpressionPtr var = dynamic_pointer_cast<ScalarExpression>(m_exp);
+      auto var = dynamic_pointer_cast<ScalarExpression>(m_exp);
       cg_printf("%s", var->getString().c_str());
       return;
     }

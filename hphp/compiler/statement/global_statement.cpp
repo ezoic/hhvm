@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -36,12 +36,12 @@ GlobalStatement::GlobalStatement
   : Statement(STATEMENT_CONSTRUCTOR_PARAMETER_VALUES(GlobalStatement)),
     m_exp(exp) {
 
-  std::set<string> seen;
+  std::set<std::string> seen;
   for (int i = 0; i < m_exp->getCount(); i++) {
     ExpressionPtr exp = (*m_exp)[i];
     exp->setContext(Expression::Declaration);
     if (exp->is(Expression::KindOfSimpleVariable)) {
-      const string &name = static_pointer_cast<SimpleVariable>(exp)->getName();
+      auto const& name = static_pointer_cast<SimpleVariable>(exp)->getName();
       if (!seen.insert(name).second) {
         m_exp->removeElement(i--);
       }
@@ -96,17 +96,6 @@ StatementPtr GlobalStatement::preOptimize(AnalysisResultConstPtr ar) {
     return NULL_STATEMENT();
   }
   return StatementPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void GlobalStatement::outputCodeModel(CodeGenerator &cg) {
-  cg.printObjectHeader("GlobalStatement", 2);
-  cg.printPropertyHeader("expressions");
-  cg.printExpressionVector(m_exp);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

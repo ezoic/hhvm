@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -121,7 +121,7 @@ void ParameterExpression::parseHandler(FileScopeRawPtr file,
 
 void ParameterExpression::fixupSelfAndParentTypehints(ClassScopePtr cls) {
   if (m_type == "self") {
-    m_type = cls->getName();
+    m_type = toLower(cls->getOriginalName());
   } else if (m_type == "parent") {
     if (!cls->getOriginalParent().empty()) {
       m_type = toLower(cls->getOriginalParent());
@@ -264,60 +264,13 @@ void ParameterExpression::compatibleDefault(FileScopeRawPtr file) {
        }
     }
 
-    string name = getName();
-    string tdefault = HPHP::tname(defaultType);
+    auto const& name = getName();
+    auto const tdefault = HPHP::tname(defaultType);
     parseTimeFatal(file,
                    Compiler::BadDefaultValueType, msg,
                    name.c_str(), tdefault.c_str(),
                    getTypeHintDisplayName().c_str());
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ParameterExpression::outputCodeModel(CodeGenerator &cg) {
-  auto propCount = 2;
-  if (m_attributeList) propCount++;
-  if (m_modifier != 0) propCount++;
-  if (m_originalType) propCount++;
-  if (m_ref) propCount++;
-  if (m_defaultValue != nullptr) propCount++;
-  cg.printObjectHeader("ParameterDeclaration", propCount);
-  if (m_attributeList) {
-    cg.printPropertyHeader("attributes");
-    cg.printExpressionVector(m_attributeList);
-  }
-  if (m_modifier != 0) {
-    cg.printPropertyHeader("modifiers");
-    cg.printf("V:9:\"HH\\Vector\":1:{");
-    cg.printObjectHeader("Modifier", 1);
-    cg.printPropertyHeader("name");
-    switch (m_modifier) {
-      case T_PUBLIC: cg.printValue("public"); break;
-      case T_PROTECTED: cg.printValue("protected"); break;
-      case T_PRIVATE: cg.printValue("private"); break;
-      default: assert(false);
-    }
-    cg.printObjectFooter();
-    cg.printf("}");
-  }
-  if (m_originalType) {
-    cg.printPropertyHeader("typeAnnotation");
-    m_originalType->outputCodeModel(cg);
-  }
-  if (m_ref) {
-    cg.printPropertyHeader("isPassedByReference");
-    cg.printBool(true);
-  }
-  cg.printPropertyHeader("name");
-  cg.printValue(m_name);
-  if (m_defaultValue) {
-    cg.printPropertyHeader("expression");
-    m_defaultValue->outputCodeModel(cg);
-  }
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

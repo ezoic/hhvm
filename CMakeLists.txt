@@ -1,16 +1,24 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.7 FATAL_ERROR)
 
+# This needs to be done before any languages are enabled or
+# projects are created.
+INCLUDE("${CMAKE_CURRENT_SOURCE_DIR}/CMake/VisualStudioToolset.cmake")
+
 # includes
 SET(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # package information
 SET(PACKAGE_NAME      "hhvm")
-SET(PACKAGE_VERSION   "3.8.0-dev")
+SET(PACKAGE_VERSION   "3.11.0-dev")
 SET(PACKAGE_STRING    "${PACKAGE_NAME} ${PACKAGE_VERSION}")
 SET(PACKAGE_TARNAME   "${PACKAGE_NAME}-${PACKAGE_VERSION}")
 SET(PACKAGE_BUGREPORT "https://github.com/facebook/hhvm/issues")
 
 PROJECT(${PACKAGE_NAME} C CXX ASM)
+if (MSVC)
+  enable_language(ASM_MASM)
+endif()
 
 MARK_AS_ADVANCED(CLEAR CMAKE_INSTALL_PREFIX)
 IF(APPLE)
@@ -47,6 +55,7 @@ INCLUDE(CheckFunctionExists)
 
 SET(HPHP_HOME ${CMAKE_CURRENT_SOURCE_DIR})
 SET(TP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party")
+SET(TP_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/third-party")
 
 ADD_SUBDIRECTORY(third-party)
 ADD_SUBDIRECTORY(hphp)

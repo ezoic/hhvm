@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,6 @@
 #define incl_HPHP_CPP_BASE_SHARED_SHARED_STRING_H_
 
 #include "hphp/runtime/base/atomic-shared-ptr.h"
-#include "hphp/runtime/base/types.h"
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/atomic.h>
 #include "hphp/util/atomic.h"

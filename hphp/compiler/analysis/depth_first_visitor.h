@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,6 @@
 #define incl_HPHP_DEPTH_FIRST_VISITOR_H_
 
 #include "hphp/compiler/analysis/analysis_result.h"
-#include "hphp/compiler/analysis/ast_walker.h"
 #include "hphp/compiler/analysis/block_scope.h"
 
 #include "hphp/compiler/expression/expression.h"
@@ -57,22 +56,22 @@ public:
   }
 
   StatementPtr visitStmtRecur(StatementPtr stmt) {
-    BlockScopeRawPtr scope = dynamic_pointer_cast<LoopStatement>(stmt) ?
+    auto scope = dynamic_pointer_cast<LoopStatement>(stmt) ?
       stmt->getScope() : BlockScopeRawPtr();
 
     for (int i = 0, n = stmt->getKidCount(); i < n; i++) {
-      if (ConstructPtr kid = stmt->getNthKid(i)) {
-        if (StatementPtr s = dynamic_pointer_cast<Statement>(kid)) {
-          if (FunctionWalker::SkipRecurse(s)) continue;
+      if (auto kid = stmt->getNthKid(i)) {
+        if (auto s = dynamic_pointer_cast<Statement>(kid)) {
+          if (Construct::SkipRecurse(s)) continue;
           if (scope) scope->incLoopNestedLevel();
-          if (StatementPtr rep = visitStmtRecur(s)) {
+          if (auto rep = visitStmtRecur(s)) {
             stmt->setNthKid(i, rep);
             stmt->getScope()->addUpdates(BlockScope::UseKindCaller);
           }
           if (scope) scope->decLoopNestedLevel();
         } else {
-          ExpressionPtr e = dynamic_pointer_cast<Expression>(kid);
-          if (ExpressionPtr rep = visitExprRecur(e)) {
+          auto e = dynamic_pointer_cast<Expression>(kid);
+          if (auto rep = visitExprRecur(e)) {
             stmt->setNthKid(i, rep);
             stmt->getScope()->addUpdates(BlockScope::UseKindCaller);
           }
@@ -94,11 +93,7 @@ public:
 
   bool activateScope(BlockScopeRawPtr scope) {
     if (scope->getMark() == BlockScope::MarkProcessed) {
-      const BlockScopeRawPtrFlagsVec &ordered =
-        scope->getOrderedUsers();
-      for (BlockScopeRawPtrFlagsVec::const_iterator it = ordered.begin(),
-           end = ordered.end(); it != end; ++it) {
-        BlockScopeRawPtrFlagsVec::value_type pf = *it;
+      for (const auto pf : scope->getOrderedUsers()) {
         if (pf->second & GetPhaseInterestMask<When>()) {
           int m = pf->first->getMark();
           if (m == BlockScope::MarkWaiting ||
@@ -109,11 +104,8 @@ public:
       }
     }
 
-    const BlockScopeRawPtrFlagsPtrVec &deps = scope->getDeps();
     int numDeps = 0;
-    for (BlockScopeRawPtrFlagsPtrVec::const_iterator it = deps.begin(),
-         end = deps.end(); it != end; ++it) {
-      const BlockScopeRawPtrFlagsPtrPair &p(*it);
+    for (const auto& p : scope->getDeps()) {
       if (*p.second & GetPhaseInterestMask<When>()) {
         int m = p.first->getMark();
         if (m == BlockScope::MarkWaiting ||
@@ -137,10 +129,7 @@ public:
                        BlockScopeRawPtr      scope) {
     assert(scope->getMark() != BlockScope::MarkProcessingDeps);
     scope->setMark(BlockScope::MarkProcessingDeps);
-    const BlockScopeRawPtrFlagsPtrVec &deps = scope->getDeps();
-    for (BlockScopeRawPtrFlagsPtrVec::const_iterator it = deps.begin(),
-         end = deps.end(); it != end; ++it) {
-      const BlockScopeRawPtrFlagsPtrPair &p(*it);
+    for (const auto& p : scope->getDeps()) {
       if (*p.second & GetPhaseInterestMask<When>()) {
         if (p.first->getMark() == BlockScope::MarkWaitingInQueue) {
           collectOrdering(queue, p.first);

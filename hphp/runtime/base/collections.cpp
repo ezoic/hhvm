@@ -18,7 +18,7 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/variable-unserializer.h"
-#include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
 
 namespace HPHP { namespace collections {
 /////////////////////////////////////////////////////////////////////////////
@@ -118,94 +118,6 @@ COLLECTIONS_ALL_TYPES(X)
   not_reached();
 }
 
-uint32_t sizeOffset(CollectionType ctype) {
-  switch (ctype) {
-    case CollectionType::Vector:    return c_Vector::sizeOffset();
-    case CollectionType::ImmVector: return c_ImmVector::sizeOffset();
-    default:
-      always_assert(false);
-  }
-}
-
-uint32_t dataOffset(CollectionType ctype) {
-  switch (ctype) {
-#define X(type) case CollectionType::type: return c_##type::dataOffset();
-COLLECTIONS_ALL_TYPES(X)
-#undef X
-  }
-  not_reached();
-}
-
-void unserialize(ObjectData* obj, VariableUnserializer* uns,
-                 int64_t sz, char type) {
-  switch (obj->collectionType()) {
-    case CollectionType::Pair:
-      c_Pair::Unserialize(obj, uns, sz, type);
-      break;
-    case CollectionType::Vector:
-    case CollectionType::ImmVector:
-      BaseVector::Unserialize(obj, uns, sz, type);
-      break;
-    case CollectionType::Map:
-    case CollectionType::ImmMap:
-      BaseMap::Unserialize(obj, uns, sz, type);
-      break;
-    case CollectionType::Set:
-    case CollectionType::ImmSet:
-      BaseSet::Unserialize(obj, uns, sz, type);
-      break;
-  }
-}
-
-void serialize(ObjectData* obj, VariableSerializer* serializer) {
-  int64_t sz = getCollectionSize(obj);
-  auto type = obj->collectionType();
-
-  if (isMapCollection(type)) {
-    serializer->pushObjectInfo(obj->getClassName(), obj->getId(), 'K');
-    serializer->writeArrayHeader(sz, false);
-    for (ArrayIter iter(obj); iter; ++iter) {
-      serializer->writeCollectionKey(iter.first());
-      serializer->writeArrayValue(iter.second());
-    }
-    serializer->writeArrayFooter();
-
-  } else {
-    assertx(isVectorCollection(type) ||
-            isSetCollection(type) ||
-            (type == CollectionType::Pair));
-    serializer->pushObjectInfo(obj->getClassName(), obj->getId(), 'V');
-    serializer->writeArrayHeader(sz, true);
-    auto ser_type = serializer->getType();
-    if (ser_type == VariableSerializer::Type::Serialize ||
-        ser_type == VariableSerializer::Type::APCSerialize ||
-        ser_type == VariableSerializer::Type::DebuggerSerialize ||
-        ser_type == VariableSerializer::Type::VarExport ||
-        ser_type == VariableSerializer::Type::PHPOutput) {
-      // For the 'V' serialization format, we don't print out keys
-      // for Serialize, APCSerialize, DebuggerSerialize
-      for (ArrayIter iter(obj); iter; ++iter) {
-        serializer->writeCollectionKeylessPrefix();
-        serializer->writeArrayValue(iter.second());
-      }
-    } else {
-      if (isSetCollection(type)) {
-        for (ArrayIter iter(obj); iter; ++iter) {
-          serializer->writeCollectionKeylessPrefix();
-          serializer->writeArrayValue(iter.second());
-        }
-      } else {
-        for (ArrayIter iter(obj); iter; ++iter) {
-          serializer->writeCollectionKey(iter.first());
-          serializer->writeArrayValue(iter.second());
-        }
-      }
-    }
-    serializer->writeArrayFooter();
-  }
-  serializer->popObjectInfo();
-}
-
 /////////////////////////////////////////////////////////////////////////////
 // Casting and Copying
 
@@ -264,7 +176,7 @@ ArrayData* deepCopyArray(ArrayData* arr) {
   for (ArrayIter iter(arr); iter; ++iter) {
     Variant v = iter.secondRef();
     deepCopy(v.asTypedValue());
-    ai.set(iter.first(), std::move(v));
+    ai.setValidKey(iter.first(), std::move(v));
   }
   return ai.toArray().detach();
 }
@@ -302,7 +214,7 @@ void deepCopy(TypedValue* tv) {
         assertx(vec->canMutateBuffer());
         auto sz = vec->m_size;
         for (size_t i = 0; i < sz; ++i) {
-          deepCopy(&vec->m_data[i]);
+          deepCopy(&vec->data()[i]);
         }
         return o.detach();
       };

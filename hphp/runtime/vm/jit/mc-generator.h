@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,10 +30,12 @@
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/debug/debug.h"
-#include "hphp/runtime/vm/jit/back-end.h"
+#include "hphp/runtime/vm/vm-regs.h"
+
+#include "hphp/runtime/vm/jit/alignment.h"
+#include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
 #include "hphp/runtime/vm/jit/containers.h"
-#include "hphp/runtime/vm/jit/cpp-call.h"
 #include "hphp/runtime/vm/jit/fixup.h"
 #include "hphp/runtime/vm/jit/service-requests.h"
 #include "hphp/runtime/vm/jit/translator.h"
@@ -41,7 +43,6 @@
 
 namespace HPHP { namespace jit {
 
-typedef X64Assembler Asm;
 typedef hphp_hash_map<TCA, TransID> TcaTransIDMap;
 typedef hphp_hash_map<uint64_t,const uint64_t*> LiteralMap;
 
@@ -94,7 +95,7 @@ struct CodeGenFixups {
   std::set<TCA> m_addressImmediates;
   std::set<TCA*> m_codePointers;
   std::vector<TransBCMapping> m_bcMap;
-  std::multimap<TCA,std::pair<int,int>> m_alignFixups;
+  std::multimap<TCA,std::pair<Alignment,AlignContext>> m_alignFixups;
   GrowableVector<IncomingBranch> m_inProgressTailJumps;
   LiteralMap m_literals;
 
@@ -144,7 +145,7 @@ struct MCGenerator : private boost::noncopyable {
     return !mcg || Translator::WriteLease().amOwner();
   }
 
-  static CppCall getDtorCall(DataType type);
+  static CallSpec getDtorCall(DataType type);
 
 public:
   MCGenerator();
@@ -163,7 +164,6 @@ public:
 
   DataBlock& globalData() { return code.data(); }
   Debug::DebugInfo* getDebugInfo() { return &m_debugInfo; }
-  BackEnd& backEnd() { return *m_backEnd; }
 
   TcaTransIDMap& getJmpToTransIDMap() {
     return m_jmpToTransID;
@@ -178,8 +178,10 @@ public:
    */
   TCA getFuncPrologue(Func* func, int nPassed, ActRec* ar = nullptr,
                       bool forRegeneratePrologue = false);
-  TCA getCallArrayPrologue(Func* func);
-  void smashPrologueGuards(TCA* prologues, int numPrologues, const Func* func);
+  void smashPrologueGuards(AtomicLowPtr<uint8_t>* prologues,
+                           int numPrologues, const Func* func);
+
+  TCA getFuncBody(Func* func);
 
   inline void sync() {
     if (tl_regState == VMRegState::CLEAN) return;
@@ -292,8 +294,15 @@ public:
    * The forced symbol name is so we can call this from
    * translator-asm-helpers.S without hardcoding a fragile mangled name.
    */
-  TCA handleServiceRequest(ServiceReqInfo& info) noexcept
+  TCA handleServiceRequest(svcreq::ReqInfo& info) noexcept
+#ifdef _MSC_VER
+    // For MSVC, we've had to hard-code the mangled name,
+    // because we can't explicitly set it like we can with
+    // GCC/Clang :(
+    ;
+#else
     asm("MCGenerator_handleServiceRequest");
+#endif
 
   /*
    * Smash the PHP call at address toSmash to point to the appropriate prologue
@@ -320,10 +329,10 @@ private:
    */
   TCA bindJmp(TCA toSmash, SrcKey dest, ServiceRequest req,
               TransFlags trflags, bool& smashed);
-  TCA bindJmpccFirst(TCA toSmash,
-                     SrcKey skTrue, SrcKey skFalse,
-                     bool toTake,
-                     bool& smashed);
+  TCA bindJccFirst(TCA toSmash,
+                   SrcKey skTrue, SrcKey skFalse,
+                   bool toTake,
+                   bool& smashed);
 
   bool shouldTranslate(const Func*) const;
   bool shouldTranslateNoSizeLimit(const Func*) const;
@@ -369,7 +378,6 @@ private:
   void drawCFG(std::ofstream& out) const;
 
 private:
-  std::unique_ptr<BackEnd> m_backEnd;
   Translator         m_tx;
 
   // maps jump addresses to the ID of translation containing them.
@@ -396,15 +404,6 @@ TCA fcallHelper(ActRec*);
 TCA funcBodyHelper(ActRec*);
 int64_t decodeCufIterHelper(Iter* it, TypedValue func);
 
-// Both emitIncStat()s push/pop flags but don't clobber any registers.
-void emitIncStat(CodeBlock& cb, uint64_t* tl_table, uint32_t index,
-                 int n = 1, bool force = false);
-
-inline void emitIncStat(CodeBlock& cb, Stats::StatCounter stat, int n = 1,
-                        bool force = false) {
-  emitIncStat(cb, &Stats::tl_counters[0], stat, n, force);
-}
-
 /*
  * Look up the catch block associated with the return address in ar and save it
  * in a queue. This is called by debugger helpers right before smashing the
@@ -420,9 +419,6 @@ TCA popDebuggerCatch(const ActRec* ar);
 
 void emitIncStat(Vout& v, Stats::StatCounter stat, int n = 1,
                  bool force = false);
-
-void emitServiceReq(Vout& v, TCA stub_block, ServiceRequest req,
-                    const ServiceReqArgVec& argv);
 
 bool shouldPGOFunc(const Func& func);
 
@@ -448,14 +444,30 @@ extern __thread int64_t s_perfCounters[];
 #define INC_TPC(n) ++jit::s_perfCounters[jit::tpc_##n];
 
 /*
+ * Return whether the `calleeAR' frame overflows the stack.
+ *
+ * Expects `calleeAR' and its arguments to be on the VM stack.
+ */
+bool checkCalleeStackOverflow(const ActRec* calleeAR);
+
+/*
  * Handle a VM stack overflow condition by throwing an appropriate exception.
  */
 void handleStackOverflow(ActRec* calleeAR);
 
 /*
  * Determine whether something is a stack overflow, and if so, handle it.
+ *
+ * NB: This only works when called from a particular point in a func prologue,
+ * and should probably be renamed.  (Fortunately, that's the only callsite.)
  */
 void handlePossibleStackOverflow(ActRec* calleeAR);
+
+/*
+ * Dumps the contents of the Translation Cache.
+ * Returns whether or not it succeeded.
+ */
+bool tc_dump(bool ignoreLease=false);
 
 }}
 

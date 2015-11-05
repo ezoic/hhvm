@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,7 +16,7 @@
 #ifndef incl_HPHP_VM_RUNTIME_H_
 #define incl_HPHP_VM_RUNTIME_H_
 
-#include "hphp/runtime/ext/ext_generator.h"
+#include "hphp/runtime/ext/generator/ext_generator.h"
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_async-generator.h"
 #include "hphp/runtime/ext/std/ext_std_errorfunc.h"
@@ -136,7 +136,7 @@ frame_free_locals_helper_inl(ActRec* fp, int numLocals) {
               fp->m_func->numLocals());
     TypedValue* loc = frame_local(fp, i);
     DataType t = loc->m_type;
-    if (IS_REFCOUNTED_TYPE(t)) {
+    if (isRefcountedType(t)) {
       uint64_t datum = loc->m_data.num;
       if (unwinding) {
         tvWriteUninit(loc);
@@ -192,7 +192,7 @@ frame_free_args(TypedValue* args, int count) {
   for (int i = 0; i < count; i++) {
     TypedValue* loc = args - i;
     DataType t = loc->m_type;
-    if (IS_REFCOUNTED_TYPE(t)) {
+    if (isRefcountedType(t)) {
       uint64_t datum = loc->m_data.num;
       // We don't have to write KindOfUninit here, because a
       // debug_backtrace wouldn't be able to see these slots (they are
@@ -218,7 +218,7 @@ inline ObjectData*
 newInstance(Class* cls) {
   assert(cls);
   auto* inst = ObjectData::newInstance(cls);
-  assert(inst->getCount() > 0);
+  assert(inst->checkCount());
   Stats::inc(cls->getDtor() ? Stats::ObjectData_new_dtor_yes
                             : Stats::ObjectData_new_dtor_no);
 

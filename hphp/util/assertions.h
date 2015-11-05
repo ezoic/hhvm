@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,11 +28,13 @@
 #include <folly/Format.h>
 #include <folly/Preprocessor.h>
 
+#include "hphp/util/portability.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 
 #define IMPLIES(a, b) (!(a) || (b))
 
-#ifdef __INTEL_COMPILER
+#if defined(__INTEL_COMPILER) || defined(_MSC_VER)
 #define not_reached()                                                \
   do {                                                               \
     assert(false);                                                   \
@@ -66,17 +68,19 @@ namespace HPHP {
  *
  * These are intended for use primarily by the assert macros below.
  */
+ATTRIBUTE_NORETURN
 void assert_fail(const char* e,
                  const char* file,
                  unsigned int line,
                  const char* func,
-                 const std::string& msg) __attribute__((__noreturn__));
+                 const std::string& msg);
 
+ATTRIBUTE_NORETURN
 void assert_fail_no_log(const char* e,
                         const char* file,
                         unsigned int line,
                         const char* func,
-                        const std::string& msg) __attribute__((__noreturn__));
+                        const std::string& msg);
 
 void assert_log_failure(const char* title, const std::string& msg);
 

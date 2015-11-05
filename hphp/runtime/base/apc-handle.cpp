@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,70 +29,76 @@ namespace HPHP {
 
 APCHandle::Pair APCHandle::Create(const Variant& source,
                                   bool serialized,
-                                  bool inner /* = false */,
-                                  bool unserializeObj /* = false */) {
+                                  APCHandleLevel level,
+                                  bool unserializeObj) {
   auto type = source.getType(); // this gets rid of the ref, if it was one
   switch (type) {
-    case KindOfUninit:
+    case KindOfUninit: {
+      auto value = APCTypedValue::tvUninit();
+      return {value->getHandle(), sizeof(APCTypedValue)};
+    }
     case KindOfNull: {
-      auto value = new APCTypedValue(type);
+      auto value = APCTypedValue::tvNull();
       return {value->getHandle(), sizeof(APCTypedValue)};
     }
     case KindOfBoolean: {
-      auto value = new APCTypedValue(type,
-          static_cast<int64_t>(source.getBoolean()));
+      auto value = source.getBoolean() ? APCTypedValue::tvTrue()
+                                       : APCTypedValue::tvFalse();
       return {value->getHandle(), sizeof(APCTypedValue)};
     }
     case KindOfInt64: {
-      auto value = new APCTypedValue(type, source.getInt64());
+      auto value = new APCTypedValue(source.getInt64());
       return {value->getHandle(), sizeof(APCTypedValue)};
     }
     case KindOfDouble: {
-      auto value = new APCTypedValue(type, source.getDouble());
+      auto value = new APCTypedValue(source.getDouble());
       return {value->getHandle(), sizeof(APCTypedValue)};
     }
     case KindOfStaticString: {
-      if (serialized) goto StringCase;
-
-      auto value = new APCTypedValue(type, source.getStringData());
+      StringData* s = source.getStringData();
+      if (serialized) {
+        // It is priming, and there might not be the right class definitions
+        // for unserialization.
+        return APCString::MakeSerializedObject(apc_reserialize(String{s}));
+      }
+      auto value = new APCTypedValue(APCTypedValue::StaticStr{}, s);
       return {value->getHandle(), sizeof(APCTypedValue)};
     }
-StringCase:
     case KindOfString: {
       StringData* s = source.getStringData();
       if (serialized) {
         // It is priming, and there might not be the right class definitions
         // for unserialization.
-        return APCObject::MakeSerializedObj(apc_reserialize(s));
+        return APCString::MakeSerializedObject(apc_reserialize(String{s}));
       }
 
       auto const st = lookupStaticString(s);
       if (st) {
-        APCTypedValue* value = new APCTypedValue(KindOfStaticString, st);
+        auto value = new APCTypedValue(APCTypedValue::StaticStr{}, st);
         return {value->getHandle(), sizeof(APCTypedValue)};
       }
 
       assert(!s->isStatic()); // would've been handled above
-      if (!inner && apcExtension::UseUncounted) {
-        StringData* st = StringData::MakeUncounted(s->slice());
-        APCTypedValue* value = new APCTypedValue(st);
+      if (level == APCHandleLevel::Outer && apcExtension::UseUncounted) {
+        auto st = StringData::MakeUncounted(s->slice());
+        auto value = new APCTypedValue(APCTypedValue::UncountedStr{}, st);
         return {value->getHandle(), st->size() + sizeof(APCTypedValue)};
       }
-      return APCString::MakeSharedString(type, s);
+      return APCString::MakeSharedString(s);
     }
 
     case KindOfArray:
-      return APCArray::MakeSharedArray(source.getArrayData(), inner,
+      return APCArray::MakeSharedArray(source.getArrayData(), level,
                                        unserializeObj);
 
     case KindOfObject:
       if (source.getObjectData()->isCollection()) {
         return APCCollection::Make(source.getObjectData(),
-                                   inner,
+                                   level,
                                    unserializeObj);
       }
       return unserializeObj ? APCObject::Construct(source.getObjectData()) :
-             APCObject::MakeSerializedObj(apc_serialize(source));
+             APCString::MakeSerializedObject(apc_serialize(source));
 
     case KindOfResource:
       // TODO Task #2661075: Here and elsewhere in the runtime, we convert
@@ -119,13 +125,13 @@ Variant APCHandle::toLocal() const {
     case KindOfDouble:
       return APCTypedValue::fromHandle(this)->getDouble();
     case KindOfStaticString:
-      return APCTypedValue::fromHandle(this)->getStringData();
+      return Variant{APCTypedValue::fromHandle(this)->getStringData()};
     case KindOfString:
-      return APCString::MakeString(this);
+      return APCString::MakeLocalString(this);
     case KindOfArray:
-      return APCArray::MakeArray(this);
+      return APCArray::MakeLocalArray(this);
     case KindOfObject:
-      return APCObject::MakeObject(this);
+      return APCObject::MakeLocalObject(this);
     case KindOfResource:
     case KindOfRef:
     case KindOfClass:
@@ -140,6 +146,7 @@ void APCHandle::deleteShared() {
     case KindOfUninit:
     case KindOfNull:
     case KindOfBoolean:
+      return;
     case KindOfInt64:
     case KindOfDouble:
     case KindOfStaticString:
@@ -147,7 +154,7 @@ void APCHandle::deleteShared() {
       return;
 
     case KindOfString:
-      delete APCString::fromHandle(this);
+      APCString::Delete(APCString::fromHandle(this));
       return;
 
     case KindOfArray:

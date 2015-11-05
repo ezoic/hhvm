@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,7 +24,6 @@
 
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/countable.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/sort-flags.h"
 #include "hphp/runtime/base/cap-code.h"
@@ -33,7 +32,10 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
+struct String;
 struct TypedValue;
+struct MArrayIter;
+class VariableSerializer;
 
 struct ArrayData {
   // Runtime type tag of possible array types.  This is intentionally
@@ -64,13 +66,12 @@ protected:
    * NOTE: MixedArray no longer calls this constructor.  If you change
    * it, change the MixedArray::Make functions as appropriate.
    */
-  explicit ArrayData(ArrayKind kind)
+  explicit ArrayData(ArrayKind kind, RefCount initial_count = 1)
     : m_sizeAndPos(uint32_t(-1)) {
-    m_hdr.init(static_cast<HeaderKind>(kind), 0);
+    m_hdr.init(static_cast<HeaderKind>(kind), initial_count);
     assert(m_size == -1);
     assert(m_pos == 0);
     assert(m_hdr.kind == static_cast<HeaderKind>(kind));
-    assert(getCount() == 0);
   }
 
   /*
@@ -85,6 +86,8 @@ protected:
 public:
   IMPLEMENT_COUNTABLE_METHODS
 
+  bool kindIsValid() const { return isArrayKind(m_hdr.kind); }
+
   /**
    * Create a new ArrayData with specified array element(s).
    */
@@ -95,7 +98,7 @@ public:
   static ArrayData *CreateRef(const Variant& name, Variant& value);
 
   /*
-   * Called to return an ArrayData to the smart allocator.  This is
+   * Called to return an ArrayData to the request heap.  This is
    * normally called when the reference count goes to zero (e.g. via a
    * helper like decRefArr).
    */
@@ -112,6 +115,7 @@ public:
    * return the array kind for fast typechecks
    */
   ArrayKind kind() const {
+    assert(kindIsValid());
     return static_cast<ArrayKind>(m_hdr.kind);
   }
 
@@ -318,13 +322,13 @@ public:
   /**
    * Make a copy of myself.
    *
-   * The nonSmartCopy() version means not to use the smart allocator.
-   * Is only implemented for array types that need to be able to go
+   * copyStatic() means not to use the request-scoped heap.
+   * It is only implemented for array types that need to be able to go
    * into the static array list.
    */
   ArrayData* copy() const;
   ArrayData* copyWithStrongIterators() const;
-  ArrayData* nonSmartCopy() const;
+  ArrayData* copyStatic() const;
 
   /**
    * Append a value to the array. If "copy" is true, make a copy first
@@ -363,10 +367,6 @@ public:
   void renumber();
 
   void onSetEvalScalar();
-
-  // TODO(#3903818): move serialization out of ArrayData, Variant, etc.
-  void serialize(VariableSerializer *serializer,
-                 bool skipNestCheck = false) const;
 
   /**
    * Comparisons.
@@ -407,7 +407,6 @@ public:
   static const char* kindToString(ArrayKind kind);
 
 private:
-  void serializeImpl(VariableSerializer *serializer) const;
   friend size_t getMemSize(const ArrayData*);
   static void compileTimeAssertions() {
     static_assert(offsetof(ArrayData, m_hdr) == HeaderOffset, "");
@@ -448,7 +447,7 @@ protected:
     };
     uint64_t m_sizeAndPos; // careful, m_pos is signed
   };
-  HeaderWord<CapCode> m_hdr;
+  HeaderWord<CapCode,Counted::Maybe> m_hdr;
 };
 
 static_assert(ArrayData::kPackedKind == uint8_t(HeaderKind::Packed), "");
@@ -527,7 +526,7 @@ struct ArrayFunctions {
   bool (*uasort[NK])(ArrayData* ad, const Variant& cmp_function);
   ArrayData* (*copy[NK])(const ArrayData*);
   ArrayData* (*copyWithStrongIterators[NK])(const ArrayData*);
-  ArrayData* (*nonSmartCopy[NK])(const ArrayData*);
+  ArrayData* (*copyStatic[NK])(const ArrayData*);
   ArrayData* (*append[NK])(ArrayData*, const Variant& v, bool copy);
   ArrayData* (*appendRef[NK])(ArrayData*, Variant& v, bool copy);
   ArrayData* (*appendWithRef[NK])(ArrayData*, const Variant& v, bool copy);

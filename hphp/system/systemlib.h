@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,6 +25,7 @@ class ObjectData;
 class Unit;
 class Class;
 class Func;
+class Object;
 } //namespace HPHP
 
 namespace HPHP { namespace SystemLib {
@@ -49,7 +50,6 @@ namespace HPHP { namespace SystemLib {
   x(PDOException)                               \
   x(SoapFault)                                  \
   x(Closure)                                    \
-  x(Generator)                                  \
   x(Serializable)                               \
   x(ArrayAccess)                                \
   x(ArrayObject)                                \
@@ -103,24 +103,25 @@ Object AllocLazyKVZipIterableObject(const Variant& mp);
 Object AllocLazyIterableViewObject(const Variant& iterable);
 Object AllocLazyKeyedIterableViewObject(const Variant& iterable);
 
-void throwExceptionObject(const Variant& message) ATTRIBUTE_NORETURN;
-void throwBadMethodCallExceptionObject(const Variant& message)
-  ATTRIBUTE_NORETURN;
-void throwInvalidArgumentExceptionObject(const Variant& message)
-  ATTRIBUTE_NORETURN;
-void throwRuntimeExceptionObject(const Variant& message) ATTRIBUTE_NORETURN;
-void throwOutOfBoundsExceptionObject(const Variant& message) ATTRIBUTE_NORETURN;
-void throwInvalidOperationExceptionObject(const Variant& message)
-  ATTRIBUTE_NORETURN;
+ATTRIBUTE_NORETURN void throwExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN
+void throwBadMethodCallExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN
+void throwInvalidArgumentExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN void throwRuntimeExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN void throwOutOfBoundsExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN
+void throwInvalidOperationExceptionObject(const Variant& message);
+ATTRIBUTE_NORETURN
 void throwDOMExceptionObject(const Variant& message,
-                             const Variant& code) ATTRIBUTE_NORETURN;
+                             const Variant& code);
+ATTRIBUTE_NORETURN
 void throwSoapFaultObject(const Variant& code,
                           const Variant& message,
                           const Variant& actor = null_variant,
                           const Variant& detail = null_variant,
                           const Variant& name = null_variant,
-                          const Variant& header = null_variant)
-  ATTRIBUTE_NORETURN;
+                          const Variant& header = null_variant);
 
 
 /**

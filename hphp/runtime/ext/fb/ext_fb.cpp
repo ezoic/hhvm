@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -29,6 +29,7 @@
 
 #include <folly/String.h>
 
+#include "hphp/util/htonll.h"
 #include "hphp/util/logger.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
@@ -44,10 +45,8 @@
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/thread-info.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
-#include "hphp/runtime/ext/FBSerialize.h"
-#include "hphp/runtime/ext/mysql/ext_mysql.h"
-#include "hphp/runtime/ext/mysql/mysql_common.h"
-#include "hphp/runtime/ext/VariantController.h"
+#include "hphp/runtime/ext/fb/FBSerialize.h"
+#include "hphp/runtime/ext/fb/VariantController.h"
 #include "hphp/runtime/vm/unwind.h"
 
 #include "hphp/parser/parser.h"
@@ -77,22 +76,6 @@ const StaticString
   s_getInstanceKey("getInstanceKey");
 
 ///////////////////////////////////////////////////////////////////////////////
-
-/* Linux and other systems don't currently support a ntohx or htonx
-   set of functions for 64-bit values.  We've implemented our own here
-   which is based off of GNU Net's implementation with some slight
-   modifications (changed to macro's rather than functions). */
-#if __BYTE_ORDER == __BIG_ENDIAN
-#define ntohll(n) (n)
-#define htonll(n) (n)
-#else
-#define ntohll(n)                                                       \
-  ( (((uint64_t)ntohl(n)) << 32)                                        \
-    | ((uint64_t)ntohl((n) >> 32) & 0x00000000ffffffff) )
-#define htonll(n)                                                       \
-  ( (((uint64_t)htonl(n)) << 32)                                        \
-    | ((uint64_t)htonl((n) >> 32) & 0x00000000ffffffff) )
-#endif
 
 /* enum of thrift types */
 enum TType {
@@ -143,14 +126,13 @@ Variant HHVM_FUNCTION(fb_unserialize, const Variant& thing, VRefParam success) {
 
     if (sthing.size() && (sthing.data()[0] & 0x80)) {
       return fb_compact_unserialize(sthing.data(), sthing.size(),
-                                    ref(success));
+                                    success);
     } else {
-      return fb_unserialize(sthing.data(), sthing.size(),
-                            ref(success));
+      return fb_unserialize(sthing.data(), sthing.size(), success);
     }
   }
 
-  success = false;
+  success.assignIfRef(false);
   return false;
 }
 
@@ -158,10 +140,10 @@ Variant fb_unserialize(const char* str, int len, VRefParam success) {
   try {
     auto res = HPHP::serialize::FBUnserializer<VariantController>::unserialize(
       folly::StringPiece(str, len));
-    success = true;
+    success.assignIfRef(true);
     return res;
   } catch (const HPHP::serialize::UnserializeError&) {
-    success = false;
+    success.assignIfRef(false);
     return false;
   }
 }
@@ -468,7 +450,7 @@ static int fb_compact_serialize_variant(StringBuffer& sb,
           auto msg = folly::format(
             "Cannot serialize object of type {} because it does not implement "
             "HH\\IMemoizeParam",
-            obj->getClassName().data()).str();
+            obj->getClassName().asString()).str();
 
           SystemLib::throwInvalidArgumentExceptionObject(msg);
         }
@@ -745,12 +727,12 @@ Variant fb_compact_unserialize(const char* str, int len,
   int p = 0;
   int err = fb_compact_unserialize_from_buffer(ret, str, len, p);
   if (err) {
-    success = false;
-    errcode = err;
+    success.assignIfRef(false);
+    errcode.assignIfRef(err);
     return false;
   }
-  success = true;
-  errcode = uninit_null();
+  success.assignIfRef(true);
+  errcode.assignIfRef(init_null());
   return ret;
 }
 
@@ -758,8 +740,8 @@ Variant HHVM_FUNCTION(fb_compact_unserialize,
                       const Variant& thing, VRefParam success,
                       VRefParam errcode /* = null_variant */) {
   if (!thing.isString()) {
-    success = false;
-    errcode = FB_UNSERIALIZE_NONSTRING_VALUE;
+    success.assignIfRef(false);
+    errcode.assignIfRef(FB_UNSERIALIZE_NONSTRING_VALUE);
     return false;
   }
 
@@ -843,7 +825,7 @@ bool HHVM_FUNCTION(fb_utf8ize, VRefParam input) {
     U8_APPEND_UNSAFE(dstBuf, dstPosBytes, curCodePoint);
   }
   assert(dstPosBytes <= dstMaxLenBytes);
-  input = dstStr.shrink(dstPosBytes);
+  input.assignIfRef(dstStr.shrink(dstPosBytes));
   return true;
 }
 
@@ -1054,25 +1036,29 @@ bool HHVM_FUNCTION(fb_rename_function, const String& orig_func_name,
 // call_user_func extensions
 // Linked in via fb.json.idl for now - Need OptFunc solution...
 
-Array f_fb_call_user_func_safe(int _argc, const Variant& function,
-                               const Array& _argv /* = null_array */) {
-  return f_fb_call_user_func_array_safe(function, _argv);
+Array HHVM_FUNCTION(fb_call_user_func_safe,
+                    const Variant& function,
+                    const Array& argv) {
+  return HHVM_FN(fb_call_user_func_array_safe)(function, argv);
 }
 
-Variant f_fb_call_user_func_safe_return(int _argc, const Variant& function,
-                                        const Variant& def,
-                                        const Array& _argv /* = null_array */) {
+Variant HHVM_FUNCTION(fb_call_user_func_safe_return,
+                      const Variant& function,
+                      const Variant& def,
+                      const Array& argv) {
   if (is_callable(function)) {
-    return vm_call_user_func(function, _argv);
+    return vm_call_user_func(function, argv);
   }
   return def;
 }
 
-Array f_fb_call_user_func_array_safe(const Variant& function, const Array& params) {
+Array HHVM_FUNCTION(fb_call_user_func_array_safe,
+                    const Variant& function,
+                    const Array& params) {
   if (is_callable(function)) {
     return make_packed_array(true, vm_call_user_func(function, params));
   }
-  return make_packed_array(false, uninit_null());
+  return make_packed_array(false, null_variant);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1172,17 +1158,7 @@ void const_load() {
   // legacy entry point, no longer used.
 }
 
-/////////////////////////////////////////////////////////////////////////////
-
-const StaticString
-  s_FBUNS_NONSTRING_VALUE("FB_UNSERIALIZE_NONSTRING_VALUE"),
-  s_FBUNS_UNEXPECTED_END("FB_UNSERIALIZE_UNEXPECTED_END"),
-  s_FBUNS_UNRECOGNIZED_OBJECT_TYPE("FB_UNSERIALIZE_UNRECOGNIZED_OBJECT_TYPE"),
-  s_FBUNS_UNEXPECTED_ARRAY_KEY_TYPE("FB_UNSERIALIZE_UNEXPECTED_ARRAY_KEY_TYPE"),
-  s_HHVM_FACEBOOK("HHVM_FACEBOOK");
-
-#define FBUNS(cns) Native::registerConstant<KindOfInt64> \
-  (s_FBUNS_##cns.get(), FB_UNSERIALIZE_##cns)
+///////////////////////////////////////////////////////////////////////////////
 
 class FBExtension : public Extension {
  public:
@@ -1190,11 +1166,11 @@ class FBExtension : public Extension {
 
   void moduleInit() override {
     Native::registerConstant<KindOfBoolean>
-      (s_HHVM_FACEBOOK.get(), HHVM_FACEBOOK);
-    FBUNS(NONSTRING_VALUE);
-    FBUNS(UNEXPECTED_END);
-    FBUNS(UNRECOGNIZED_OBJECT_TYPE);
-    FBUNS(UNEXPECTED_ARRAY_KEY_TYPE);
+      (makeStaticString("HHVM_FACEBOOK"), HHVM_FACEBOOK);
+    HHVM_RC_INT_SAME(FB_UNSERIALIZE_NONSTRING_VALUE);
+    HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNEXPECTED_END);
+    HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNRECOGNIZED_OBJECT_TYPE);
+    HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNEXPECTED_ARRAY_KEY_TYPE);
 
     HHVM_FE(fb_serialize);
     HHVM_FE(fb_unserialize);
@@ -1214,6 +1190,9 @@ class FBExtension : public Extension {
     HHVM_FE(fb_get_last_flush_size);
     HHVM_FE(fb_lazy_lstat);
     HHVM_FE(fb_lazy_realpath);
+    HHVM_FE(fb_call_user_func_safe);
+    HHVM_FE(fb_call_user_func_safe_return);
+    HHVM_FE(fb_call_user_func_array_safe);
 
     loadSystemlib();
   }

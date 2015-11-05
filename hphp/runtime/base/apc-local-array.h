@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -80,7 +80,7 @@ struct APCLocalArray : private ArrayData {
   static ssize_t IterRewind(const ArrayData*, ssize_t prev);
   static bool ValidMArrayIter(const ArrayData*, const MArrayIter& fp);
   static bool AdvanceMArrayIter(ArrayData*, MArrayIter& fp);
-  static ArrayData* NonSmartCopy(const ArrayData*);
+  static ArrayData* CopyStatic(const ArrayData*);
   static constexpr auto Pop = &ArrayCommon::Pop;
   static constexpr auto Dequeue = &ArrayCommon::Dequeue;
   static void Renumber(ArrayData*);
@@ -99,6 +99,7 @@ public:
   using ArrayData::decRefCount;
   using ArrayData::hasMultipleRefs;
   using ArrayData::hasExactlyOneRef;
+  using ArrayData::decWillRelease;
   using ArrayData::incRefCount;
 
   ssize_t iterAdvanceImpl(ssize_t prev) const {
@@ -127,6 +128,7 @@ private:
   void sweep();
 
 public:
+  void reap();
   template<class F> void scan(F& mark) const {
     //mark(m_arr);
     if (m_localCache) {
@@ -141,7 +143,6 @@ private:
   mutable TypedValue* m_localCache;
   unsigned m_sweep_index;
   friend struct MemoryManager; // access to m_sweep_index
-  template<typename F> friend void scan(const APCLocalArray& this_, F& mark);
 };
 
 //////////////////////////////////////////////////////////////////////

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,19 +25,14 @@
 
 #include "hphp/runtime/base/type-variant.h"
 
-#if (defined(__APPLE__) || defined(__APPLE_CC__)) && (defined(__BIG_ENDIAN__) || defined(__LITTLE_ENDIAN__))
-# if defined(__LITTLE_ENDIAN__)
-#  undef WORDS_BIGENDIAN
-# else
-#  if defined(__BIG_ENDIAN__)
-#   define WORDS_BIGENDIAN
-#  endif
-# endif
-#endif
-
 namespace HPHP {
 
-///////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+
+enum class APCHandleLevel {
+  Outer, // directly referenced by the apc store
+  Inner // referenced by some other Inner or Outer handle
+};
 
 /*
  * An APCHandle is the externally visible handle for in-memory APC values.  The
@@ -90,12 +85,18 @@ struct APCHandle {
     size_t size;
   };
 
+  explicit APCHandle(DataType type) : m_type(type) {}
+  APCHandle(const APCHandle&) = delete;
+  APCHandle& operator=(APCHandle const&) = delete;
+
   /*
    * Create an instance of an APC object according to the type of source and
    * the various flags. This is the only entry point to create APC entities.
    */
-  static Pair Create(const Variant& source, bool serialized,
-                     bool inner = false, bool unserializeObj = false);
+  static Pair Create(const Variant& source,
+                     bool serialized,
+                     APCHandleLevel level,
+                     bool unserializeObj);
 
   /*
    * Memory management API.
@@ -118,16 +119,8 @@ struct APCHandle {
    * other threads---it is an exception to the thread-safety rule documented
    * above the class.
    */
-  void reference() const {
-    if (!isUncounted()) {
-      realIncRef();
-    }
-  }
-  void unreference() const {
-    if (!isUncounted()) {
-      realDecRef();
-    }
-  }
+  void reference() const;
+  void unreference() const;
   void unreferenceRoot(size_t size);
 
   /*
@@ -199,30 +192,8 @@ private:
   constexpr static uint8_t FAPCCollection   = 1 << 4;
 
 private:
-  friend struct APCTypedValue;
-  friend struct APCString;
-  friend struct APCArray;
-  friend struct APCObject;
-  friend struct APCCollection;
-  explicit APCHandle(DataType type) : m_type(type) {}
-  APCHandle(const APCHandle&) = delete;
-  APCHandle& operator=(APCHandle const&) = delete;
-
-private:
-  void realIncRef() const {
-    assert(IS_REFCOUNTED_TYPE(m_type));
-    ++m_count;
-  }
-
-  void realDecRef() const {
-    assert(m_count.load() > 0);
-    if (m_count > 1) {
-      assert(IS_REFCOUNTED_TYPE(m_type));
-      if (--m_count) return;
-    }
-    const_cast<APCHandle*>(this)->deleteShared();
-  }
-
+  void atomicIncRef() const;
+  void atomicDecRef() const;
   void deleteShared();
 
 private:
@@ -232,7 +203,8 @@ private:
   mutable std::atomic<uint32_t> m_count{1};
 };
 
-///////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+
 }
 
 #endif

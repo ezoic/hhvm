@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -1046,9 +1046,9 @@ static Variant to_zval_double(encodeTypePtr type, xmlNodePtr data) {
                                   data->children->content ?
                                   strlen((char*)data->children->content) : 0,
                                   &lval, &dval, 0);
-      if (IS_INT_TYPE(dt)) {
+      if (isIntType(dt)) {
         ret = lval;
-      } else if (IS_DOUBLE_TYPE(dt)) {
+      } else if (isDoubleType(dt)) {
         ret = dval;
       } else {
         if (data->children->content) {
@@ -1087,9 +1087,9 @@ static Variant to_zval_long(encodeTypePtr type, xmlNodePtr data) {
                                   data->children->content ?
                                   strlen((char*)data->children->content) : 0,
                                   &lval, &dval, 0);
-      if (IS_INT_TYPE(dt)) {
+      if (isIntType(dt)) {
         ret = (int64_t)lval;
-      } else if (IS_DOUBLE_TYPE(dt)) {
+      } else if (isDoubleType(dt)) {
         ret = dval;
       } else {
         throw SoapException("Encoding: Violation of encoding rules");
@@ -2718,14 +2718,15 @@ static xmlNodePtr to_xml_datetime_ex(encodeTypePtr type, const Variant& data,
     ta = localtime_r(&timestamp, &tmbuf);
     /*ta = php_gmtime_r(&timestamp, &tmbuf);*/
 
-    buf = (char *)smart_malloc(buf_len);
+    buf = (char *)req::malloc(buf_len);
     while ((real_len = strftime(buf, buf_len, format, ta)) == buf_len ||
            real_len == 0) {
       buf_len *= 2;
-      buf = (char *)smart_realloc(buf, buf_len);
+      buf = (char *)req::realloc(buf, buf_len);
       if (!--max_reallocs) break;
     }
 
+#ifndef _MSC_VER
     /* Time zone support */
     snprintf(tzbuf, sizeof(tzbuf), "%c%02d:%02d",
              (ta->tm_gmtoff < 0) ? '-' : '+', (int)abs(ta->tm_gmtoff / 3600),
@@ -2736,13 +2737,15 @@ static xmlNodePtr to_xml_datetime_ex(encodeTypePtr type, const Variant& data,
     } else {
       real_len += 6;
     }
+#endif
+
     if (real_len >= buf_len) {
-      buf = (char *)smart_realloc(buf, real_len+1);
+      buf = (char *)req::realloc(buf, real_len+1);
     }
     strcat(buf, tzbuf);
 
     xmlNodeSetContent(xmlParam, BAD_CAST(buf));
-    smart_free(buf);
+    req::free(buf);
   } else if (data.isString()) {
     String sdata = data.toString();
     xmlNodeSetContentLen(xmlParam, BAD_CAST(sdata.data()), sdata.size());

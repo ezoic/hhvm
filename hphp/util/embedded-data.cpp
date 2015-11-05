@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,12 +15,6 @@
 */
 
 #include "hphp/util/embedded-data.h"
-
-#if (defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER))
-#undef NOUSER
-#include <windows.h>
-#include <winuser.h>
-#endif
 
 #include "hphp/util/current-executable.h"
 
@@ -35,6 +29,9 @@
 
 #ifdef __APPLE__
 #include <mach-o/getsect.h>
+#elif defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER)
+#include <windows.h>
+#include <winuser.h>
 #else
 #include <libelf.h>
 #include <gelf.h>
@@ -46,20 +43,18 @@ bool get_embedded_data(const char *section, embedded_data* desc,
                        const std::string &filename /*= "" */) {
   std::string fname(filename.empty() ? current_executable_path() : filename);
 
-#if (defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER))
-  HMODULE moduleHandle = GetModuleHandle(nullptr);
+#if defined(__CYGWIN__) || defined(__MINGW__) || defined(_MSC_VER)
+  HMODULE moduleHandle = GetModuleHandleA(fname.data());
   HGLOBAL loadedResource;
   HRSRC   resourceInfo;
   DWORD   resourceSize;
 
   resourceInfo = FindResource(moduleHandle, section, RT_RCDATA);
-
   if (!resourceInfo) {
     return false;
   }
 
   loadedResource = LoadResource(moduleHandle, resourceInfo);
-
   if (!loadedResource) {
     return false;
   }
@@ -71,7 +66,6 @@ bool get_embedded_data(const char *section, embedded_data* desc,
   desc->m_len = resourceSize;
 
   return true;
-
 #elif !defined(__APPLE__) // LINUX/ELF
   GElf_Shdr shdr;
   size_t shstrndx = -1;

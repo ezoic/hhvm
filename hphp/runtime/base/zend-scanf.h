@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1998-2010 Zend Technologies Ltd. (http://www.zend.com) |
    +----------------------------------------------------------------------+
    | This source file is subject to version 2.00 of the Zend license,     |
@@ -18,10 +18,10 @@
 #ifndef incl_HPHP_ZEND_SCANF_H_
 #define incl_HPHP_ZEND_SCANF_H_
 
-#include "hphp/runtime/base/types.h"
-
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+struct Variant;
 
 /**
  * How PHP scans a string. Called by ext/ext_string.cpp.
@@ -40,4 +40,4 @@ int string_sscanf(const char *string, const char *format, int numVars,
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-#endif // incl_HPHP_ZEND_SCANF_H_
+#endif

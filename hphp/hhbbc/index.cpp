@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -542,7 +542,7 @@ std::string show(const Class& c) {
       return s->data();
     },
     [] (borrowed_ptr<ClassInfo> cinfo) {
-      return folly::format("{}*", cinfo->cls->name->data()).str();
+      return folly::format("{}*", cinfo->cls->name).str();
     }
   );
 }
@@ -1169,12 +1169,12 @@ void trace_interfaces(const IndexData& index, const ConflictGraph& cg) {
     if (cgIt == end(cg.map)) break;
     auto& conflicts = cgIt->second;
 
-    folly::format(&out, "{:>40} {:3} {:2} [", iface->name->data(),
+    folly::format(&out, "{:>40} {:3} {:2} [", iface->name,
                   conflicts.size(),
                   folly::get_default(index.ifaceSlotMap, iface));
     auto sep = "";
     for (auto conflict : conflicts) {
-      folly::format(&out, "{}{}", sep, conflict->name->data());
+      folly::format(&out, "{}{}", sep, conflict->name);
       sep = ", ";
     }
     folly::format(&out, "]\n");
@@ -1184,7 +1184,7 @@ void trace_interfaces(const IndexData& index, const ConflictGraph& cg) {
   for (auto& item : classes) {
     if (item.vtable.empty()) break;
 
-    folly::format(&out, "{:>30}: [", item.cinfo->cls->name->data());
+    folly::format(&out, "{:>30}: [", item.cinfo->cls->name);
     auto sep = "";
     for (auto iface : item.vtable) {
       folly::format(&out, "{}{}", sep, iface ? iface->name->data() : "null");

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -62,6 +62,12 @@ String HHVM_FUNCTION(image_type_to_mime_type, int64_t imagetype);
 bool HHVM_FUNCTION(image2wbmp, const Resource& image,
   const String& filename = null_string, int64_t threshold = -1);
 #endif
+Variant HHVM_FUNCTION(imageaffine, const Resource& image,
+  const Array& affine = Array(), const Array& clip = Array());
+Variant HHVM_FUNCTION(imageaffinematrixconcat, const Array& m1,
+  const Array& m2);
+Variant HHVM_FUNCTION(imageaffinematrixget, int64_t type,
+  const Variant& options = Array());
 bool HHVM_FUNCTION(imagealphablending, const Resource& image, bool blendmode);
 bool HHVM_FUNCTION(imageantialias, const Resource& image, bool on);
 bool HHVM_FUNCTION(imagearc, const Resource& image,
@@ -150,11 +156,16 @@ Variant HHVM_FUNCTION(imagecreatefromxbm, const String& filename);
 Variant HHVM_FUNCTION(imagecreatefromxpm, const String& filename);
 #endif
 Variant HHVM_FUNCTION(imagecreatetruecolor, int64_t width, int64_t height);
+Variant HHVM_FUNCTION(imagecrop, const Resource& image, const Array& rect);
+Variant HHVM_FUNCTION(imagecropauto, const Resource& image, int64_t mode = -1,
+  double threshold = 0.5f, int64_t color = -1);
 bool HHVM_FUNCTION(imagedashedline, const Resource& image,
   int64_t x1, int64_t y1, int64_t x2, int64_t y2, int64_t color);
 bool HHVM_FUNCTION(imagedestroy, const Resource& image);
 bool HHVM_FUNCTION(imageellipse,  const Resource& image,
  int64_t cx, int64_t cy, int64_t width, int64_t height, int64_t color);
+bool HHVM_FUNCTION(imageflip,  const Resource& image,
+ int64_t mode = -1);
 bool HHVM_FUNCTION(imagefill, const Resource& image,
  int64_t x, int64_t y, int64_t color);
 bool HHVM_FUNCTION(imagefilledarc, const Resource& image,
@@ -216,6 +227,8 @@ bool HHVM_FUNCTION(imagerectangle, const Resource& image,
 Variant HHVM_FUNCTION(imagerotate,
   const Resource& source_image, double angle, int64_t bgd_color,
   int64_t ignore_transparent = 0);
+Variant HHVM_FUNCTION(imagescale,const Resource& image, int64_t newwidth,
+  int64_t newheight = -1, int64_t method = -1);
 bool HHVM_FUNCTION(imagesavealpha, const Resource& image, bool saveflag);
 bool HHVM_FUNCTION(imagesetbrush, const Resource& image,
   const Resource& brush);

@@ -35,11 +35,14 @@
 TRACE_SET_MOD(vasm);
 
 namespace HPHP { namespace jit {
-using namespace x64;
+
+///////////////////////////////////////////////////////////////////////////////
+
 using Trace::RingBufferType;
 using Trace::ringbufferName;
 
 const char* area_names[] = { "main", "cold", "frozen" };
+
 namespace {
 
 const char* vixl_ccs[] = {
@@ -90,24 +93,22 @@ struct FormatVisitor {
   void imm(TCA* addr) {
     str << sep() << folly::format("{}", addr);
   }
-  void imm(Vpoint p) { str << sep() << '@' << (size_t)p; }
-  void imm(const CppCall& cppcall) {
-    switch (cppcall.kind()) {
+  void imm(const CallSpec& call) {
+    switch (call.kind()) {
     default:
       str << sep() << "<unknown>";
       break;
-    case CppCall::Kind::Direct:
-      return imm((TCA)cppcall.address());
-    case CppCall::Kind::Virtual:
-      str << sep() << folly::format("<virtual at 0x{:08x}>",
-                                    cppcall.vtableOffset());
+    case CallSpec::Kind::Direct:
+    case CallSpec::Kind::Smashable:
+      return imm((TCA)call.address());
+    case CallSpec::Kind::ArrayVirt:
+      str << sep() << folly::format("ArrayVirt({})", call.arrayTable());
       break;
-    case CppCall::Kind::ArrayVirt:
-      str << sep() << folly::format("ArrayVirt({})", cppcall.arrayTable());
+    case CallSpec::Kind::Destructor:
+      str << sep() << folly::format("destructor({})", show(call.reg()));
       break;
-    case CppCall::Kind::Destructor:
-      str << sep() << folly::format("destructor({})", show(cppcall.reg()));
-      break;
+    case CallSpec::Kind::Stub:
+      return imm(call.stubAddr());
     }
   }
   void imm(RingBufferType t) { str << sep() << ringbufferName(t); }
@@ -120,14 +121,14 @@ struct FormatVisitor {
   void imm(const Func* func) {
     str << sep();
     if (func) {
-      str << folly::format("{}(id {:#x})", func->fullName()->data(),
+      str << folly::format("{}(id {:#x})", func->fullName(),
                            func->getFuncId());
     } else {
       str << "nullptr";
     }
   }
   void imm(ServiceRequest req) {
-    str << sep() << serviceReqName(req);
+    str << sep() << svcreq::to_name(req);
   }
   void imm(TransFlags f) {
     if (f.noinlineSingleton) str << sep() << "noinlineSingleton";
@@ -218,7 +219,7 @@ std::string show(Vreg r) {
   if (!r.isValid()) return "%?";
   std::ostringstream str;
   if (r.isPhys()) {
-    mcg->backEnd().streamPhysReg(str, r);
+    str << show(r.physReg());
   } else {
     str << "%" << size_t(r);
   }
@@ -231,6 +232,10 @@ std::string show(Vptr p) {
   auto prefix = false;
   if (p.seg == Vptr::FS) {
     str += "%fs";
+    prefix = true;
+  }
+  if (p.seg == Vptr::GS) {
+    str += "%gs";
     prefix = true;
   }
   if (p.base.isValid()) {
@@ -389,5 +394,7 @@ void printUnit(int level, const std::string& caption, const Vunit& unit) {
     banner("")
   );
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 }}

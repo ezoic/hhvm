@@ -61,6 +61,14 @@ if (ENABLE_COTIRE)
       "${CMAKE_BINARY_DIR}")
 endif()
 
+# Only thing to do directly in tools is install this one script. Tools also has
+# its own Makefile, so just do it here instead of dealing with moving that all
+# around.
+install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/tools/oss-repo-mode
+  RENAME hhvm-repo-mode
+  DESTINATION bin
+  COMPONENT dev)
+
 add_definitions("-DHHVM")
 add_definitions("-DUSE_CMAKE")
 
@@ -76,7 +84,6 @@ add_subdirectory(hack)
 add_subdirectory(hhbbc)
 add_subdirectory(neo)
 add_subdirectory(parser)
-add_subdirectory(scan-methods)
 
 add_subdirectory(runtime)
 add_subdirectory(runtime/ext)
@@ -86,6 +93,7 @@ if (ENABLE_ZEND_COMPAT)
 endif()
 add_subdirectory(system)
 add_subdirectory(util)
+add_subdirectory(ppc64-asm)
 add_subdirectory(vixl)
 add_subdirectory(zend)
 

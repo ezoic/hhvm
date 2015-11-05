@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,7 @@
 
 namespace HPHP {
 
-#if defined(__APPLE__) || defined(__CYGWIN__)
+#if defined(__APPLE__) || defined(__CYGWIN__) || defined(_MSC_VER)
 extern const void* __hot_start;
 extern const void* __hot_end;
 #else
@@ -40,6 +40,24 @@ struct CodeCache {
   };
 
   struct Selector;
+
+  /* Code block sizes read from configs. */
+  static uint64_t AHotSize;
+  static uint64_t ASize;
+  static uint64_t AProfSize;
+  static uint64_t AColdSize;
+  static uint64_t AFrozenSize;
+
+  static uint64_t GlobalDataSize;
+
+  static uint64_t AMaxUsage;
+
+  static bool MapTCHuge;
+
+  static uint32_t AutoTCShift;
+
+  static uint32_t TCNumHugeHotMB;
+  static uint32_t TCNumHugeColdMB;
 
   CodeCache();
   ~CodeCache();
@@ -85,6 +103,7 @@ struct CodeCache {
     return const_cast<CodeCache&>(*this).frozen();
   }
 
+  CodeBlock& realMain()   { return m_main;   }
   CodeBlock& realCold()   { return m_cold;   }
   CodeBlock& realFrozen() { return m_frozen; }
 

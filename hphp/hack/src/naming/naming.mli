@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -86,21 +86,6 @@ val remove_decls: env -> decl_set -> env
 
 val get_classes: env -> string list
 
-(* Contains the set of test functions built-in PHP
- * Relevant to typing (is_int, is_null etc ...)
-*)
-val predef_tests: SSet.t
-
-(* Bunch of predefined functions *)
-val is_int:    string
-val is_bool:   string
-val is_array:  string
-val is_float:  string
-val is_string: string
-val is_null:   string
-val is_resource:  string
-
 val ndecl_file:
-  Relative_path.t -> FileInfo.t ->
-  Errors.t * Relative_path.Set.t * env ->
+  Relative_path.t -> FileInfo.t -> env ->
   Errors.t * Relative_path.Set.t * env

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,13 +30,12 @@ namespace HPHP {
 namespace Verifier {
 
 void printInstr(const Unit* unit, PC pc) {
-  auto* op = (Op*)pc;
   std::cout << "  " << std::setw(4) << (pc - unit->entry()) << ":" <<
                (isCF(pc) ? "C":" ") <<
                (isTF(pc) ? "T":" ") <<
                (isFF(pc) ? "F":" ") <<
-               std::setw(3) << instrLen(op) <<
-               " " << instrToString(op, unit) << std::endl;
+               std::setw(3) << instrLen(pc) <<
+               " " << instrToString(pc, unit) << std::endl;
 }
 
 std::string blockToString(const Block* b, const Graph* g, const Unit* u) {
@@ -63,8 +62,7 @@ std::string blockToString(const Block* b, const Graph* g, const Unit* u) {
 void printFPI(const Func* func) {
   const Unit* unit = func->unit();
   PC bc = unit->entry();
-  for (Range<FixedVector<FPIEnt> > i(func->fpitab()); !i.empty(); ) {
-    const FPIEnt& fpi = i.popFront();
+  for (auto& fpi : func->fpitab()) {
     printf("  FPI[%d:%d] fpoff=%d parent=%d fpiDepth=%d\n",
            fpiBase(fpi, bc), fpiPast(fpi, bc), fpi.m_fpOff, fpi.m_parentIndex,
            fpi.m_fpiDepth);

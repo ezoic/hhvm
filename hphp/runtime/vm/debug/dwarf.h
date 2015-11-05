@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,10 +20,31 @@
 
 #include <folly/Optional.h>
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/vm/jit/translator.h"
+#ifndef _MSC_VER
 #include <libdwarf.h>
 #include <dwarf.h>
+#else
+// We don't have libdwarf, so stub it out.
+typedef void* Dwarf_Ptr;
+typedef uint32_t Dwarf_Unsigned;
+
+#define DW_EH_PE_absptr 0
+
+#define DW_CFA_def_cfa 0
+#define DW_CFA_offset 0
+#define DW_CFA_offset_extended_sf 0
+#define DW_CFA_same_value 0
+#define DW_CFA_set_loc 0
+#define DW_CFA_val_expression 0
+
+#define DW_OP_breg7 0
+#define DW_OP_const4s 0
+#define DW_OP_deref_size 0
+#define DW_OP_dup 0
+#define DW_OP_mul 0
+#define DW_OP_plus 0
+#endif
 #include <vector>
 
 namespace HPHP {
@@ -182,13 +203,13 @@ struct DwarfInfo {
 
   const char *lookupFile(const Unit *unit);
   void addLineEntries(TCRange range, const Unit *unit,
-                      const Op* instr, FunctionInfo* f);
+                      PC instr, FunctionInfo* f);
   void transferFuncs(DwarfChunk* from, DwarfChunk* to);
   void compactChunks();
   DwarfChunk* addTracelet(TCRange range,
                           folly::Optional<std::string> name,
                           const Func* func,
-                          const Op* instr,
+                          PC instr,
                           bool exit,
                           bool inPrologue);
   void syncChunks();

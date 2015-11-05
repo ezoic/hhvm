@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,8 @@
 #include <algorithm>
 
 #include <folly/MapUtil.h>
+
+#include "hphp/util/logger.h"
 
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/translator.h"
@@ -200,6 +202,7 @@ PrologueCallersRec* ProfTransRec::prologueCallers() const {
 
 ProfData::ProfData()
     : m_numTrans(0)
+    , m_freed(false)
     , m_counters(RuntimeOption::EvalJitPGOThreshold) {
 }
 
@@ -235,16 +238,16 @@ Offset ProfData::transLastBcOff(TransID id) const {
   return m_transRecs[id]->lastBcOff();
 }
 
-Op* ProfData::transLastInstr(TransID id) const {
+PC ProfData::transLastInstr(TransID id) const {
   Unit* unit = transFunc(id)->unit();
   Offset lastBcOff = transLastBcOff(id);
-  return (Op*)(unit->at(lastBcOff));
+  return unit->at(lastBcOff);
 }
 
 Offset ProfData::transStopBcOff(TransID id) const {
   Unit*  unit      = m_transRecs[id]->func()->unit();
   Offset lastBcOff = transLastBcOff(id);
-  return lastBcOff + instrLen((Op*)(unit->at(lastBcOff)));
+  return lastBcOff + instrLen(unit->at(lastBcOff));
 }
 
 FuncId ProfData::transFuncId(TransID id) const {
@@ -275,12 +278,12 @@ bool ProfData::isKindProfile(TransID id) const {
   return m_transRecs[id]->kind() == TransKind::Profile;
 }
 
-int64_t ProfData::absTransCounter(TransID id) const {
+int64_t ProfData::transCounter(TransID id) const {
   assertx(id < m_numTrans);
   return RuntimeOption::EvalJitPGOThreshold - m_counters.get(id);
 }
 
-int64_t ProfData::transCounter(TransID id) const {
+int64_t ProfData::transCounterRaw(TransID id) const {
   assertx(id < m_numTrans);
   return m_counters.get(id);
 }
@@ -340,6 +343,9 @@ bool ProfData::profiling(FuncId funcId) const {
 
 void ProfData::setProfiling(FuncId funcId) {
   m_profilingFuncs.insert(funcId);
+  if (m_funcProfTrans.find(funcId) == m_funcProfTrans.end()) {
+    m_funcProfTrans[funcId] = TransIDVec();
+  }
 }
 
 RegionDescPtr ProfData::transRegion(TransID id) const {
@@ -355,7 +361,7 @@ TransID ProfData::addTransProfile(const RegionDescPtr&  region,
 
   assertx(region);
   DEBUG_ONLY size_t nBlocks = region->blocks().size();
-  assertx(nBlocks == 1 || (nBlocks > 1 && region->entry()->inlinedCallee()));
+  assertx(nBlocks == 1);
   region->renumberBlock(region->entry()->id(), transId);
   for (auto& b : region->blocks()) b->setProfTransID(transId);
   region->blocks().back()->setPostConds(pconds);
@@ -452,6 +458,20 @@ void ProfData::freeFuncData(FuncId funcId) {
   // We don't need the cached block offsets anymore.  They are only used when
   // generating profiling translations.
   m_blockEndOffsets.erase(funcId);
+}
+
+bool ProfData::freed() const {
+  return m_freed;
+}
+
+void ProfData::free() {
+  if (m_freed) return;
+  m_freed = true;
+  Logger::Info("Freeing JIT profiling data");
+  for (auto& trec : m_transRecs) {
+    trec.reset();
+  }
+  m_blockEndOffsets.clear();
 }
 
 bool ProfData::anyBlockEndsAt(const Func* func, Offset offset) {

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1998-2010 Zend Technologies Ltd. (http://www.zend.com) |
    +----------------------------------------------------------------------+
    | This source file is subject to version 2.00 of the Zend license,     |
@@ -18,10 +18,14 @@
 #ifndef incl_HPHP_ZEND_PRINTF_H_
 #define incl_HPHP_ZEND_PRINTF_H_
 
-#include "hphp/runtime/base/types.h"
+#include <sys/types.h>
+#include <stdarg.h>
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+class String;
+class Array;
 
 /**
  * How PHP formats a string. Called by ext/ext_string.cpp.

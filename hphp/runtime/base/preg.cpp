@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -34,7 +34,7 @@
 #include "hphp/runtime/base/request-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/string-util.h"
-#include "hphp/runtime/base/thread-init-fini.h"
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/string/ext_string.h"
@@ -104,7 +104,7 @@ public:
         case Kind::SmartPtr:
           m_u.smart_ptr.~EntryPtr();
           break;
-        case Kind::Accessor:
+        case Kind::AccessorKind:
           m_u.accessor.~ConstAccessor();
           break;
       }
@@ -119,7 +119,7 @@ public:
 
     Accessor& operator=(EntryPtr&& ep) {
       switch (m_kind) {
-        case Kind::Accessor:
+        case Kind::AccessorKind:
           m_u.accessor.~ConstAccessor();
         case Kind::Empty:
         case Kind::Ptr:
@@ -141,10 +141,10 @@ public:
           m_u.smart_ptr.~EntryPtr();
         case Kind::Empty:
         case Kind::Ptr:
-          m_kind = Kind::Accessor;
+          m_kind = Kind::AccessorKind;
           new (&m_u.accessor) LRUCache::ConstAccessor();
           break;
-        case Kind::Accessor:
+        case Kind::AccessorKind:
           break;
       }
       return m_u.accessor;
@@ -155,7 +155,7 @@ public:
         case Kind::Empty:    return nullptr;
         case Kind::Ptr:      return m_u.ptr;
         case Kind::SmartPtr: return m_u.smart_ptr.get();
-        case Kind::Accessor: return m_u.accessor->get();
+        case Kind::AccessorKind: return m_u.accessor->get();
       }
       always_assert(false);
     }
@@ -170,7 +170,7 @@ public:
       Empty,
       Ptr,
       SmartPtr,
-      Accessor,
+      AccessorKind,
     };
 
     union Ptr {
@@ -193,7 +193,11 @@ public:
   }
 
   ~PCRECache() {
+#ifdef MSVC_NO_NONVOID_ATOMIC_IF
+    if (m_kind == CacheKind::Static && m_staticCache.load()) {
+#else
     if (m_kind == CacheKind::Static && m_staticCache) {
+#endif
       DestroyStatic(m_staticCache);
     }
   }
@@ -276,7 +280,11 @@ void PCRECache::DestroyStatic(StaticCache* cache) {
 void PCRECache::reinit(CacheKind kind) {
   switch (m_kind) {
     case CacheKind::Static:
+#ifdef MSVC_NO_NONVOID_ATOMIC_IF
+      if (m_staticCache.load()) {
+#else
       if (m_staticCache) {
+#endif
         DestroyStatic(m_staticCache);
         m_staticCache = nullptr;
       }
@@ -312,7 +320,11 @@ bool PCRECache::find(Accessor& accessor,
   switch (m_kind) {
     case CacheKind::Static:
       {
+#ifdef MSVC_NO_NONVOID_ATOMIC_IF
+        assert(m_staticCache.load());
+#else
         assert(m_staticCache);
+#endif
         StaticCache::iterator it;
         auto cache = m_staticCache.load(std::memory_order_acquire);
         if ((it = cache->find(regex.get())) != cache->end()) {
@@ -363,7 +375,11 @@ void PCRECache::insert(
   switch (m_kind) {
     case CacheKind::Static:
       {
+#ifdef MSVC_NO_NONVOID_ATOMIC_IF
+        assert(m_staticCache.load());
+#else
         assert(m_staticCache);
+#endif
         // Clear the cache if we haven't refreshed it in a while
         if (time(nullptr) > m_expire) {
           clearStatic();
@@ -475,7 +491,7 @@ template<bool useSmartFree = false>
 struct FreeHelperImpl : private boost::noncopyable {
   explicit FreeHelperImpl(void* p) : p(p) {}
   ~FreeHelperImpl() {
-    useSmartFree ? smart_free(p) : free(p);
+    useSmartFree ? req::free(p) : free(p);
   }
 
 private:
@@ -756,7 +772,7 @@ static int* create_offset_array(const pcre_cache_entry* pce,
                                 int& size_offsets) {
   /* Allocate memory for the offsets array */
   size_offsets = pce->num_subpats * 3;
-  return (int *)smart_malloc(size_offsets * sizeof(int));
+  return (int *)req::malloc(size_offsets * sizeof(int));
 }
 
 static inline void add_offset_pair(Array& result,
@@ -1375,14 +1391,14 @@ static Variant php_pcre_replace(const String& pattern, const String& subject,
               lastStart = result.size();
             }
           }
-          int full_len = result.size();
-          const char* data = result.data() + result_len;
+          auto full_len = result.size();
+          auto data = result.data() + result_len;
           if (eval) {
             VMRegAnchor _;
             // reserve space for "<?php return " + code + ";"
             String prefixedCode(full_len - result_len + 14, ReserveString);
             prefixedCode += "<?php return ";
-            prefixedCode += StringSlice(data, full_len - result_len);
+            prefixedCode += folly::StringPiece{data, full_len - result_len};
             prefixedCode += ";";
             Unit* unit = g_context->compileEvalString(prefixedCode.get());
             Variant v;
@@ -1527,7 +1543,7 @@ static Variant php_replace_in_subject(const Variant& regex, const Variant& repla
 }
 
 Variant preg_replace_impl(const Variant& pattern, const Variant& replacement,
-                          const Variant& subject, int limit, Variant& count,
+                          const Variant& subject, int limit, Variant* count,
                           bool is_callable, bool is_filter) {
   assert(!(is_callable && is_filter));
   if (!is_callable &&
@@ -1544,7 +1560,7 @@ Variant preg_replace_impl(const Variant& pattern, const Variant& replacement,
                                          limit, is_callable, &replace_count);
 
     if (ret.isString()) {
-      count = replace_count;
+      if (count) *count = replace_count;
       if (is_filter && replace_count == 0) {
         return init_null();
       } else {
@@ -1568,7 +1584,7 @@ Variant preg_replace_impl(const Variant& pattern, const Variant& replacement,
       return_value.set(iter.first(), ret.asStrRef());
     }
   }
-  count = replace_count;
+  if (count) *count = replace_count;
   return return_value;
 }
 
@@ -1579,7 +1595,7 @@ int preg_replace(Variant& result,
                  int limit /* = -1 */) {
   Variant count;
   result = preg_replace_impl(pattern, replacement, subject,
-                             limit, count, false, false);
+                             limit, &count, false, false);
   return count.toInt32();
 }
 
@@ -1590,7 +1606,7 @@ int preg_replace_callback(Variant& result,
                           int limit /* = -1 */) {
   Variant count;
   result = preg_replace_impl(pattern, callback, subject,
-                             limit, count, true, false);
+                             limit, &count, true, false);
   return count.toInt32();
 }
 
@@ -1601,7 +1617,7 @@ int preg_filter(Variant& result,
                 int limit /* = -1 */) {
   Variant count;
   result = preg_replace_impl(pattern, replacement, subject,
-                             limit, count, false, true);
+                             limit, &count, false, true);
   return count.toInt32();
 }
 
@@ -1649,6 +1665,13 @@ Variant preg_split(const String& pattern, const String& subject,
                           start_offset, g_notempty | utf8_check,
                           offsets, size_offsets);
 
+    /* Subsequent calls to pcre_exec don't need to bother with the
+     * utf8 validity check: if the subject isn't valid, the first
+     * call to pcre_exec will have failed, and as long as we only
+     * set start_offset to known character boundaries we won't
+     * supply an invalid offset. */
+    utf8_check = PCRE_NO_UTF8_CHECK;
+
     /* Check for too many substrings condition. */
     if (count == 0) {
       raise_warning("Matched, but too many substrings");
@@ -1657,13 +1680,6 @@ Variant preg_split(const String& pattern, const String& subject,
 
     /* If something matched */
     if (count > 0) {
-      /* Subsequent calls to pcre_exec don't need to bother with the
-       * utf8 validity check: if the subject isn't valid, the first
-       * call to pcre_exec will have failed, and as long as we only
-       * set start_offset to known character boundaries we won't
-       * supply an invalid offset. */
-      utf8_check = PCRE_NO_UTF8_CHECK;
-
       if (!no_empty || subject.data() + offsets[0] != last_match) {
         if (offset_capture) {
           /* Add (match, offset) pair to the return value */
@@ -1721,7 +1737,7 @@ Variant preg_split(const String& pattern, const String& subject,
           init_local_extra(&bump_extra, bump_pce->extra);
           count = pcre_exec(bump_pce->re, &bump_extra, subject.data(),
                             subject.size(), start_offset,
-                            0, offsets, size_offsets);
+                            utf8_check, offsets, size_offsets);
           if (count < 1) {
             raise_warning("Unknown error");
             offsets[0] = start_offset;
@@ -1859,7 +1875,7 @@ static void php_reg_eprint(int err, regex_t* re) {
   /* get the length of the message */
   buf_len = regerror(REG_ITOA | err, re, nullptr, 0);
   if (buf_len) {
-    buf = (char *)smart_malloc(buf_len);
+    buf = (char *)req::malloc(buf_len);
     if (!buf) return; /* fail silently */
     /* finally, get the error message */
     regerror(REG_ITOA | err, re, buf, buf_len);
@@ -1869,7 +1885,7 @@ static void php_reg_eprint(int err, regex_t* re) {
 #endif
   len = regerror(err, re, nullptr, 0);
   if (len) {
-    message = (char *)smart_malloc(buf_len + len + 2);
+    message = (char *)req::malloc(buf_len + len + 2);
     if (!message) {
       return; /* fail silently */
     }
@@ -1881,8 +1897,8 @@ static void php_reg_eprint(int err, regex_t* re) {
     regerror(err, re, message + buf_len, len);
     raise_warning("%s", message);
   }
-  smart_free(buf);
-  smart_free(message);
+  req::free(buf);
+  req::free(message);
 }
 
 Variant php_split(const String& spliton, const String& str, int count,

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -12,6 +12,7 @@ open Typing_deps
 
 val redo_type_decl :
   Worker.t list option ->
+  bucket_size:int ->
   Naming.env ->
   FileInfo.names Relative_path.Map.t ->
   Errors.error list * Relative_path.Set.t * DepSet.t * DepSet.t

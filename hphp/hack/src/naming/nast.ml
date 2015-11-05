@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -104,6 +104,7 @@ and class_ = {
   c_extends        : hint list        ;
   c_uses           : hint list        ;
   c_xhp_attr_uses  : hint list        ;
+  c_xhp_category   : pstring list     ;
   c_req_extends    : hint list        ;
   c_req_implements : hint list        ;
   c_implements     : hint list        ;
@@ -272,7 +273,7 @@ and class_id =
   | CIparent
   | CIself
   | CIstatic
-  | CIvar of expr
+  | CIexpr of expr
   | CI of sid
 
 and expr = Pos.t * expr_
@@ -285,7 +286,7 @@ and expr_ =
   | This
   | Id of sid
   | Lvar of id
-  | Lplaceholder of sid
+  | Lplaceholder of Pos.t
   | Fun_id of sid
   | Method_id of expr * pstring
   (* meth_caller('Class name', 'method name') *)
@@ -305,7 +306,7 @@ and expr_ =
   | Float of pstring
   | Null
   | String of pstring
-  | String2 of expr list * string
+  | String2 of expr list
   | Special_func of special_func
   | Yield_break
   | Yield of afield
@@ -317,12 +318,14 @@ and expr_ =
   | Unop of Ast.uop * expr
   | Binop of Ast.bop * expr * expr
   | Eif of expr * expr option * expr
-  | InstanceOf of expr * expr
+  | NullCoalesce of expr * expr
+  | InstanceOf of expr * class_id
   | New of class_id * expr list * expr list
   | Efun of fun_ * id list
   | Xml of sid * (pstring * expr) list * expr list
   | Assert of assert_expr
   | Clone of expr
+  | Typename of sid
 
 (* These are "very special" constructs that we look for in, among
  * other places, terminality checks. invariant does not appear here
@@ -348,7 +351,6 @@ and special_func =
   | Gena of expr
   | Genva of expr list
   | Gen_array_rec of expr
-  | Gen_array_va_rec of expr list
 
 type def =
   | Fun of fun_
@@ -364,12 +366,11 @@ let assert_named_body = function
   | NamedBody b -> b
   | UnnamedBody _ -> failwith "Expecting a named function body"
 
-let class_id_to_str cid =
-  match cid with
-    | CIparent -> SN.Classes.cParent
-    | CIself -> SN.Classes.cSelf
-    | CIstatic -> SN.Classes.cStatic
-    | CIvar (_, This) -> SN.SpecialIdents.this
-    | CIvar (_, Lvar (_, x)) -> "$"^string_of_int(x)
-    | CIvar _ -> assert false
-    | CI (_, x) -> x
+let class_id_to_str = function
+  | CIparent -> SN.Classes.cParent
+  | CIself -> SN.Classes.cSelf
+  | CIstatic -> SN.Classes.cStatic
+  | CIexpr (_, This) -> SN.SpecialIdents.this
+  | CIexpr (_, Lvar (_, x)) -> "$"^string_of_int(x)
+  | CIexpr _ -> assert false
+  | CI (_, x) -> x

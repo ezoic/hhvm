@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -34,23 +34,27 @@ enum class TranslateResult {
 const char* show(TranslateResult);
 
 /*
- * Blacklisted instruction set.
- *
- * Used by translateRegion() to track instructions that must be interpreted.
+ * Data used by translateRegion() to pass information between retries.
  */
-using RegionBlacklist = ProfSrcKeySet;
+struct TranslateRetryContext {
+  // Instructions that must be interpreted.
+  ProfSrcKeySet toInterp;
+
+  // Regions to not inline
+  std::unordered_set<ProfSrcKey, ProfSrcKey::Hasher> inlineBlacklist;
+};
 
 /*
  * Translate `region'.
  *
- * The `toInterp' RegionBlacklist is a set of instructions which must be
- * interpreted.  When an instruction fails in translation, Retry is returned,
- * and the instruction is added to `interp' so that it will be interpreted on
- * the next attempt.
+ * The caller is expected to continue calling translateRegion() until either
+ * Success or Failure is returned.  Otherwise, Retry is returned, and the
+ * caller is responsible for threading the same RetryContext through to the
+ * retried translations.
  */
-TranslateResult translateRegion(IRGS&,
-                                const RegionDesc&,
-                                RegionBlacklist& toInterp,
+TranslateResult translateRegion(IRGS& irgs,
+                                const RegionDesc& region,
+                                TranslateRetryContext& retry,
                                 TransFlags trflags,
                                 PostConditions& pconds);
 

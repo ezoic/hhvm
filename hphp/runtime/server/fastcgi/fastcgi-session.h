@@ -25,7 +25,7 @@
 #include <folly/io/IOBuf.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/async/AsyncSocket.h>
-#include <folly/wangle/acceptor/ManagedConnection.h>
+#include <wangle/acceptor/ManagedConnection.h>
 
 namespace HPHP {
 
@@ -176,7 +176,7 @@ private:
  * NEVER call destroy without first checking the event count.
  */
 struct FastCGISession
-  : public  folly::wangle::ManagedConnection
+  : public  wangle::ManagedConnection
   , private folly::AsyncSocket::ReadCallback
   , private folly::AsyncSocket::WriteCallback
 {

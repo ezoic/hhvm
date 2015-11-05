@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -31,15 +31,14 @@ namespace HPHP {
  * places in the runtime and the extensions that would need to be updated
  * first to make that work.
  */
-class DummyResource : public ResourceData {
-public:
+struct DummyResource : ResourceData {
   DECLARE_RESOURCE_ALLOCATION_NO_SWEEP(DummyResource);
   CLASSNAME_IS("Unknown");
   DummyResource();
   String m_class_name;
-  virtual const String& o_getClassNameHook() const;
-  virtual bool isInvalid() const { return m_class_name.empty(); }
-  void o_setResourceId(int64_t id) { o_id = id; }
+  const String& o_getClassNameHook() const override;
+  bool isInvalid() const override { return m_class_name.empty(); }
+  void o_setResourceId(int64_t id) { hdr()->setRawId(id); }
 };
 
 ///////////////////////////////////////////////////////////////////////////////

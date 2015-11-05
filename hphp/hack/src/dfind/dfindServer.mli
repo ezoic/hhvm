@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -10,4 +10,8 @@
 
 open Utils
 
-val run_daemon: Path.t list -> (unit, SSet.t) Daemon.channel_pair -> unit
+type msg =
+  | Ready
+  | Updates of SSet.t
+
+val entry_point: ((string * Path.t list), unit, msg) Daemon.entry

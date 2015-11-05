@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -34,20 +34,19 @@ rds::Link<uint64_t> g_bytecodesVasm{rds::kInvalidHandle};
 
 folly::Range<Vlabel*> succs(Vinstr& inst) {
   switch (inst.op) {
-    case Vinstr::bindcall:  return {inst.bindcall_.targets, 2};
-    case Vinstr::contenter: return {inst.contenter_.targets, 2};
-    case Vinstr::jcc:       return {inst.jcc_.targets, 2};
-    case Vinstr::jcci:      return {&inst.jcci_.target, 1};
-    case Vinstr::jmp:       return {&inst.jmp_.target, 1};
-    case Vinstr::phijmp:    return {&inst.phijmp_.target, 1};
-    case Vinstr::phijcc:    return {inst.phijcc_.targets, 2};
-    case Vinstr::unwind:    return {inst.unwind_.targets, 2};
-    case Vinstr::vcallstub: return {inst.vcallstub_.targets, 2};
-    case Vinstr::vinvoke:   return {inst.vinvoke_.targets, 2};
-    case Vinstr::cbcc:      return {inst.cbcc_.targets, 2};
-    case Vinstr::tbcc:      return {inst.tbcc_.targets, 2};
-    case Vinstr::hcunwind:  return {inst.hcunwind_.targets, 2};
-    default:                return {nullptr, nullptr};
+    case Vinstr::callphp:     return {inst.callphp_.targets, 2};
+    case Vinstr::contenter:   return {inst.contenter_.targets, 2};
+    case Vinstr::jcc:         return {inst.jcc_.targets, 2};
+    case Vinstr::jcci:        return {&inst.jcci_.target, 1};
+    case Vinstr::jmp:         return {&inst.jmp_.target, 1};
+    case Vinstr::phijmp:      return {&inst.phijmp_.target, 1};
+    case Vinstr::phijcc:      return {inst.phijcc_.targets, 2};
+    case Vinstr::unwind:      return {inst.unwind_.targets, 2};
+    case Vinstr::vcallarray:  return {inst.vcallarray_.targets, 2};
+    case Vinstr::vinvoke:     return {inst.vinvoke_.targets, 2};
+    case Vinstr::cbcc:        return {inst.cbcc_.targets, 2};
+    case Vinstr::tbcc:        return {inst.tbcc_.targets, 2};
+    default:                  return {nullptr, nullptr};
   }
 }
 

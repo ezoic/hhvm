@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -40,7 +40,6 @@
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/surprise-flags.h"
 #include "hphp/runtime/base/thread-info.h"
-#include "hphp/runtime/base/thread-init-fini.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
@@ -123,6 +122,63 @@ static bool check_cmd(const char *cmd) {
 ///////////////////////////////////////////////////////////////////////////////
 // pcntl
 
+#define DEFINE_CONSTANT(name, value) \
+  static const int64_t k_##name = value; \
+  static const StaticString s_##name(#name)
+
+DEFINE_CONSTANT(SIGABRT, SIGABRT);
+DEFINE_CONSTANT(SIGALRM, SIGALRM);
+DEFINE_CONSTANT(SIGBUS, SIGBUS);
+DEFINE_CONSTANT(SIGCHLD, SIGCHLD);
+DEFINE_CONSTANT(SIGCONT, SIGCONT);
+DEFINE_CONSTANT(SIGFPE, SIGFPE);
+DEFINE_CONSTANT(SIGHUP, SIGHUP);
+DEFINE_CONSTANT(SIGILL, SIGILL);
+DEFINE_CONSTANT(SIGINT, SIGINT);
+DEFINE_CONSTANT(SIGIO, SIGIO);
+DEFINE_CONSTANT(SIGIOT, SIGIOT);
+DEFINE_CONSTANT(SIGKILL, SIGKILL);
+DEFINE_CONSTANT(SIGPIPE, SIGPIPE);
+DEFINE_CONSTANT(SIGPROF, SIGPROF);
+DEFINE_CONSTANT(SIGQUIT, SIGQUIT);
+DEFINE_CONSTANT(SIGSEGV, SIGSEGV);
+DEFINE_CONSTANT(SIGSTOP, SIGSTOP);
+DEFINE_CONSTANT(SIGSYS, SIGSYS);
+DEFINE_CONSTANT(SIGTERM, SIGTERM);
+DEFINE_CONSTANT(SIGTRAP, SIGTRAP);
+DEFINE_CONSTANT(SIGTSTP, SIGTSTP);
+DEFINE_CONSTANT(SIGTTIN, SIGTTIN);
+DEFINE_CONSTANT(SIGTTOU, SIGTTOU);
+DEFINE_CONSTANT(SIGURG, SIGURG);
+DEFINE_CONSTANT(SIGUSR1, SIGUSR1);
+DEFINE_CONSTANT(SIGUSR2, SIGUSR2);
+DEFINE_CONSTANT(SIGVTALRM, SIGVTALRM);
+DEFINE_CONSTANT(SIGWINCH, SIGWINCH);
+DEFINE_CONSTANT(SIGXCPU, SIGXCPU);
+DEFINE_CONSTANT(SIGXFSZ, SIGXFSZ);
+DEFINE_CONSTANT(SIG_BLOCK, SIG_BLOCK);
+DEFINE_CONSTANT(SIG_UNBLOCK, SIG_UNBLOCK);
+DEFINE_CONSTANT(SIG_SETMASK, SIG_SETMASK);
+
+DEFINE_CONSTANT(SIG_DFL, (int64_t)SIG_DFL);
+DEFINE_CONSTANT(SIG_ERR, (int64_t)SIG_ERR);
+DEFINE_CONSTANT(SIG_IGN, (int64_t)SIG_IGN);
+
+// http://marc.info/?l=php-cvs&m=100289252314474&w=2
+DEFINE_CONSTANT(SIGBABY, SIGSYS);
+DEFINE_CONSTANT(SIGCLD, SIGCHLD);
+DEFINE_CONSTANT(SIGPOLL, SIGIO);
+
+#ifdef __linux__
+DEFINE_CONSTANT(SIGPWR, SIGPWR);
+DEFINE_CONSTANT(SIGSTKFLT, SIGSTKFLT);
+#endif
+
+#undef DEFINE_CONSTANT
+
+#define REGISTER_CONSTANT(name) \
+  Native::registerConstant<KindOfInt64>(s_##name.get(), k_##name)
+
 static class ProcessExtension final : public Extension {
 public:
   ProcessExtension() : Extension("pcntl", NO_EXTENSION_VERSION_YET) {}
@@ -155,9 +211,56 @@ public:
     HHVM_FE(escapeshellarg);
     HHVM_FE(escapeshellcmd);
 
+    REGISTER_CONSTANT(SIGABRT);
+    REGISTER_CONSTANT(SIGALRM);
+    REGISTER_CONSTANT(SIGBABY);
+    REGISTER_CONSTANT(SIGBUS);
+    REGISTER_CONSTANT(SIGCHLD);
+    REGISTER_CONSTANT(SIGCLD);
+    REGISTER_CONSTANT(SIGCONT);
+    REGISTER_CONSTANT(SIGFPE);
+    REGISTER_CONSTANT(SIGHUP);
+    REGISTER_CONSTANT(SIGILL);
+    REGISTER_CONSTANT(SIGINT);
+    REGISTER_CONSTANT(SIGIO);
+    REGISTER_CONSTANT(SIGIOT);
+    REGISTER_CONSTANT(SIGKILL);
+    REGISTER_CONSTANT(SIGPIPE);
+    REGISTER_CONSTANT(SIGPOLL);
+    REGISTER_CONSTANT(SIGPROF);
+    REGISTER_CONSTANT(SIGQUIT);
+    REGISTER_CONSTANT(SIGSEGV);
+    REGISTER_CONSTANT(SIGSTOP);
+    REGISTER_CONSTANT(SIGSYS);
+    REGISTER_CONSTANT(SIGTERM);
+    REGISTER_CONSTANT(SIGTRAP);
+    REGISTER_CONSTANT(SIGTSTP);
+    REGISTER_CONSTANT(SIGTTIN);
+    REGISTER_CONSTANT(SIGTTOU);
+    REGISTER_CONSTANT(SIGURG);
+    REGISTER_CONSTANT(SIGUSR1);
+    REGISTER_CONSTANT(SIGUSR2);
+    REGISTER_CONSTANT(SIGVTALRM);
+    REGISTER_CONSTANT(SIGWINCH);
+    REGISTER_CONSTANT(SIGXCPU);
+    REGISTER_CONSTANT(SIGXFSZ);
+    REGISTER_CONSTANT(SIG_DFL);
+    REGISTER_CONSTANT(SIG_ERR);
+    REGISTER_CONSTANT(SIG_IGN);
+    REGISTER_CONSTANT(SIG_BLOCK);
+    REGISTER_CONSTANT(SIG_UNBLOCK);
+    REGISTER_CONSTANT(SIG_SETMASK);
+
+#ifdef __linux__
+    REGISTER_CONSTANT(SIGPWR);
+    REGISTER_CONSTANT(SIGSTKFLT);
+#endif
+
     loadSystemlib("process");
   }
 } s_process_extension;
+
+#undef REGISTER_CONSTANT
 
 int64_t HHVM_FUNCTION(pcntl_alarm,
                       int seconds) {
@@ -334,6 +437,10 @@ struct SignalHandlers final : RequestEventHandler {
     handlers.reset();
     inited.store(false);
   }
+  void vscan(IMarker& mark) const override {
+    mark(handlers);
+  }
+
   Array handlers;
   int signaled[_NSIG];
   sigset_t oldSet;
@@ -434,7 +541,7 @@ bool HHVM_FUNCTION(pcntl_sigprocmask,
       return false;
     }
     Array aoldset;
-    for (int signum = 1; true; ++signum) {
+    for (int signum = 1; signum < NSIG; ++signum) {
       result = sigismember(&coldset, signum);
       if (result == 1) {
         aoldset.append(signum);
@@ -443,7 +550,7 @@ bool HHVM_FUNCTION(pcntl_sigprocmask,
         break;
       }
     }
-    oldset = aoldset;
+    oldset.assignIfRef(aoldset);
 
     return true;
   }
@@ -463,7 +570,7 @@ int64_t HHVM_FUNCTION(pcntl_wait,
   } else {
     child_id = wait(&nstatus);
   }*/
-  status = nstatus;
+  status.assignIfRef(nstatus);
   return child_id;
 }
 
@@ -477,7 +584,7 @@ int64_t HHVM_FUNCTION(pcntl_waitpid,
     &nstatus,
     options
   );
-  status = nstatus;
+  status.assignIfRef(nstatus);
   return child_id;
 }
 
@@ -591,7 +698,7 @@ String HHVM_FUNCTION(exec,
   Array lines = StringUtil::Explode(sbuf.detach(), "\n").toArray();
   int ret = ctx.exit();
   if (WIFEXITED(ret)) ret = WEXITSTATUS(ret);
-  return_var = ret;
+  return_var.assignIfRef(ret);
   int count = lines.size();
   if (count > 0 && lines[count - 1].toString().empty()) {
     count--; // remove explode()'s last empty line
@@ -601,7 +708,7 @@ String HHVM_FUNCTION(exec,
   for (int i = 0; i < count; i++) {
     pai.append(lines[i]);
   }
-  output.wrapped() = pai.toArray();
+  output.assignIfRef(pai.toArray());
 
   if (!count || lines.empty()) {
     return String();
@@ -627,7 +734,7 @@ void HHVM_FUNCTION(passthru,
   }
   int ret = ctx.exit();
   if (WIFEXITED(ret)) ret = WEXITSTATUS(ret);
-  return_var = ret;
+  return_var.assignIfRef(ret);
 }
 
 String HHVM_FUNCTION(system,
@@ -644,7 +751,7 @@ String HHVM_FUNCTION(system,
   Array lines = StringUtil::Explode(sbuf.detach(), "\n").toArray();
   int ret = ctx.exit();
   if (WIFEXITED(ret)) ret = WEXITSTATUS(ret);
-  return_var = ret;
+  return_var.assignIfRef(ret);
   int count = lines.size();
   if (count > 0 && lines[count - 1].toString().empty()) {
     count--; // remove explode()'s last empty line
@@ -706,7 +813,7 @@ public:
 };
 
 void ChildProcess::sweep() {
-  // do nothing here, as everything will be collected by SmartAllocator
+  // do nothing here, as everything will be collected by MemoryManager
 }
 
 #define DESC_PIPE       1
@@ -738,7 +845,7 @@ public:
                            // same time, before FD_CLOEXEC is set on the fds.
                            // NOTE: no need to lock with light processes.
 
-  bool readFile(const SmartPtr<File>& file) {
+  bool readFile(const req::ptr<File>& file) {
     mode = DESC_FILE;
     childend = dup(file->fd());
     if (childend < 0) {
@@ -812,7 +919,7 @@ public:
       /* mark the descriptor close-on-exec, so that it won't be inherited
          by potential other children */
       fcntl(parentend, F_SETFD, FD_CLOEXEC);
-      return Resource(makeSmartPtr<PlainFile>(parentend, true));
+      return Resource(req::make<PlainFile>(parentend, true));
     }
 
     return Resource();
@@ -904,7 +1011,7 @@ static Variant post_proc_open(const String& cmd, Variant& pipes,
   }
 
   /* we forked/spawned and this is the parent */
-  auto proc = makeSmartPtr<ChildProcess>();
+  auto proc = req::make<ChildProcess>();
   proc->command = cmd;
   proc->child = child;
   proc->env = env;
@@ -926,7 +1033,7 @@ static Variant post_proc_open(const String& cmd, Variant& pipes,
 Variant HHVM_FUNCTION(proc_open,
                       const String& cmd,
                       const Array& descriptorspec,
-                      VRefParam pipes,
+                      VRefParam pipesParam,
                       const String& cwd /* = null_string */,
                       const Variant& env /* = null_variant */,
                       const Variant& other_options /* = null_variant */) {
@@ -937,6 +1044,7 @@ Variant HHVM_FUNCTION(proc_open,
     raise_warning("NULL byte detected. Possible attack");
     return false;
   }
+  Variant pipes(pipesParam, Variant::WithRefBind{});
 
   std::vector<DescriptorItem> items;
 

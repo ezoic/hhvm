@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,6 +20,7 @@
 
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/type-string.h"
+#include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/litstr-table.h"
 
 namespace HPHP {
@@ -172,9 +173,9 @@ inline bool Unit::contains(PC pc) const {
   return pc >= m_bc && pc <= m_bc + m_bclen;
 }
 
-inline Op Unit::getOpcode(size_t instrOffset) const {
+inline Op Unit::getOp(Offset instrOffset) const {
   assert(instrOffset < m_bclen);
-  return static_cast<Op>(m_bc[instrOffset]);
+  return peek_op(m_bc + instrOffset);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -247,6 +248,12 @@ inline Unit::PreClassRange Unit::preclasses() const {
 
 inline Func* Unit::firstHoistable() const {
   return *m_mergeInfo->funcHoistableBegin();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Type aliases
+inline Unit::TypeAliasRange Unit::typeAliases() const {
+  return TypeAliasRange(m_typeAliases);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1998-2010 Zend Technologies Ltd. (http://www.zend.com) |
    +----------------------------------------------------------------------+
    | This source file is subject to version 2.00 of the Zend license,     |
@@ -24,7 +24,7 @@
 #include <math.h>
 #include <monetary.h>
 
-#include "hphp/runtime/base/bstring.h"
+#include "hphp/util/bstring.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/runtime-error.h"
@@ -545,7 +545,7 @@ String string_replace(const char *input, int len,
     return String();
   }
 
-  smart::vector<int> founds;
+  req::vector<int> founds;
   founds.reserve(16);
   if (len_search == 1) {
     for (int pos = string_find(input, len, *search, 0, case_sensitive);
@@ -678,7 +678,7 @@ static int string_tag_find(const char *tag, int len, const char *set) {
     return 0;
   }
 
-  norm = (char *)smart_malloc(len+1);
+  norm = (char *)req::malloc(len+1);
 
   n = norm;
   t = tag;
@@ -719,7 +719,7 @@ static int string_tag_find(const char *tag, int len, const char *set) {
   } else {
     done=0;
   }
-  smart_free(norm);
+  req::free(norm);
   return done;
 }
 
@@ -774,7 +774,7 @@ String string_strip_tags(const char *s, const int len,
     allowString.setSize(allow_len);
     abuf = allowString.data();
 
-    tbuf = (char *)smart_malloc(PHP_TAG_BUF_SIZE+1);
+    tbuf = (char *)req::malloc(PHP_TAG_BUF_SIZE+1);
     tp = tbuf;
   } else {
     abuf = nullptr;
@@ -784,7 +784,7 @@ String string_strip_tags(const char *s, const int len,
   auto move = [&pos, &tbuf, &tp]() {
     if (tp - tbuf >= PHP_TAG_BUF_SIZE) {
       pos = tp - tbuf;
-      tbuf = (char*)smart_realloc(tbuf, (tp - tbuf) + PHP_TAG_BUF_SIZE + 1);
+      tbuf = (char*)req::realloc(tbuf, (tp - tbuf) + PHP_TAG_BUF_SIZE + 1);
       tp = tbuf + pos;
     }
   };
@@ -989,7 +989,7 @@ String string_strip_tags(const char *s, const int len,
     *rp = '\0';
   }
   if (allow_len) {
-    smart_free(tbuf);
+    req::free(tbuf);
   }
 
   retString.setSize(rp - rbuf);
@@ -1558,20 +1558,44 @@ String string_escape_shell_arg(const char *str) {
   String ret(safe_address(l, 4, 3), ReserveString); /* worst case */
   cmd = ret.mutableData();
 
+#ifdef _MSC_VER
+  cmd[y++] = '"';
+#else
   cmd[y++] = '\'';
+#endif
 
   for (x = 0; x < l; x++) {
     switch (str[x]) {
+#ifdef _MSC_VER
+    case '"':
+    case '%':
+    case '!':
+      cmd[y++] = ' ';
+      break;
+#else
     case '\'':
       cmd[y++] = '\'';
       cmd[y++] = '\\';
       cmd[y++] = '\'';
+#endif
       /* fall-through */
     default:
       cmd[y++] = str[x];
     }
   }
+#ifdef _MSC_VER
+  if (y > 0 && '\\' == cmd[y - 1]) {
+    int k = 0, n = y - 1;
+    for (; n >= 0 && '\\' == cmd[n]; n--, k++);
+    if (k % 2) {
+      cmd[y++] = '\\';
+    }
+  }
+
+  cmd[y++] = '"';
+#else
   cmd[y++] = '\'';
+#endif
   ret.setSize(y);
   return ret;
 }
@@ -1587,6 +1611,7 @@ String string_escape_shell_cmd(const char *str) {
 
   for (x = 0, y = 0; x < l; x++) {
     switch (str[x]) {
+#ifndef _MSC_VER
     case '"':
     case '\'':
       if (!p && (p = (char *)memchr(str + x + 1, str[x], l - x - 1))) {
@@ -1598,6 +1623,16 @@ String string_escape_shell_cmd(const char *str) {
       }
       cmd[y++] = str[x];
       break;
+#else
+    /* % is Windows specific for environmental variables, ^%PATH% will
+    output PATH while ^%PATH^% will not. escapeshellcmd->val will
+    escape all % and !.
+    */
+    case '%':
+    case '!':
+    case '"':
+    case '\'':
+#endif
     case '#': /* This is character-set independent */
     case '&':
     case ';':
@@ -1619,7 +1654,11 @@ String string_escape_shell_cmd(const char *str) {
     case '\\':
     case '\x0A': /* excluding these two */
     case '\xFF':
+#ifdef _MSC_VER
+      cmd[y++] = '^';
+#else
       cmd[y++] = '\\';
+#endif
       /* fall-through */
     default:
       cmd[y++] = str[x];
@@ -1701,8 +1740,8 @@ int string_levenshtein(const char *s1, int l1, const char *s2, int l2,
     return -1;
   }
 
-  p1 = (int*)smart_malloc((l2+1) * sizeof(int));
-  p2 = (int*)smart_malloc((l2+1) * sizeof(int));
+  p1 = (int*)req::malloc((l2+1) * sizeof(int));
+  p2 = (int*)req::malloc((l2+1) * sizeof(int));
 
   for(i2=0;i2<=l2;i2++) {
     p1[i2] = i2*cost_ins;
@@ -1720,8 +1759,8 @@ int string_levenshtein(const char *s1, int l1, const char *s2, int l2,
   }
 
   c0=p1[l2];
-  smart_free(p1);
-  smart_free(p2);
+  req::free(p1);
+  req::free(p2);
   return c0;
 }
 
@@ -1923,7 +1962,7 @@ String string_soundex(const String& str) {
 
   /* build soundex string */
   last = -1;
-  const char *p = str.slice().ptr;
+  auto p = str.slice().data();
   for (_small = 0; *p && _small < 4; p++) {
     /* convert chars to upper case and strip non-letter chars */
     /* BUG: should also map here accented letters used in non */
@@ -2519,7 +2558,7 @@ static const _cyr_charset_table _cyr_mac = {
 String string_convert_cyrillic_string(const String& input, char from, char to) {
   const unsigned char *from_table, *to_table;
   unsigned char tmp;
-  const unsigned char *uinput = (unsigned char *)input.slice().ptr;
+  auto uinput = (unsigned char*)input.slice().data();
   String retString(input.size(), ReserveString);
   unsigned char *str = (unsigned char *)retString.mutableData();
 
@@ -2593,8 +2632,8 @@ String string_convert_hebrew_string(const String& inStr,
   tmp = str;
   block_start=block_end=0;
 
-  heb_str = (char *) smart_malloc(str_len + 1);
-  SCOPE_EXIT { smart_free(heb_str); };
+  heb_str = (char *) req::malloc(str_len + 1);
+  SCOPE_EXIT { req::free(heb_str); };
   target = heb_str+str_len;
   *target = 0;
   target--;

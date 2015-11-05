@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -66,22 +66,18 @@ using std::map;
 ///////////////////////////////////////////////////////////////////////////////
 
 ClassScope::ClassScope(FileScopeRawPtr fs,
-                       KindOf kindOf, const std::string &name,
+                       KindOf kindOf, const std::string &originalName,
                        const std::string &parent,
-                       const vector<string> &bases,
+                       const std::vector<std::string> &bases,
                        const std::string &docComment, StatementPtr stmt,
                        const std::vector<UserAttributePtr> &attrs)
-  : BlockScope(name, docComment, stmt, BlockScope::ClassScope),
+  : BlockScope(originalName, docComment, stmt, BlockScope::ClassScope),
     m_parent(parent), m_bases(bases), m_attribute(0), m_redeclaring(-1),
     m_kindOf(kindOf), m_derivesFromRedeclaring(Derivation::Normal),
     m_traitStatus(NOT_FLATTENED), m_volatile(false),
-    m_persistent(false), m_derivedByDynamic(false),
-    m_needsCppCtor(false), m_needsInit(true) {
+    m_persistent(false) {
 
-  m_dynamic = Option::IsDynamicClass(m_name);
-
-  // dynamic class is also volatile
-  m_volatile = Option::AllVolatile || m_dynamic;
+  m_volatile = Option::AllVolatile;
 
   for (unsigned i = 0; i < attrs.size(); ++i) {
     if (m_userAttributes.find(attrs[i]->getName()) != m_userAttributes.end()) {
@@ -98,29 +94,28 @@ ClassScope::ClassScope(FileScopeRawPtr fs,
 
 // System
 ClassScope::ClassScope(AnalysisResultPtr ar,
-                       const std::string &name, const std::string &parent,
-                       const std::vector<std::string> &bases,
-                       const FunctionScopePtrVec &methods)
-  : BlockScope(name, "", StatementPtr(), BlockScope::ClassScope),
+                       const std::string& originalName,
+                       const std::string& parent,
+                       const std::vector<std::string>& bases,
+                       const std::vector<FunctionScopePtr>& methods)
+  : BlockScope(originalName, "", StatementPtr(), BlockScope::ClassScope),
     m_parent(parent), m_bases(bases),
     m_attribute(0), m_redeclaring(-1),
     m_kindOf(KindOf::ObjectClass),
     m_derivesFromRedeclaring(Derivation::Normal),
-    m_traitStatus(NOT_FLATTENED), m_dynamic(false),
-    m_volatile(false), m_persistent(false),
-    m_derivedByDynamic(false), m_needsCppCtor(false),
-    m_needsInit(true) {
-  for (FunctionScopePtr f: methods) {
-    if (f->getName() == "__construct") setAttribute(HasConstructor);
-    else if (f->getName() == "__destruct") setAttribute(HasDestructor);
-    else if (f->getName() == "__get")  setAttribute(HasUnknownPropGetter);
-    else if (f->getName() == "__set")  setAttribute(HasUnknownPropSetter);
-    else if (f->getName() == "__call") setAttribute(HasUnknownMethodHandler);
-    else if (f->getName() == "__callstatic") {
+    m_traitStatus(NOT_FLATTENED),
+    m_volatile(false), m_persistent(false) {
+  for (auto f : methods) {
+    if (f->isNamed("__construct")) setAttribute(HasConstructor);
+    else if (f->isNamed("__destruct")) setAttribute(HasDestructor);
+    else if (f->isNamed("__get"))  setAttribute(HasUnknownPropGetter);
+    else if (f->isNamed("__set"))  setAttribute(HasUnknownPropSetter);
+    else if (f->isNamed("__call")) setAttribute(HasUnknownMethodHandler);
+    else if (f->isNamed("__callstatic")) {
       setAttribute(HasUnknownStaticMethodHandler);
-    } else if (f->getName() == "__isset") setAttribute(HasUnknownPropTester);
-    else if (f->getName() == "__unset")   setAttribute(HasPropUnsetter);
-    else if (f->getName() == "__invoke")  setAttribute(HasInvokeMethod);
+    } else if (f->isNamed("__isset")) setAttribute(HasUnknownPropTester);
+    else if (f->isNamed("__unset"))   setAttribute(HasPropUnsetter);
+    else if (f->isNamed("__invoke"))  setAttribute(HasInvokeMethod);
     addFunction(ar, FileScopeRawPtr(), f);
   }
   setAttribute(Extension);
@@ -129,33 +124,26 @@ ClassScope::ClassScope(AnalysisResultPtr ar,
   assert(m_parent.empty() || (!m_bases.empty() && m_bases[0] == m_parent));
 }
 
+bool ClassScope::isNamed(const char* n) const {
+  return !strcasecmp(getOriginalName().c_str(), n);
+}
+
 const std::string &ClassScope::getOriginalName() const {
-  if (m_stmt) {
-    return dynamic_pointer_cast<InterfaceStatement>(m_stmt)->
-      getOriginalName();
-  }
-  return m_originalName;
+  return m_scopeName;
 }
 
 std::string ClassScope::getDocName() const {
-  string name = getOriginalName();
+  auto const& name = getOriginalName();
   if (m_redeclaring < 0) {
     return name;
   }
   return name + Option::IdPrefix + folly::to<std::string>(m_redeclaring);
 }
 
-bool ClassScope::NeedStaticArray(ClassScopePtr cls, FunctionScopePtr func) {
-  return cls && cls->getAttribute(NotFinal) && !func->isPrivate();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void ClassScope::derivedMagicMethods(ClassScopePtr super) {
   super->setAttribute(NotFinal);
-  if (derivedByDynamic()) {
-    super->m_derivedByDynamic = true;
-  }
   if (m_attribute & (HasUnknownPropGetter|
                      MayHaveUnknownPropGetter|
                      InheritsUnknownPropGetter)) {
@@ -256,11 +244,11 @@ bool ClassScope::implementsAccessor(int prop) {
 }
 
 void ClassScope::checkDerivation(AnalysisResultPtr ar, hphp_string_iset &seen) {
-  seen.insert(m_name);
+  seen.insert(m_scopeName);
 
   hphp_string_iset bases;
   for (int i = m_bases.size() - 1; i >= 0; i--) {
-    const string &base = m_bases[i];
+    auto const& base = m_bases[i];
 
     if (seen.find(base) != seen.end() || bases.find(base) != bases.end()) {
       Compiler::Error(
@@ -276,25 +264,23 @@ void ClassScope::checkDerivation(AnalysisResultPtr ar, hphp_string_iset &seen) {
     }
     bases.insert(base);
 
-    ClassScopePtrVec parents = ar->findClasses(toLower(base));
-    for (unsigned int j = 0; j < parents.size(); j++) {
-      parents[j]->checkDerivation(ar, seen);
+    auto parents = ar->findClasses(base);
+    for (auto& parent : parents) {
+      parent->checkDerivation(ar, seen);
     }
   }
 
-  seen.erase(m_name);
+  seen.erase(m_scopeName);
 }
 
 void ClassScope::collectMethods(AnalysisResultPtr ar,
                                 StringToFunctionScopePtrMap &funcs,
                                 bool collectPrivate) {
   // add all functions this class has
-  for (FunctionScopePtrVec::const_iterator iter =
-         m_functionsVec.begin(); iter != m_functionsVec.end(); ++iter) {
-    const FunctionScopePtr &fs = *iter;
+  for (const auto& fs : m_functionsVec) {
     if (!collectPrivate && fs->isPrivate()) continue;
 
-    FunctionScopePtr &func = funcs[fs->getName()];
+    FunctionScopePtr &func = funcs[fs->getScopeName()];
     if (!func) {
       func = fs;
     } else {
@@ -315,28 +301,22 @@ void ClassScope::collectMethods(AnalysisResultPtr ar,
 
   int n = m_bases.size();
   for (int i = 0; i < n; i++) {
-    const string &base = m_bases[i];
+    auto const& base = m_bases[i];
     ClassScopePtr super = ar->findClass(base);
     if (super) {
       if (super->isRedeclaring()) {
-        const ClassScopePtrVec &classes = ar->findRedeclaredClasses(base);
+        const auto& classes = ar->findRedeclaredClasses(base);
         StringToFunctionScopePtrMap pristine(funcs);
 
         for (auto& cls : classes) {
-          cls->m_derivedByDynamic = true;
           StringToFunctionScopePtrMap cur(pristine);
           derivedMagicMethods(cls);
           cls->collectMethods(ar, cur, false);
           inheritedMagicMethods(cls);
           funcs.insert(cur.begin(), cur.end());
-          cls->getVariables()->
-            forceVariants(ar, VariableTable::AnyNonPrivateVars);
         }
 
         m_derivesFromRedeclaring = Derivation::Redeclaring;
-        getVariables()->forceVariants(ar, VariableTable::AnyNonPrivateVars,
-                                      false);
-        getVariables()->setAttribute(VariableTable::NeedGlobalPointer);
 
         setVolatile();
       } else {
@@ -345,7 +325,6 @@ void ClassScope::collectMethods(AnalysisResultPtr ar,
         inheritedMagicMethods(super);
         if (super->derivesFromRedeclaring() == Derivation::Redeclaring) {
           m_derivesFromRedeclaring = Derivation::Redeclaring;
-          getVariables()->forceVariants(ar, VariableTable::AnyNonPrivateVars);
           setVolatile();
         } else if (super->isVolatile()) {
           setVolatile();
@@ -356,8 +335,6 @@ void ClassScope::collectMethods(AnalysisResultPtr ar,
       if (base == m_parent) {
         ar->declareUnknownClass(m_parent);
         m_derivesFromRedeclaring = Derivation::Redeclaring;
-        getVariables()->setAttribute(VariableTable::NeedGlobalPointer);
-        getVariables()->forceVariants(ar, VariableTable::AnyNonPrivateVars);
         setVolatile();
       } else {
         /*
@@ -377,20 +354,18 @@ void ClassScope::collectMethods(AnalysisResultPtr ar,
 
 void ClassScope::importTraitProperties(AnalysisResultPtr ar) {
 
-  for (unsigned i = 0; i < m_usedTraitNames.size(); i++) {
-    ClassScopePtr tCls = ar->findClass(m_usedTraitNames[i]);
+  for (const auto& name : m_usedTraitNames) {
+    auto tCls = ar->findClass(name);
     if (!tCls) continue;
-    ClassStatementPtr tStmt =
-      dynamic_pointer_cast<ClassStatement>(tCls->getStmt());
-    StatementListPtr tStmts = tStmt->getStmts();
+    auto tStmt = dynamic_pointer_cast<ClassStatement>(tCls->getStmt());
+    auto tStmts = tStmt->getStmts();
     if (!tStmts) continue;
     for (int s = 0; s < tStmts->getCount(); s++) {
-      ClassVariablePtr prop =
-        dynamic_pointer_cast<ClassVariable>((*tStmts)[s]);
+      auto prop = dynamic_pointer_cast<ClassVariable>((*tStmts)[s]);
       if (prop) {
-        ClassVariablePtr cloneProp = dynamic_pointer_cast<ClassVariable>(
+        auto cloneProp = dynamic_pointer_cast<ClassVariable>(
           dynamic_pointer_cast<ClassStatement>(m_stmt)->addClone(prop));
-        cloneProp->resetScope(shared_from_this(), true);
+        cloneProp->resetScope(shared_from_this());
         cloneProp->addTraitPropsToScope(ar,
                       dynamic_pointer_cast<ClassScope>(shared_from_this()));
       }
@@ -406,9 +381,8 @@ ClassScope::importTraitMethod(const TraitMethod&  traitMethod,
   std::string origMethName = traitMethod.originalName;
   ModifierExpressionPtr modifiers = traitMethod.modifiers;
 
-  MethodStatementPtr cloneMeth = dynamic_pointer_cast<MethodStatement>(
+  auto cloneMeth = dynamic_pointer_cast<MethodStatement>(
     dynamic_pointer_cast<ClassStatement>(m_stmt)->addClone(meth));
-  cloneMeth->setName(methName);
   cloneMeth->setOriginalName(origMethName);
   // Note: keep previous modifiers if none specified when importing the trait
   if (modifiers && modifiers->getCount()) {
@@ -417,13 +391,14 @@ ClassScope::importTraitMethod(const TraitMethod&  traitMethod,
   FunctionScopePtr funcScope = meth->getFunctionScope();
 
   // Trait method typehints, self and parent, need to be converted
-  ClassScopePtr cScope = dynamic_pointer_cast<ClassScope>(shared_from_this());
+  auto cScope = dynamic_pointer_cast<ClassScope>(shared_from_this());
   cloneMeth->fixupSelfAndParentTypehints( cScope );
 
-  FunctionScopePtr cloneFuncScope
-    (new HPHP::FunctionScope(funcScope, ar, methName, origMethName, cloneMeth,
-                             cloneMeth->getModifiers(), cScope->isUserClass()));
-  cloneMeth->resetScope(cloneFuncScope, true);
+  auto cloneFuncScope =
+    std::make_shared<HPHP::FunctionScope>(
+      funcScope, ar, origMethName, cloneMeth,
+      cloneMeth->getModifiers(), cScope->isUserClass());
+  cloneMeth->resetScope(cloneFuncScope);
   cloneFuncScope->setOuterScope(shared_from_this());
   informClosuresAboutScopeClone(cloneMeth, cloneFuncScope, ar);
 
@@ -447,8 +422,8 @@ void ClassScope::informClosuresAboutScopeClone(
   }
 
   for (int i = 0; i < root->getKidCount(); i++) {
-    ConstructPtr cons = root->getNthKid(i);
-    ClosureExpressionPtr closure =
+    auto cons = root->getNthKid(i);
+    auto closure =
       dynamic_pointer_cast<ClosureExpression>(cons);
 
     if (!closure) {
@@ -464,7 +439,7 @@ void ClassScope::informClosuresAboutScopeClone(
   }
 }
 
-void ClassScope::addClassRequirement(const string &requiredName,
+void ClassScope::addClassRequirement(const std::string &requiredName,
                                      bool isExtends) {
   assert(isTrait() || (isInterface() && isExtends)
          // when flattening traits, their requirements get flattened
@@ -488,7 +463,7 @@ void ClassScope::importClassRequirements(AnalysisResultPtr ar,
   }
 }
 
-bool ClassScope::hasMethod(const string &methodName) const {
+bool ClassScope::hasMethod(const std::string &methodName) const {
   return m_functions.find(methodName) != m_functions.end();
 }
 
@@ -501,19 +476,17 @@ void findTraitMethodsToImport(AnalysisResultPtr ar,
                               ClassScopePtr trait,
                               ClassScope::TMIData& tmid) {
   assert(Option::WholeProgram);
-  ClassStatementPtr tStmt =
-    dynamic_pointer_cast<ClassStatement>(trait->getStmt());
+  auto tStmt = dynamic_pointer_cast<ClassStatement>(trait->getStmt());
   StatementListPtr tStmts = tStmt->getStmts();
   if (!tStmts) return;
 
   for (int s = 0; s < tStmts->getCount(); s++) {
-    MethodStatementPtr meth =
-      dynamic_pointer_cast<MethodStatement>((*tStmts)[s]);
+    auto meth = dynamic_pointer_cast<MethodStatement>((*tStmts)[s]);
     if (meth) {
       ClassScope::TraitMethod traitMethod(trait, meth,
                                           ModifierExpressionPtr(),
                                           MethodStatementPtr());
-      tmid.add(traitMethod, meth->getName());
+      tmid.add(traitMethod, meth->getOriginalName());
     }
   }
 }
@@ -527,16 +500,14 @@ MethodStatementPtr findTraitMethodImpl(AnalysisResultPtr ar,
   }
   visitedTraits.insert(trait);
 
-  ClassStatementPtr tStmt =
-    dynamic_pointer_cast<ClassStatement>(trait->getStmt());
+  auto tStmt = dynamic_pointer_cast<ClassStatement>(trait->getStmt());
   StatementListPtr tStmts = tStmt->getStmts();
 
   // Look in the current trait.
   for (int s = 0; s < tStmts->getCount(); s++) {
-    MethodStatementPtr meth =
-      dynamic_pointer_cast<MethodStatement>((*tStmts)[s]);
+    auto meth = dynamic_pointer_cast<MethodStatement>((*tStmts)[s]);
     if (meth) { // handle methods
-      if (meth->getName() == methodName) {
+      if (meth->isNamed(methodName)) {
         return meth;
       }
     }
@@ -544,10 +515,9 @@ MethodStatementPtr findTraitMethodImpl(AnalysisResultPtr ar,
 
   // Look into children traits.
   for (int s = 0; s < tStmts->getCount(); s++) {
-    UseTraitStatementPtr useTraitStmt =
-      dynamic_pointer_cast<UseTraitStatement>((*tStmts)[s]);
+    auto useTraitStmt = dynamic_pointer_cast<UseTraitStatement>((*tStmts)[s]);
     if (useTraitStmt) {
-      vector<string> usedTraits;
+      std::vector<std::string> usedTraits;
       useTraitStmt->getUsedTraitNames(usedTraits);
       for (unsigned i = 0; i < usedTraits.size(); i++) {
         MethodStatementPtr foundMethod =
@@ -611,30 +581,26 @@ ClassScope::TMIOps::findTraitMethod(ClassScope* cs,
 }
 
 void ClassScope::applyTraitRules(TMIData& tmid) {
-  ClassStatementPtr classStmt =
-    dynamic_pointer_cast<ClassStatement>(getStmt());
+  auto classStmt = dynamic_pointer_cast<ClassStatement>(getStmt());
   assert(classStmt);
 
-  StatementListPtr stmts = classStmt->getStmts();
+  auto stmts = classStmt->getStmts();
   if (!stmts) return;
 
   for (int s = 0; s < stmts->getCount(); s++) {
-    StatementPtr stmt = (*stmts)[s];
+    auto stmt = (*stmts)[s];
 
-    UseTraitStatementPtr useStmt =
-      dynamic_pointer_cast<UseTraitStatement>(stmt);
+    auto useStmt = dynamic_pointer_cast<UseTraitStatement>(stmt);
     if (!useStmt) continue;
 
-    StatementListPtr rules = useStmt->getStmts();
+    auto rules = useStmt->getStmts();
     for (int r = 0; r < rules->getCount(); r++) {
-      StatementPtr rule = (*rules)[r];
-      TraitPrecStatementPtr precStmt =
-        dynamic_pointer_cast<TraitPrecStatement>(rule);
+      auto rule = (*rules)[r];
+      auto precStmt = dynamic_pointer_cast<TraitPrecStatement>(rule);
       if (precStmt) {
         tmid.applyPrecRule(precStmt);
       } else {
-        TraitAliasStatementPtr aliasStmt =
-          dynamic_pointer_cast<TraitAliasStatement>(rule);
+        auto aliasStmt = dynamic_pointer_cast<TraitAliasStatement>(rule);
         assert(aliasStmt);
         tmid.applyAliasRule(aliasStmt, this);
       }
@@ -652,7 +618,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
     getStmt()->analysisTimeFatal(
       Compiler::CyclicDependentTraits,
       "Cyclic dependency between traits involving %s",
-      getOriginalName().c_str()
+      getScopeName().c_str()
     );
     return;
   }
@@ -681,7 +647,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
         getStmt()->analysisTimeFatal(
           Compiler::InvalidDerivation,
           Strings::TRAIT_BAD_REQ_EXTENDS,
-          m_originalName.c_str(),
+          m_scopeName.c_str(),
           req.c_str(),
           req.c_str()
         );
@@ -693,7 +659,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
         getStmt()->analysisTimeFatal(
           Compiler::InvalidDerivation,
           Strings::TRAIT_BAD_REQ_IMPLEMENTS,
-          m_originalName.c_str(),
+          m_scopeName.c_str(),
           req.c_str(),
           req.c_str()
         );
@@ -739,8 +705,8 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
 
   auto traitMethods = tmid.finish(this);
 
-  std::map<string, MethodStatementPtr> importedTraitMethods;
-  std::vector<std::pair<string,const TraitMethod*>> importedTraitsWithOrigName;
+  std::map<std::string, MethodStatementPtr, stdltistr> importedTraitMethods;
+  std::vector<std::pair<std::string,const TraitMethod*>> importedTraitsWithOrigName;
 
   // Actually import the methods.
   for (auto const& mdata : traitMethods) {
@@ -755,8 +721,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
     }
 
     auto sourceName = mdata.tm.ruleStmt
-      ? toLower(
-          ((TraitAliasStatement*)mdata.tm.ruleStmt.get())->getMethodName())
+      ? ((TraitAliasStatement*)mdata.tm.ruleStmt.get())->getMethodName()
       : mdata.name;
 
     importedTraitMethods[sourceName] = MethodStatementPtr();
@@ -766,16 +731,16 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
 
   // Make sure there won't be 2 constructors after importing
   auto traitConstruct = importedTraitMethods.count("__construct");
-  auto traitName = importedTraitMethods.count(getName());
+  auto traitName = importedTraitMethods.count(getScopeName());
   auto classConstruct = m_functions.count("__construct");
-  auto className = m_functions.count(getName());
+  auto className = m_functions.count(getScopeName());
   if ((traitConstruct && traitName) ||
       (traitConstruct && className) ||
       (classConstruct && traitName)) {
     getStmt()->analysisTimeFatal(
       Compiler::InvalidDerivation,
       "%s has colliding constructor definitions coming from traits",
-      getOriginalName().c_str()
+      getScopeName().c_str()
     );
   }
 
@@ -785,7 +750,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
     MethodStatementPtr newMeth = importTraitMethod(
       *traitMethod,
       ar,
-      toLower(traitMethod->originalName)
+      traitMethod->originalName
     );
   }
 
@@ -797,7 +762,7 @@ void ClassScope::importUsedTraits(AnalysisResultPtr ar) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool ClassScope::usesTrait(const string &traitName) const {
+bool ClassScope::usesTrait(const std::string &traitName) const {
   for (unsigned i = 0; i < m_usedTraitNames.size(); i++) {
     if (traitName == m_usedTraitNames[i]) {
       return true;
@@ -810,9 +775,8 @@ bool ClassScope::needsInvokeParent(AnalysisResultConstPtr ar,
                                    bool considerSelf /* = true */) {
   // check all functions this class has
   if (considerSelf) {
-    for (FunctionScopePtrVec::const_iterator iter =
-           m_functionsVec.begin(); iter != m_functionsVec.end(); ++iter) {
-      if ((*iter)->isPrivate()) return true;
+    for (const auto& func : m_functionsVec) {
+      if (func->isPrivate()) return true;
     }
   }
 
@@ -825,7 +789,7 @@ bool ClassScope::needsInvokeParent(AnalysisResultConstPtr ar,
 }
 
 bool ClassScope::derivesDirectlyFrom(const std::string &base) const {
-  for (std::string base_i: m_bases) {
+  for (auto const& base_i: m_bases) {
     if (strcasecmp(base_i.c_str(), base.c_str()) == 0) return true;
   }
   return false;
@@ -837,7 +801,7 @@ bool ClassScope::derivesFrom(AnalysisResultConstPtr ar,
 
   if (derivesDirectlyFrom(base)) return true;
 
-  for (std::string base_i: m_bases) {
+  for (auto const& base_i: m_bases) {
     ClassScopePtr cl = ar->findClass(base_i);
     if (cl) {
       if (strict && cl->isRedeclaring()) {
@@ -858,13 +822,13 @@ ClassScopePtr ClassScope::FindCommonParent(AnalysisResultConstPtr ar,
   ClassScopePtr cls2 = ar->findClass(cn2);
 
   if (!cls1 || !cls2) return ClassScopePtr();
-  if (cls1->getName() == cls2->getName())      return cls1;
+  if (cls1->isNamed(cls2->getScopeName()))  return cls1;
   if (cls1->derivesFrom(ar, cn2, true, false)) return cls2;
   if (cls2->derivesFrom(ar, cn1, true, false)) return cls1;
 
   // walk up the class hierarchy.
-  for (const std::string &base1: cls1->m_bases) {
-    for (const std::string &base2: cls2->m_bases) {
+  for (auto const& base1: cls1->m_bases) {
+    for (auto const& base2: cls2->m_bases) {
       ClassScopePtr parent = FindCommonParent(ar, base1, base2);
       if (parent) return parent;
     }
@@ -877,14 +841,11 @@ void ClassScope::setVolatile() {
   if (!m_volatile) {
     m_volatile = true;
     Lock lock(s_depsMutex);
-    const BlockScopeRawPtrFlagsVec &orderedUsers = getOrderedUsers();
-    for (BlockScopeRawPtrFlagsVec::const_iterator it = orderedUsers.begin(),
-           end = orderedUsers.end(); it != end; ++it) {
-      BlockScopeRawPtrFlagsVec::value_type pf = *it;
+    for (const auto pf : getOrderedUsers()) {
       if (pf->second & UseKindParentRef) {
-        BlockScopeRawPtr scope = pf->first;
+        auto scope = pf->first;
         if (scope->is(BlockScope::ClassScope)) {
-          ((HPHP::ClassScope*)scope.get())->setVolatile();
+          static_cast<HPHP::ClassScope*>(scope.get())->setVolatile();
         }
       }
     }
@@ -895,9 +856,7 @@ FunctionScopePtr ClassScope::findFunction(AnalysisResultConstPtr ar,
                                           const std::string &name,
                                           bool recursive,
                                           bool exclIntfBase /* = false */) {
-  assert(toLower(name) == name);
-  StringToFunctionScopePtrMap::const_iterator iter;
-  iter = m_functions.find(name);
+  auto iter = m_functions.find(name);
   if (iter != m_functions.end()) {
     assert(iter->second);
     return iter->second;
@@ -905,10 +864,8 @@ FunctionScopePtr ClassScope::findFunction(AnalysisResultConstPtr ar,
 
   // walk up
   if (recursive) {
-    int s = m_bases.size();
-    for (int i = 0; i < s; i++) {
-      const string &base = m_bases[i];
-      ClassScopePtr super = ar->findClass(base);
+    for (auto const& base : m_bases) {
+      auto super = ar->findClass(base);
       if (!super) continue;
       if (exclIntfBase && super->isInterface()) break;
       if (super->isRedeclaring()) {
@@ -918,14 +875,9 @@ FunctionScopePtr ClassScope::findFunction(AnalysisResultConstPtr ar,
         }
         continue;
       }
-      FunctionScopePtr func =
-        super->findFunction(ar, name, true, exclIntfBase);
+      auto func = super->findFunction(ar, name, true, exclIntfBase);
       if (func) return func;
     }
-  }
-  if (!Option::AllDynamic &&
-      derivesFromRedeclaring() == Derivation::Redeclaring) {
-    setDynamic(ar, name);
   }
 
   return FunctionScopePtr();
@@ -933,14 +885,13 @@ FunctionScopePtr ClassScope::findFunction(AnalysisResultConstPtr ar,
 
 FunctionScopePtr ClassScope::findConstructor(AnalysisResultConstPtr ar,
                                              bool recursive) {
-  StringToFunctionScopePtrMap::const_iterator iter;
-  string name;
+  std::string name;
   if (classNameCtor()) {
-    name = getName();
+    name = getScopeName();
   } else {
     name = "__construct";
   }
-  iter = m_functions.find(name);
+  auto iter = m_functions.find(name);
   if (iter != m_functions.end()) {
     assert(iter->second);
     return iter->second;
@@ -948,69 +899,21 @@ FunctionScopePtr ClassScope::findConstructor(AnalysisResultConstPtr ar,
 
   // walk up
   if (recursive && derivesFromRedeclaring() != Derivation::Redeclaring) {
-    ClassScopePtr super = ar->findClass(m_parent);
+    const auto super = ar->findClass(m_parent);
     if (super) {
-      FunctionScopePtr func = super->findConstructor(ar, true);
+      auto func = super->findConstructor(ar, true);
       if (func) return func;
     }
-  }
-  if (!Option::AllDynamic &&
-      derivesFromRedeclaring() == Derivation::Redeclaring) {
-    setDynamic(ar, name);
   }
 
   return FunctionScopePtr();
 }
 
-void ClassScope::setStaticDynamic(AnalysisResultConstPtr ar) {
-  for (FunctionScopePtrVec::const_iterator iter =
-         m_functionsVec.begin(); iter != m_functionsVec.end(); ++iter) {
-    FunctionScopePtr fs = *iter;
-    if (fs->isStatic()) fs->setDynamic();
-  }
-  if (!m_parent.empty()) {
-    if (derivesFromRedeclaring() == Derivation::Redeclaring) {
-      const ClassScopePtrVec &parents = ar->findRedeclaredClasses(m_parent);
-      for (ClassScopePtr cl: parents) {
-        cl->setStaticDynamic(ar);
-      }
-    } else {
-      ClassScopePtr parent = ar->findClass(m_parent);
-      if (parent) {
-        parent->setStaticDynamic(ar);
-      }
-    }
-  }
-}
-
-void ClassScope::setDynamic(AnalysisResultConstPtr ar,
-                            const std::string &name) {
-  StringToFunctionScopePtrMap::const_iterator iter =
-    m_functions.find(name);
-  if (iter != m_functions.end()) {
-    FunctionScopePtr fs = iter->second;
-    fs->setDynamic();
-  } else if (!m_parent.empty()) {
-    if (derivesFromRedeclaring() == Derivation::Redeclaring) {
-      const ClassScopePtrVec &parents = ar->findRedeclaredClasses(m_parent);
-      for (ClassScopePtr cl: parents) {
-        cl->setDynamic(ar, name);
-      }
-    } else {
-      ClassScopePtr parent = ar->findClass(m_parent);
-      if (parent) {
-        parent->setDynamic(ar, name);
-      }
-    }
-  }
-}
-
 void ClassScope::setSystem() {
   setAttribute(ClassScope::System);
-  m_volatile = m_dynamic = false;
-  for (FunctionScopePtrVec::const_iterator iter =
-         m_functionsVec.begin(); iter != m_functionsVec.end(); ++iter) {
-    (*iter)->setSystem();
+  m_volatile = false;
+  for (const auto& func : m_functionsVec) {
+    func->setSystem();
   }
 }
 
@@ -1019,14 +922,14 @@ bool ClassScope::needLazyStaticInitializer() {
     getConstants()->hasDynamic();
 }
 
-bool ClassScope::hasConst(const string &name) const {
+bool ClassScope::hasConst(const std::string &name) const {
   const Symbol *sym = m_constants->getSymbol(name);
   assert(!sym || sym->isPresent());
   return sym;
 }
 
 Symbol *ClassScope::findProperty(ClassScopePtr &cls,
-                                 const string &name,
+                                 const std::string &name,
                                  AnalysisResultConstPtr ar) {
   return getVariables()->findProperty(cls, name, ar);
 }
@@ -1069,10 +972,10 @@ ClassScopePtr ClassScope::getParentScope(AnalysisResultConstPtr ar) const {
 
 void ClassScope::serialize(JSON::CodeError::OutputStream &out) const {
   JSON::CodeError::MapStream ms(out);
-  std::map<string, int> propMap;
-  std::set<string> names;
+  std::map<std::string, int> propMap;
+  std::set<std::string> names;
   m_variables->getNames(names);
-  for (const string& name: names) {
+  for (auto const& name: names) {
     int pm = 0;
     if (m_variables->isPublic(name)) pm |= ClassScope::Public;
     else if (m_variables->isPrivate(name)) pm |= ClassScope::Private;
@@ -1081,8 +984,6 @@ void ClassScope::serialize(JSON::CodeError::OutputStream &out) const {
     propMap[name] = pm;
   }
   names.clear();
-  vector<string> cnames;
-  m_constants->getSymbols(cnames);
 
   // What's a mod again?
   ms.add("attributes", m_attribute)
@@ -1092,32 +993,18 @@ void ClassScope::serialize(JSON::CodeError::OutputStream &out) const {
     .add("properties", propMap)
     .add("functions", m_functions);
 
-  ms.add("consts");
-
-  JSON::CodeError::MapStream cs(out);
-  for (const string& cname: cnames) {
-    TypePtr type = m_constants->getType(cname);
-    if (!type) {
-      cs.add(cname, -1);
-    } else if (type->isSpecificObject()) {
-      cs.add(cname, type->getName());
-    } else {
-      cs.add(cname, type->getKindOf());
-    }
-  }
-  cs.done();
   ms.done();
 }
 
-static inline string GetDocName(AnalysisResultPtr ar,
-                                BlockScopeRawPtr scope,
-                                const string &name) {
+static inline std::string GetDocName(AnalysisResultPtr ar,
+                                     BlockScopeRawPtr scope,
+                                     const std::string &name) {
   ClassScopePtr c(ar->findClass(name));
   if (c && c->isRedeclaring()) {
     ClassScopePtr exact(scope->findExactClass(c));
     return exact ?
       exact->getDocName() :
-      c->getOriginalName(); // if we can't tell which redec class,
+      c->getScopeName(); // if we can't tell which redec class,
                             // then don't use the redec name
   }
   // TODO: pick a better way of signaling unknown?
@@ -1128,7 +1015,7 @@ class GetDocNameFunctor {
 public:
   GetDocNameFunctor(AnalysisResultPtr ar, BlockScopeRawPtr scope) :
     m_ar(ar), m_scope(scope) {}
-  inline string operator()(const string &name) const {
+  std::string operator()(const std::string &name) const {
     return GetDocName(m_ar, m_scope, name);
   }
 private:
@@ -1153,9 +1040,9 @@ void ClassScope::serialize(JSON::DocTarget::OutputStream &out) const {
     out << GetDocName(out.analysisResult(), self, m_parent);
   }
 
-  vector<string> ifaces;
+  std::vector<std::string> ifaces;
   getInterfaces(out.analysisResult(), ifaces, true);
-  vector<string> origIfaces;
+  std::vector<std::string> origIfaces;
   origIfaces.resize(ifaces.size());
   transform(ifaces.begin(), ifaces.end(), origIfaces.begin(),
             GetDocNameFunctor(out.analysisResult(), self));
@@ -1176,15 +1063,14 @@ void ClassScope::serialize(JSON::DocTarget::OutputStream &out) const {
   }
   ms.add("modifiers", mods);
 
-  FunctionScopePtrVec funcs;
+  std::vector<FunctionScopePtr> funcs;
   getFunctionsFlattened(0, funcs);
   ms.add("methods", funcs);
 
-  vector<Symbol*> rawSymbols;
+  std::vector<Symbol*> rawSymbols;
   getVariables()->getSymbols(rawSymbols, true);
-  vector<SymClassVarWrapper> wrappedSymbols;
-  for (vector<Symbol*>::iterator it = rawSymbols.begin();
-       it != rawSymbols.end(); ++it) {
+  std::vector<SymClassVarWrapper> wrappedSymbols;
+  for (auto it = rawSymbols.begin(); it != rawSymbols.end(); ++it) {
     wrappedSymbols.push_back(SymClassVarWrapper(*it));
   }
   ms.add("properties", wrappedSymbols);
@@ -1194,7 +1080,7 @@ void ClassScope::serialize(JSON::DocTarget::OutputStream &out) const {
   ms.done();
 }
 
-bool ClassScope::hasProperty(const string &name) const {
+bool ClassScope::hasProperty(const std::string &name) const {
   const Symbol *sym = m_variables->getSymbol(name);
   assert(!sym || sym->isPresent());
   return sym;
@@ -1206,45 +1092,27 @@ void ClassScope::setRedeclaring(AnalysisResultConstPtr ar, int redecId) {
   }
   m_redeclaring = redecId;
   setVolatile(); // redeclared class is also volatile
-  for (FunctionScopePtrVec::const_iterator iter =
-         m_functionsVec.begin(); iter != m_functionsVec.end(); ++iter) {
-    (*iter)->setDynamic();
-  }
 }
 
 bool ClassScope::addFunction(AnalysisResultConstPtr ar,
                              FileScopeRawPtr fileScope,
                              FunctionScopePtr funcScope) {
-  FunctionScopePtr &func = m_functions[funcScope->getName()];
+  FunctionScopePtr &func = m_functions[funcScope->getScopeName()];
   if (func) {
     func->getStmt()->parseTimeFatal(fileScope,
                                     Compiler::DeclaredMethodTwice,
                                     "Redeclared method %s::%s",
-                                    getOriginalName().c_str(),
-                                    func->getOriginalName().c_str());
+                                    getScopeName().c_str(),
+                                    func->getScopeName().c_str());
   }
   func = funcScope;
   m_functionsVec.push_back(funcScope);
   return true;
 }
 
-bool ClassScope::canSkipCreateMethod(AnalysisResultConstPtr ar) const {
-  // create() is not necessary if
-  // 1) not inheriting from any class
-  // 2) no constructor defined (__construct or class name)
-  // 3) no init() defined
-
-  if (derivesFromRedeclaring() == Derivation::Redeclaring ||
-      getAttribute(HasConstructor) ||
-      getAttribute(ClassNameConstructor) ||
-      needsInitMethod()) {
-    return false;
-  }
-
-  if (!m_parent.empty()) {
-    ClassScopePtr parent = getParentScope(ar);
-    if (parent) return parent->canSkipCreateMethod(ar);
-  }
-
-  return true;
+ModifierExpressionPtr
+ClassScope::setModifiers(ModifierExpressionPtr modifiers) {
+  ModifierExpressionPtr oldModifiers = m_modifiers;
+  m_modifiers = modifiers;
+  return oldModifiers;
 }

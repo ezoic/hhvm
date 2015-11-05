@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,6 +17,7 @@
 
 #include "hphp/runtime/vm/jit/mc-generator.h"
 
+#include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-inlining.h"
@@ -112,31 +113,31 @@ void asyncFunctionReturn(IRGS& env, SSATmp* retval) {
   gen(env, StAsyncArResult, fp(env), retval);
   gen(env, ABCUnblock, parentChain);
 
-  spillStack(env);
-
   // Must load this before FreeActRec, which adjusts fp(env).
   auto const resumableObj = gen(env, LdResumableArObj, fp(env));
 
   gen(env, FreeActRec, fp(env));
   gen(env, DecRef, resumableObj);
 
+  auto const spAdjust = offsetFromIRSP(env, BCSPOffset{0});
   gen(
     env,
     AsyncRetCtrl,
-    IRSPOffsetData { offsetFromIRSP(env, BCSPOffset{0}) },
+    RetCtrlData { spAdjust, false },
     sp(env),
     fp(env)
   );
 }
 
 void generatorReturn(IRGS& env, SSATmp* retval) {
-  // Clear generator's key and value.
+  // Clear generator's key.
   auto const oldKey = gen(env, LdContArKey, TCell, fp(env));
   gen(env, StContArKey, fp(env), cns(env, TInitNull));
   gen(env, DecRef, oldKey);
 
+  // Populate the generator's value with retval to support `getReturn`
   auto const oldValue = gen(env, LdContArValue, TCell, fp(env));
-  gen(env, StContArValue, fp(env), cns(env, TInitNull));
+  gen(env, StContArValue, fp(env), retval);
   gen(env, DecRef, oldValue);
 
   gen(env,
@@ -147,7 +148,6 @@ void generatorReturn(IRGS& env, SSATmp* retval) {
   // Push return value of next()/send()/raise().
   push(env, cns(env, TInitNull));
 
-  spillStack(env);
   gen(
     env,
     RetCtrl,

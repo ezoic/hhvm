@@ -18,7 +18,7 @@
 
 #include <utility>
 
-#include "hphp/runtime/base/smart-containers.h"
+#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/base/type-array.h"
@@ -40,13 +40,16 @@ class AutoloadHandler final : public RequestEventHandler {
   struct HandlerBundle {
     HandlerBundle() = delete;
     HandlerBundle(const Variant& handler,
-                  smart::unique_ptr<CufIter>& cufIter) :
+                  req::unique_ptr<CufIter>& cufIter) :
       m_handler(handler) {
       m_cufIter = std::move(cufIter);
     }
-
+    template<class F> void scan(F& mark) const {
+      mark(m_handler);
+      if (m_cufIter) m_cufIter->scan(mark);
+    }
     Variant m_handler; // used to respond to f_spl_autoload_functions
-    smart::unique_ptr<CufIter> m_cufIter; // used to invoke handlers
+    req::unique_ptr<CufIter> m_cufIter; // used to invoke handlers
   };
 
   struct CompareBundles {
@@ -141,11 +144,23 @@ private:
 
   static String getSignature(const Variant& handler);
 
+public:
+  void vscan(IMarker& mark) const override {
+    mark(m_map);
+    mark(m_map_root);
+    mark(m_loading);
+    // handlers are only valid after requestInit. need guard?
+    for (auto& bundle : m_handlers) {
+      bundle.scan(mark);
+    }
+  }
+
+private:
   Array m_map;
   String m_map_root;
   bool m_spl_stack_inited;
   union {
-    smart::deque<HandlerBundle> m_handlers;
+    req::deque<HandlerBundle> m_handlers;
   };
   Array m_loading;
 };

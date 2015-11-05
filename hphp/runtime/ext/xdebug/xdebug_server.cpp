@@ -17,12 +17,13 @@
 
 #include "hphp/runtime/ext/xdebug/xdebug_server.h"
 
+#include "hphp/runtime/ext/xdebug/hook.h"
 #include "hphp/runtime/ext/xdebug/xdebug_command.h"
-#include "hphp/runtime/ext/xdebug/xdebug_hook_handler.h"
 #include "hphp/runtime/ext/xdebug/xdebug_utils.h"
 
 #include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/debugger/debugger_hook_handler.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/util/timer.h"
 #include "hphp/util/network.h"
@@ -105,14 +106,16 @@ XDebugServer::XDebugServer(Mode mode)
   }
 
   // Create the socket
-  m_socket = createSocket(hostname, port);
-  if (m_socket == -1) {
+  auto const status = createSocket(hostname, port);
+  if (status == -1) {
     log("E: Could not connect to client. :-(\n");
     goto failure;
-  } else if (m_socket == -2) {
+  } else if (status == -2) {
     log("E: Time-out connecting to client. :-(\n");
     goto failure;
   }
+
+  assert(status == 0);
 
   // Get the requested handler
   log("I: Connected to client. :-)\n");
@@ -161,58 +164,58 @@ bool XDebugServer::lookupHostname(const char* hostname, struct in_addr& in) {
 
 int XDebugServer::createSocket(const char* hostname, int port) {
   // Grab the address info
-  struct sockaddr sa;
-  struct sockaddr_in address;
+  sockaddr sa;
+  sockaddr_in address;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons((unsigned short) port);
   lookupHostname(hostname, address.sin_addr);
 
   // Create the socket
-  int sockfd = socket(address.sin_family, SOCK_STREAM, 0);
-  if (sockfd == -1) {
-    printf("create_debugger_socket(\"%s\", %d) socket: %s\n",
-           hostname, port, strerror(errno));
+  auto const sockfd = socket(address.sin_family, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    log("create_debugger_socket(\"%s\", %d) socket: %s\n",
+        hostname, port, folly::errnoStr(errno).c_str());
     return -1;
   }
 
-  // Put socket in non-blocking mode so we can use select for timeouts
-  struct timeval timeout;
-  double timeout_sec = XDEBUG_GLOBAL(RemoteTimeout);
-  timeout.tv_sec = (int) timeout_sec;
-  timeout.tv_usec = (timeout_sec - (double) timeout.tv_sec) * 1.0e6;
+  m_socket = sockfd;
+
+  // Put socket in non-blocking mode so we can use poll() for timeouts.
   fcntl(sockfd, F_SETFL, O_NONBLOCK);
 
-  // Do the connect
-  int status = connect(sockfd, (struct sockaddr*) &address, sizeof(address));
+  // Do the connect.
+  auto const status = connect(sockfd, (sockaddr*)(&address), sizeof(address));
   if (status < 0) {
     if (errno != EINPROGRESS) {
       return -1;
     }
 
-    // Loop until request has completed or there is an error
-    while (true) {
-      fd_set rset, wset, eset;
-      FD_ZERO(&rset);
-      FD_SET(sockfd, &rset);
-      FD_ZERO(&wset);
-      FD_SET(sockfd, &wset);
-      FD_ZERO(&eset);
-      FD_SET(sockfd, &eset);
+    double timeout_sec = XDEBUG_GLOBAL(RemoteTimeout);
 
-      // Wait for a socket event. If we continue due to a timeout, return -2
-      // If we exited due to an error, return -1. If the descriptor is ready,
-      // we're done.
-      if (select(sockfd + 1, &rset, &wset, &eset, &timeout) == 0) {
-        return -2;
-      } else if (FD_ISSET(sockfd, &eset)) {
-        return -1;
-      } else if (FD_ISSET(sockfd, &wset) || FD_ISSET(sockfd, &rset)) {
-        break;
-      }
+    // Loop until request has completed or there is an error.
+    while (true) {
+      pollfd pollfd;
+      pollfd.fd = sockfd;
+      pollfd.events = POLLIN | POLLOUT;
+      pollfd.revents = 0;
+
+      // Wait for a socket event.
+      auto const status = poll(&pollfd, 1, (int)(timeout_sec * 1000.0));
+
+      // Timeout.
+      if (status == 0) return -2;
+      // Error.
+      if (status == -1) return -1;
+
+      // Error or hang-up.
+      if ((pollfd.revents & POLLERR) || (pollfd.revents & POLLHUP)) return -1;
+
+      // Success.
+      if ((pollfd.revents & POLLIN) || (pollfd.revents & POLLOUT)) break;
     }
 
-    // Ensure we're actually connected
+    // Ensure we're actually connected.
     socklen_t sa_size = sizeof(sa);
     if (getpeername(sockfd, &sa, &sa_size) == -1) {
       return -1;
@@ -223,7 +226,7 @@ int XDebugServer::createSocket(const char* hostname, int port) {
   fcntl(sockfd, F_SETFL, 0);
   long optval = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
-  return sockfd;
+  return 0;
 }
 
 void XDebugServer::destroySocket() {
@@ -317,7 +320,7 @@ void XDebugServer::pollSocketLoop() {
       always_assert(old == nullptr);
 
       // Force request thread to run in the interpreter, and hit
-      // XDebugHookHandler::onOpcode().
+      // XDebugHook::onOpcode().
       m_requestThread->m_reqInjectionData.setDebuggerIntr(true);
       m_requestThread->m_reqInjectionData.setFlag(DebuggerSignalFlag);
     } catch (const XDebugExn&) {
@@ -357,7 +360,7 @@ void XDebugServer::onRequestInit() {
 
   // Need to turn on debugging regardless of the remote mode in order to
   // capture exceptions/errors
-  if (!DebugHookHandler::attach<XDebugHookHandler>()) {
+  if (!DebuggerHook::attach<XDebugHook>()) {
     raise_warning("Could not attach xdebug remote debugger to the current "
                   "thread. A debugger is already attached.");
     return;
@@ -576,25 +579,22 @@ void XDebugServer::deinitDbgp() {
   }
 
   // Free the input buffer & the last command
-  smart_free(m_buffer);
+  req::free(m_buffer);
   delete m_lastCommand;
 }
 
 void XDebugServer::sendMessage(xdebug_xml_node& xml) {
-  // Convert xml to an xdebug_str.
-  xdebug_str xml_message = {0, 0, nullptr};
-  xdebug_xml_return_node(&xml, &xml_message);
-  size_t msg_len = xml_message.l + sizeof(XML_MSG_HEADER) - 1;
+  auto const message = xdebug_xml_return_node(&xml);
+  auto const message_len = message.size() + sizeof(XML_MSG_HEADER) - 1;
 
-  // Log the message
-  log("-> %s\n\n", xml_message.d);
+  log("-> %s\n\n", message.data());
   logFlush();
 
   StringBuffer buf;
-  buf.append(static_cast<int64_t>(msg_len));
+  buf.append(static_cast<int64_t>(message_len));
   buf.append('\0');
   buf.append(XML_MSG_HEADER);
-  buf.append(xml_message.d);
+  buf.append(message);
   buf.append('\0');
 
   write(m_socket, buf.data(), buf.size());
@@ -764,7 +764,7 @@ bool XDebugServer::readInput() {
       m_bufferSize = (m_bufferSize == 0) ?
         INPUT_BUFFER_INIT_SIZE : m_bufferSize * INPUT_BUFFER_EXPANSION;
       bytes_left = m_bufferSize - bytes_read;
-      m_buffer = (char*) smart_realloc(m_buffer, m_bufferSize);
+      m_buffer = (char*) req::realloc(m_buffer, m_bufferSize);
     }
 
     // Read into the buffer
@@ -815,7 +815,7 @@ void XDebugServer::parseInput(folly::StringPiece in, String& cmd, Array& args) {
   if (ptr != nullptr) {
     size_t size = ptr - in.data();
     cmd = String::attach(StringData::Make(in.data(), size, CopyString));
-  } else if (in[0] != '\0') {
+  } else if (!in.empty() && in[0] != '\0') {
     // There are no spaces, the entire string is the command
     cmd = String::attach(StringData::Make(in.data(), CopyString));
     return;

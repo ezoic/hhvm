@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -19,8 +19,8 @@
 #define incl_HPHP_EXT_ASIO_GEN_MAP_WAIT_HANDLE_H_
 
 #include "hphp/runtime/ext/extension.h"
-#include "hphp/runtime/ext/ext_collections.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/ext/collections/ext_collections-idl.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/ext/asio/ext_waitable-wait-handle.h"
 
 namespace HPHP {
@@ -62,7 +62,7 @@ class c_GenMapWaitHandle final : public c_WaitableWaitHandle {
                   c_WaitableWaitHandle* child);
 
   Object m_exception;
-  SmartPtr<c_Map> m_deps;
+  req::ptr<c_Map> m_deps;
   ssize_t m_iterPos;
   AsioBlockable m_blockable;
 

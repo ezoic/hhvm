@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -7,8 +7,6 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *
  *)
-
-open Utils
 
 external get_embedded_hhi_data : string -> string option =
   "get_embedded_hhi_data"
@@ -29,7 +27,7 @@ let touch () =
  * handling in general, really). Running the server as root is likely to be a
  * security risk. Be careful. *)
 let extract data =
-  let tmpdir = Path.make (Tmp.temp_dir "hhi") in
+  let tmpdir = Path.make (Tmp.temp_dir GlobalConfig.tmp_dir "hhi") in
   let oc = Unix.open_process_out ("tar xzC " ^ (Path.to_string tmpdir)) in
   output_string oc data;
   flush oc;
@@ -38,7 +36,7 @@ let extract data =
   tmpdir
 
 let extract_embedded () =
-  opt_map extract (get_embedded_hhi_data Sys.executable_name)
+  Option.map (get_embedded_hhi_data Sys.executable_name) extract
 
 (* Look for the hhi.tar.gz in the place where it normally resides, so that we
  * support debugging binaries that don't have the section embedded, such as
@@ -48,10 +46,22 @@ let extract_external () =
     Path.concat (Path.dirname Path.executable_name) "/../hhi.tar.gz" in
   if Path.file_exists path then Some (extract (Path.cat path)) else None
 
+let extract_win32_res () =
+  match Hhi_win32res.read_index () with
+  | None -> None
+  | Some idx ->
+    let tmpdir = Path.make (Tmp.temp_dir GlobalConfig.tmp_dir "hhi") in
+    Hhi_win32res.dump_files tmpdir idx;
+    touch_root tmpdir;
+    Some tmpdir
+
 let get_hhi_root_impl () =
-  match extract_embedded () with
-  | Some path -> Some path
-  | None -> extract_external ()
+  if Sys.win32 then
+    extract_win32_res ()
+  else
+    match extract_embedded () with
+    | Some path -> Some path
+    | None -> extract_external ()
 
 (* We want this to be idempotent so that later code can check if a given file
  * came from the hhi unarchive directory or not, to provide better error
@@ -64,7 +74,7 @@ let get_hhi_root () =
       match r with
       | None ->
           print_endline "Could not locate hhi files";
-          exit 1
+          Exit_status.(exit Missing_hhi)
       | Some r ->
           root := Some r;
           Relative_path.set_path_prefix Relative_path.Hhi r;

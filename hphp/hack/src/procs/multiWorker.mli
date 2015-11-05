@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -11,7 +11,7 @@
 (* The protocol for a next function is to return a list of elements.
  * It will be called repeatedly until it returns an empty list.
  *)
-type 'a nextlist = 
+type 'a nextlist =
   unit -> 'a list
 
 val call :
@@ -19,28 +19,22 @@ val call :
   job:('b -> 'a list -> 'b) ->
   merge:('b -> 'b -> 'b) -> neutral:'b ->
   next:'a nextlist ->
- 'b
+  'b
 
-module type Proc = sig
-  type env
-  type input
-  type output
+(* Variant of the above for dynamic workloads. The protocol for a next function
+   is to return either None (indicating that workers should wait until more
+   elements are added to the workload) or Some list of elements. It will be
+   called repeatedly until it returns Some empty list.  *)
+type 'a bucket =
+| Job of 'a list
+| Wait
 
-  val neutral: output
-  val job: env -> output -> input list -> output
-  val merge: output -> output -> output
-  val make_next: input list -> (unit -> input list)
-end
+type 'a nextlist_dynamic =
+  unit -> 'a bucket
 
-module type S = sig
-  type env
-  type input
-  type output
-
-  val run: Worker.t list option -> env -> input list -> output
-end
-
-module Make: functor (Proc: Proc) -> S 
-with type env = Proc.env
-with type input = Proc.input 
-with type output = Proc.output
+val call_dynamic :
+  Worker.t list option ->
+  job:('b -> 'a list -> 'b) ->
+  merge:('b -> 'b -> 'b) -> neutral:'b ->
+  next:'a nextlist_dynamic ->
+  'b

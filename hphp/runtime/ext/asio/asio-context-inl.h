@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -23,14 +23,14 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 template <class TWaitHandle>
-uint32_t AsioContext::registerTo(smart::vector<TWaitHandle*>& vec,
+uint32_t AsioContext::registerTo(req::vector<TWaitHandle*>& vec,
                                  TWaitHandle* wh) {
   vec.push_back(wh);
   return vec.size() - 1;
 }
 
 template <class TWaitHandle>
-void AsioContext::unregisterFrom(smart::vector<TWaitHandle*>& vec,
+void AsioContext::unregisterFrom(req::vector<TWaitHandle*>& vec,
                                  uint32_t idx) {
   assert(idx < vec.size());
   if (idx != vec.size() - 1) {

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -38,7 +38,7 @@ using namespace HPHP;
 
 ConstantExpression::ConstantExpression
 (EXPRESSION_CONSTRUCTOR_PARAMETERS,
- const string &name, bool hadBackslash, const string &docComment)
+ const std::string &name, bool hadBackslash, const std::string &docComment)
   : Expression(EXPRESSION_CONSTRUCTOR_PARAMETER_VALUES(ConstantExpression)),
     m_name(name), m_origName(name), m_hadBackslash(hadBackslash),
     m_docComment(docComment), m_valid(false), m_dynamic(false),
@@ -59,7 +59,7 @@ ExpressionPtr ConstantExpression::clone() {
 
 bool ConstantExpression::isScalar() const {
   if (m_name == "INF" || m_name == "NAN") return true;
-  string lower = toLower(m_name);
+  auto const lower = toLower(m_name);
   return lower == "true" || lower == "false" || lower == "null";
 }
 
@@ -68,12 +68,12 @@ bool ConstantExpression::isLiteralNull() const {
 }
 
 bool ConstantExpression::isNull() const {
-  string lower = toLower(m_name);
+  auto const lower = toLower(m_name);
   return (lower == "null");
 }
 
 bool ConstantExpression::isBoolean() const {
-  string lower = toLower(m_name);
+  auto const lower = toLower(m_name);
   return (lower == "true" || lower == "false");
 }
 
@@ -82,7 +82,7 @@ bool ConstantExpression::isDouble() const {
 }
 
 bool ConstantExpression::getBooleanValue() const {
-  string lower = toLower(m_name);
+  auto const lower = toLower(m_name);
   assert(lower == "true" || lower == "false");
   return lower == "true";
 }
@@ -99,16 +99,6 @@ bool ConstantExpression::getScalarValue(Variant &value) {
     value.unset();
   }
   return true;
-}
-
-unsigned ConstantExpression::getCanonHash() const {
-  strhash_t val = hash_string_i_unsafe(m_name.c_str(), m_name.size());
-  return static_cast<unsigned>(val);
-}
-
-bool ConstantExpression::canonCompare(ExpressionPtr e) const {
-  return Expression::canonCompare(e) &&
-    m_name == static_cast<ConstantExpression*>(e.get())->m_name;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -166,7 +156,7 @@ ExpressionPtr ConstantExpression::preOptimize(AnalysisResultConstPtr ar) {
     }
     if (!sym) break;
     if (!sym->isSystem()) BlockScope::s_constMutex.lock();
-    ExpressionPtr value = dynamic_pointer_cast<Expression>(sym->getValue());
+    auto value = dynamic_pointer_cast<Expression>(sym->getValue());
     if (!sym->isSystem()) BlockScope::s_constMutex.unlock();
 
     if (!value || !value->isScalar()) {
@@ -199,17 +189,6 @@ ExpressionPtr ConstantExpression::preOptimize(AnalysisResultConstPtr ar) {
   }
 
   return ExpressionPtr();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ConstantExpression::outputCodeModel(CodeGenerator &cg) {
-  cg.printObjectHeader("SimpleConstantExpression", 2);
-  cg.printPropertyHeader("constantName");
-  cg.printValue(m_origName);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

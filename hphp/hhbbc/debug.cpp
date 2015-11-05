@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -46,14 +46,14 @@ void with_file(fs::path dir, borrowed_ptr<const php::Unit> u, Operation op) {
   fs::ofstream out(file);
   if (!out.is_open()) {
     throw std::runtime_error(std::string("failed to open file ") +
-      file.native());
+      file.string());
   }
 
   op(out);
 
   if (out.bad()) {
     throw std::runtime_error(std::string("couldn't write file ") +
-      file.native());
+      file.string());
   }
 }
 

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,7 +17,6 @@
 #ifndef incl_HPHP_TRANSLATOR_H_
 #define incl_HPHP_TRANSLATOR_H_
 
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/vm/debugger-hook.h"
@@ -334,11 +333,6 @@ int64_t getStackPopped(PC pc);
  */
 int64_t getStackPushed(PC pc);
 
-/*
- * Change in stack depth made by `ni'.
- */
-int getStackDelta(const NormalizedInstruction& ni);
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Control flow information.
@@ -470,7 +464,6 @@ enum OutTypeConstraints {
   OutBitOp,             // For BitAnd, BitOr, BitXor
   OutSetOp,             // For SetOpL
   OutIncDec,            // For IncDecL
-  OutStrlen,            // OpStrLen
   OutClassRef,          // KindOfClass
   OutFPushCufSafe,      // FPushCufSafe pushes two values of different
                         // types and an ActRec
@@ -508,6 +501,10 @@ enum Operands {
   StackN          = 1 << 15, // pop N cells from stack; n = imm[0].u_IVA
   BStackN         = 1 << 16, // consume N cells from stack for builtin call;
                              // n = imm[0].u_IVA
+  StackI          = 1 << 17, // consume 1 cell at index imm[0].u_IVA
+  MBase           = 1 << 18, // member operation base
+  IdxA            = 1 << 19, // consume 1 A at idx imm[0].u_IVA, preserving an
+                             // optional C on top of it
   StackTop2 = Stack1 | Stack2,
   StackTop3 = Stack1 | Stack2 | Stack3,
 };
@@ -527,7 +524,6 @@ struct InstrInfo {
   InstrFlags::Operands in;
   InstrFlags::Operands out;
   InstrFlags::OutTypeConstraints type; // How are outputs related to inputs?
-  int numPushed;
 };
 
 /*
@@ -601,7 +597,7 @@ const Func* lookupImmutableCtor(const Class* cls, const Class* ctx);
 /*
  * Return true if type is passed in/out of C++ as String&/Array&/Object&.
  */
-inline bool isSmartPtrRef(MaybeDataType t) {
+inline bool isReqPtrRef(MaybeDataType t) {
   return t == KindOfString || t == KindOfStaticString ||
          t == KindOfArray || t == KindOfObject ||
          t == KindOfResource;
@@ -627,10 +623,8 @@ void translateInstr(
   IRGS&,
   const NormalizedInstruction&,
   bool checkOuterTypeOnly,
-  bool needsExitPlaceholder
+  bool firstInst
 );
-
-extern bool tc_dump();
 
 ///////////////////////////////////////////////////////////////////////////////
 }}

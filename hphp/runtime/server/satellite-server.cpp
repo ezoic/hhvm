@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -33,7 +33,11 @@ namespace HPHP {
 std::set<std::string> SatelliteServerInfo::InternalURLs;
 int SatelliteServerInfo::DanglingServerPort = 0;
 
-SatelliteServerInfo::SatelliteServerInfo(const IniSetting::Map& ini, Hdf hdf) {
+SatelliteServerInfo::SatelliteServerInfo(const IniSetting::Map& ini,
+                                         const Hdf& hdf,
+                                         const std::string& ini_key /* = "" */
+                                        ) {
+  m_name = hdf.exists() && !hdf.isEmpty() ? hdf.getName() : ini_key;
   m_name = hdf.getName();
   m_port = Config::GetUInt16(ini, hdf, "Port", 0, false);
   m_threadCount = Config::GetInt32(ini, hdf, "ThreadCount", 5, false);

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -15,8 +15,11 @@
 */
 
 #include "hphp/compiler/analysis/code_error.h"
+
+#include <fstream>
 #include <map>
 #include <vector>
+
 #include "hphp/compiler/analysis/file_scope.h"
 #include "hphp/compiler/parser/parser.h"
 #include "hphp/compiler/construct.h"
@@ -129,7 +132,7 @@ void ErrorInfo::serialize(JSON::CodeError::OutputStream &out) const {
 }
 
 void CodeErrors::serialize(JSON::CodeError::OutputStream &out) const {
-  vector<const char *> errorTexts = getErrorTexts();
+  auto errorTexts = getErrorTexts();
 
   unsigned int total = 0;
   for (unsigned int i = 0; i < m_errors.size(); i++) {

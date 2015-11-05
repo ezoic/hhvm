@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -28,7 +28,7 @@ namespace HPHP {
 
 namespace {
 inline bool isIntKey(const Cell* cell) {
-  return IS_INT_KEY_TYPE(cell->m_type);
+  return isIntKeyType(cell->m_type);
 }
 
 inline int64_t getIntKey(const Cell* cell) {
@@ -37,7 +37,7 @@ inline int64_t getIntKey(const Cell* cell) {
 }
 
 inline StringData* getStringKey(const Cell* cell) {
-  assert(IS_STRING_TYPE(cell->m_type));
+  assert(isStringType(cell->m_type));
   return cell->m_data.pstr;
 }
 }
@@ -143,7 +143,7 @@ inline Variant ArrayData::getKey(ssize_t pos) const {
 ///////////////////////////////////////////////////////////////////////////////
 
 inline void ArrayData::release() noexcept {
-  assert(isArrayKind(m_hdr.kind));
+  assert(hasExactlyOneRef());
   return g_array_funcs.release[kind()](this);
 }
 
@@ -320,8 +320,10 @@ inline ArrayData* ArrayData::copyWithStrongIterators() const {
   return g_array_funcs.copyWithStrongIterators[kind()](this);
 }
 
-inline ArrayData* ArrayData::nonSmartCopy() const {
-  return g_array_funcs.nonSmartCopy[kind()](this);
+inline ArrayData* ArrayData::copyStatic() const {
+  auto ret = g_array_funcs.copyStatic[kind()](this);
+  assert(ret != this && ret->isStatic());
+  return ret;
 }
 
 inline ArrayData* ArrayData::pop(Variant& value) {

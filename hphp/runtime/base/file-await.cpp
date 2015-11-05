@@ -2,6 +2,8 @@
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/ext/asio/ext_static-wait-handle.h"
 
+#include "hphp/util/compatibility.h"
+
 namespace HPHP {
 /////////////////////////////////////////////////////////////////////////////
 
@@ -23,15 +25,15 @@ FileAwait::FileAwait(int fd, uint16_t events, double timeout) {
   assert(fd >= 0);
   assert(events & FileEventHandler::READ_WRITE);
 
-  m_file = std::make_shared<FileEventHandler>
-    (s_asio_event_base.get(), fd, this);
+  auto asio_event_base = getSingleton<AsioEventBase>();
+  m_file = std::make_shared<FileEventHandler>(asio_event_base.get(), fd, this);
   m_file->registerHandler(events);
 
   int64_t timeout_ms = timeout * 1000.0;
   if (timeout_ms > 0) {
-    m_timeout = std::make_shared<FileTimeoutHandler>
-      (s_asio_event_base.get(), this);
-    s_asio_event_base->runInEventBaseThread([this,timeout_ms]{
+    m_timeout = std::make_shared<FileTimeoutHandler>(asio_event_base.get(),
+                                                     this);
+    asio_event_base->runInEventBaseThread([this,timeout_ms] {
       if (m_timeout) {
         m_timeout->scheduleTimeout(timeout_ms);
       }
@@ -52,11 +54,10 @@ FileAwait::~FileAwait() {
     // before the timeout cancels
     m_timeout->m_fileAwait = nullptr;
 
-    std::shared_ptr<FileTimeoutHandler> to = m_timeout;
-    s_asio_event_base->runInEventBaseThread([to]{
-      to.get()->cancelTimeout();
+    auto to = std::move(m_timeout);
+    getSingleton<AsioEventBase>()->runInEventBaseThread([to] {
+      to->cancelTimeout();
     });
-    m_timeout.reset();
   }
 }
 
@@ -82,7 +83,7 @@ Object File::await(uint16_t events, double timeout) {
     Cell closedResult;
     closedResult.m_type = KindOfInt64;
     closedResult.m_data.num = FileAwait::CLOSED;
-    return c_StaticWaitHandle::CreateSucceeded(closedResult);
+    return Object{c_StaticWaitHandle::CreateSucceeded(closedResult)};
   }
   if (fd() < 0) {
     SystemLib::throwExceptionObject(
@@ -96,7 +97,7 @@ Object File::await(uint16_t events, double timeout) {
 
   auto ev = new FileAwait(fd(), events, timeout);
   try {
-    return ev->getWaitHandle();
+    return Object{ev->getWaitHandle()};
   } catch (...) {
     assert(false);
     ev->abandon();

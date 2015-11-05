@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,6 @@
 #define incl_HPHP_IP_BLOCK_MAP_H_
 
 #include "hphp/util/hdf.h"
-#include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include <netinet/in.h>
 
@@ -38,7 +37,7 @@ public:
                               int &significant_bits);
 
 public:
-  explicit IpBlockMap(const IniSetting::Map& ini, const Hdf& config);
+  IpBlockMap(const IniSetting::Map& ini, const Hdf& config);
 
   bool isBlocking(const std::string &command, const std::string &ip) const;
 

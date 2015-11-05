@@ -1,10 +1,10 @@
 <?hh
 
-<<ConsistentConstruct>>
+<<__ConsistentConstruct>>
 class C1 {}
 
 class C2 extends C1 {
-  <<UNSAFE_Construct>> // explicitly inconsistent with C1
+  <<__UNSAFE_Construct>> // explicitly inconsistent with C1
   public function __construct(A $a) {}
 }
 

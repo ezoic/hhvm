@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -54,9 +54,8 @@ bool HHVM_FUNCTION(function_exists, const String& function_name,
 }
 
 bool HHVM_FUNCTION(is_callable, const Variant& v, bool syntax /* = false */,
-                   VRefParam name /* = null */) {
-  return is_callable(v, syntax, name.isReferenced() ?
-                     name.wrapped().asTypedValue()->m_data.pref : nullptr);
+                   OutputArg name /* = null */) {
+  return is_callable(v, syntax, name.get());
 }
 
 Variant HHVM_FUNCTION(call_user_func, const Variant& function,
@@ -162,20 +161,32 @@ Array hhvm_get_frame_args(const ActRec* ar, int offset) {
   if (ar == nullptr) {
     return Array();
   }
-  int numParams = ar->m_func->numNonVariadicParams();
+  int numParams = ar->func()->numNonVariadicParams();
   int numArgs = ar->numArgs();
-
-  PackedArrayInit retInit(std::max(numArgs - offset, 0));
+  bool variadic = ar->func()->hasVariadicCaptureParam() &&
+    !(ar->func()->attrs() & AttrMayUseVV);
   auto local = reinterpret_cast<TypedValue*>(
     uintptr_t(ar) - sizeof(TypedValue)
   );
+  if (variadic && numArgs > numParams) {
+    auto arr = local - numParams;
+    if (arr->m_type == KindOfArray &&
+        arr->m_data.parr->isPacked()) {
+      numArgs = numParams + arr->m_data.parr->size();
+    } else {
+      numArgs = numParams;
+    }
+  }
   local -= offset;
+  PackedArrayInit retInit(std::max(numArgs - offset, 0));
   for (int i = offset; i < numArgs; ++i) {
     if (i < numParams) {
       // This corresponds to one of the function's formal parameters, so it's
       // on the stack.
       retInit.append(tvAsCVarRef(local));
       --local;
+    } else if (variadic) {
+      retInit.append(tvAsCVarRef(local).asCArrRef()[i - numParams]);
     } else {
       // This is not a formal parameter, so it's in the ExtraArgs.
       retInit.append(tvAsCVarRef(ar->getExtraArg(i - numParams)));

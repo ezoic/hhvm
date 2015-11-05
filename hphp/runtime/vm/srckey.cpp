@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -23,7 +23,7 @@
 namespace HPHP {
 
 std::string SrcKey::showInst() const {
-  return instrToString(reinterpret_cast<const Op*>(unit()->at(offset())));
+  return instrToString(unit()->at(offset()));
 }
 
 std::string show(SrcKey sk) {
@@ -43,15 +43,19 @@ std::string show(SrcKey sk) {
 
 std::string showShort(SrcKey sk) {
   if (!sk.valid()) return "<invalid SrcKey>";
-  return folly::format("{}(id {:#x})@{}{}",
-                       sk.func()->fullName()->data(), sk.funcID(),
-                       sk.offset(), sk.resumed() ? "r" : "").str();
+  return folly::format(
+    "{}(id {:#x})@{}{}",
+    sk.func()->fullName(),
+    sk.funcID(),
+    sk.offset(),
+    sk.resumed() ? "r" : ""
+  ).str();
 }
 
 void sktrace(SrcKey sk, const char *fmt, ...) {
   if (!Trace::enabled) return;
 
-  auto inst = instrToString((Op*)sk.unit()->at(sk.offset()));
+  auto inst = instrToString(sk.unit()->at(sk.offset()));
   Trace::trace("%s: %20s ", show(sk).c_str(), inst.c_str());
   va_list a;
   va_start(a, fmt);
@@ -70,7 +74,7 @@ std::string SrcKey::getSymbol() const {
   if (f->isPseudoMain()) {
     return folly::format(
       "{{pseudo-main}}::{}::line-{}",
-      u->filepath()->data(),
+      u->filepath(),
       u->getLineNumber(offset())
     ).str();
   }
@@ -78,8 +82,8 @@ std::string SrcKey::getSymbol() const {
   if (f->isMethod() && !f->cls()) {
     return folly::format(
       "{}::{}::line-{}",
-      f->preClass()->name()->data(),
-      f->name()->data(),
+      f->preClass()->name(),
+      f->name(),
       u->getLineNumber(offset())
     ).str();
   }
@@ -87,7 +91,7 @@ std::string SrcKey::getSymbol() const {
   // methods with a cls() and functions
   return folly::format(
     "{}::line-{}",
-    f->fullName()->data(),
+    f->fullName(),
     u->getLineNumber(offset())
   ).str();
 }

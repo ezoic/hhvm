@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -60,6 +60,7 @@ using namespace HPHP;
   Isset or empty expression
   Exit expression
   Instanceof expression
+  Anonymous class expression
 */
 static ListAssignment::RHSKind GetRHSKind(ExpressionPtr rhs) {
   switch (rhs->getKindOf()) {
@@ -77,14 +78,14 @@ static ListAssignment::RHSKind GetRHSKind(ExpressionPtr rhs) {
   case Construct::KindOfIncludeExpression:
   case Construct::KindOfYieldExpression:
   case Construct::KindOfAwaitExpression:
-  case Construct::KindOfQueryExpression:
+  case Construct::KindOfClassExpression:
     return ListAssignment::Regular;
 
   case Construct::KindOfListAssignment:
     return GetRHSKind(static_pointer_cast<ListAssignment>(rhs)->getArray());
 
   case Construct::KindOfUnaryOpExpression: {
-    UnaryOpExpressionPtr u(static_pointer_cast<UnaryOpExpression>(rhs));
+    auto u = static_pointer_cast<UnaryOpExpression>(rhs);
     switch (u->getOp()) {
       case '@':
         return GetRHSKind(u->getExpression());
@@ -103,7 +104,7 @@ static ListAssignment::RHSKind GetRHSKind(ExpressionPtr rhs) {
   }
 
   case Construct::KindOfBinaryOpExpression: {
-    BinaryOpExpressionPtr b(static_pointer_cast<BinaryOpExpression>(rhs));
+    auto b = static_pointer_cast<BinaryOpExpression>(rhs);
     if (b->isAssignmentOp() ||
         b->getOp() == '+' ||
         b->getOp() == T_COLLECTION) {
@@ -120,15 +121,6 @@ static ListAssignment::RHSKind GetRHSKind(ExpressionPtr rhs) {
   case Construct::KindOfParameterExpression:
   case Construct::KindOfModifierExpression:
   case Construct::KindOfUserAttribute:
-  case Construct::KindOfFromClause:
-  case Construct::KindOfLetClause:
-  case Construct::KindOfWhereClause:
-  case Construct::KindOfSelectClause:
-  case Construct::KindOfIntoClause:
-  case Construct::KindOfJoinClause:
-  case Construct::KindOfGroupClause:
-  case Construct::KindOfOrderbyClause:
-  case Construct::KindOfOrdering:
     always_assert(false);
 
   // non-arrays
@@ -150,24 +142,6 @@ static ListAssignment::RHSKind GetRHSKind(ExpressionPtr rhs) {
   always_assert(false);
 }
 
-static bool AssignmentCouldSet(ExpressionListPtr vars, ExpressionPtr var) {
-  for (int i = 0; i < vars->getCount(); i++) {
-    ExpressionPtr v = (*vars)[i];
-    if (!v) continue;
-    if (v->is(Construct::KindOfSimpleVariable) &&
-        v->canonCompare(var)) {
-      return true;
-    }
-    if (v->is(Construct::KindOfDynamicVariable)) return true;
-    if (v->is(Construct::KindOfListAssignment) &&
-        AssignmentCouldSet(static_pointer_cast<ListAssignment>(v)->
-                           getVariables(), var)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 ListAssignment::ListAssignment
 (EXPRESSION_CONSTRUCTOR_PARAMETERS,
  ExpressionListPtr variables, ExpressionPtr array, bool rhsFirst /* = false */)
@@ -179,9 +153,7 @@ ListAssignment::ListAssignment
   if (m_array) {
     m_rhsKind = GetRHSKind(m_array);
     if (m_array->is(KindOfSimpleVariable)) {
-      if (AssignmentCouldSet(m_variables, m_array)) {
-        m_array->setContext(LValue);
-      }
+      m_array->setContext(LValue);
     }
   }
 }
@@ -200,8 +172,7 @@ void ListAssignment::setLValue() {
       ExpressionPtr exp = (*m_variables)[i];
       if (exp) {
         if (exp->is(Construct::KindOfListAssignment)) {
-          ListAssignmentPtr sublist =
-            dynamic_pointer_cast<ListAssignment>(exp);
+          auto sublist = dynamic_pointer_cast<ListAssignment>(exp);
           sublist->setLValue();
         } else {
           // Magic contexts I took from assignment expression
@@ -268,22 +239,6 @@ void ListAssignment::setNthKid(int n, ConstructPtr cp) {
       assert(false);
       break;
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ListAssignment::outputCodeModel(CodeGenerator &cg) {
-  auto numProps = m_array != nullptr ? 3 : 2;
-  cg.printObjectHeader("ListAssignmentExpression", numProps);
-  cg.printPropertyHeader("variables");
-  cg.printExpressionVector(m_variables);
-  if (m_array != nullptr) {
-    cg.printPropertyHeader("expression");
-    m_array->outputCodeModel(cg);
-  }
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

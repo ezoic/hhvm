@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -35,22 +35,22 @@ public:
   ExpressionPtr preOptimize(AnalysisResultConstPtr ar) override;
   int getLocalEffects() const override { return NoEffect; }
 
-  unsigned getCanonHash() const override;
-  bool canonCompare(ExpressionPtr e) const override;
-
   bool containsDynamicConstant(AnalysisResultPtr ar) const override;
 
   const std::string &getConName() const { return m_varName; }
 
-  bool isValid() const { return m_valid; }
-  bool isDynamic() const;
-  bool hasClass() const { return m_defScope != 0; }
-  bool isColonColonClass() const { return m_varName == "class"; }
+  ClassScopeRawPtr getOriginalClassScope() const;
+
+  bool hasClass() const = delete;
+  bool isColonColonClass() const {
+    return (m_varName.size() == strlen("class")) &&
+           !strcasecmp(m_varName.c_str(), "class");
+  }
 private:
   std::string m_varName;
-  BlockScope *m_defScope;
-  bool m_valid;
   bool m_depsSet;
+  bool m_originalScopeSet;
+  BlockScopeRawPtr m_originalScope;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

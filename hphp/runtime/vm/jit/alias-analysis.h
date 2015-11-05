@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -65,6 +65,10 @@ struct AliasAnalysis {
    * memory location, primarily an assigned id.  There is also an inverse map
    * from id to the metadata structure.
    *
+   * Two different alias classes in this map should not alias each other.  If
+   * an alias class contains multiple locations (e.g., a range of stack slots,
+   * multiple frame locals), we need to use multiple bits in this map.
+   *
    * The keyed locations in this map take their canonical form.  You should use
    * canonicalize before doing lookups.
    */
@@ -72,10 +76,17 @@ struct AliasAnalysis {
   jit::vector<ALocMeta> locations_inv;
 
   /*
-   * Some pure store or load instructions affect ranges of stack slots.  If
-   * we've assigned all of them ids, they'll have an entry in this map.
+   * If an AStack covers multiple locations, it will have an entry in this
+   * map. It is OK if not all locations covered by the AStack are tracked. We
+   * only store the tracked subset here.
    */
   jit::hash_map<AliasClass,ALocBits,AliasClass::Hash> stack_ranges;
+
+  /*
+   * Similar to `stack_ranges', if an AFrame covers multiple locations, it will
+   * have an entry in this map.
+   */
+  jit::hash_map<AliasClass,ALocBits,AliasClass::Hash> local_sets;
 
   /*
    * Short-hand to find an alias class in the locations map, or get folly::none
@@ -117,7 +128,9 @@ struct AliasAnalysis {
    * contained in `acls'.  This function may conservatively return a smaller
    * set of bits: every bit that is set in the returned ALocBits is contained
    * in `acls', but there may be locations contained in `acls' that don't have
-   * a bit set in the returned vector.
+   * a bit set in the returned vector. As a consequence of this, any caller of
+   * expand() must produce correct (but potentially suboptimal) results if
+   * expand is hardcoded to always return an empty bitset.
    *
    * This should generally be used with AliasClasses that are exhaustive,
    * must-style information.  That is, AliasClasses that should be interpreted

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,17 +8,19 @@
  *
  *)
 
+open Core
+
 let go results output_json =
   if output_json
   then begin
     let results =
-      List.map AutocompleteService.autocomplete_result_to_json results
+      List.map results AutocompleteService.autocomplete_result_to_json
     in
-    print_endline (Hh_json.json_to_string (Hh_json.JList results))
+    print_endline (Hh_json.json_to_string (Hh_json.JSON_Array results))
   end else begin
-    List.iter begin fun res ->
+    List.iter results begin fun res ->
       let name = res.AutocompleteService.res_name in
       let ty = res.AutocompleteService.res_ty in
       print_endline (name^" "^ty)
-    end results
+    end
   end

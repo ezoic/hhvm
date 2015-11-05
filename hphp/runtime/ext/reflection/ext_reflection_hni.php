@@ -1369,6 +1369,10 @@ class ReflectionClass implements Reflector {
       (!$this->hasMethod('__clone') || $this->getMethod('__clone')->isPublic());
   }
 
+  public function isAnonymous(): bool {
+    return strpos($this->getName(), 'class@anonymous') === 0;
+  }
+
   /**
    * ( excerpt from http://docs.hhvm.com/manual/en/reflectionclass.getmethod.php )
    *
@@ -2257,13 +2261,24 @@ class ReflectionTypeConstant implements Reflector {
   }
 
   /**
-   * Gets the declaring class for the reflected type constant.
+   * Gets the declaring class for the reflected type constant. This is
+   * the most derived class in which the type constant is declared.
    *
    * @return ReflectionClass   A ReflectionClass object of the class that the
    *                           reflected type constant is part of.
    */
   public function getDeclaringClass() {
     return new ReflectionClass($this->getDeclaringClassname());
+  }
+
+  /**
+   * Gets the class for the reflected type constant.
+   *
+   * @return ReflectionClass   A ReflectionClass object of the class that the
+   *                           reflected type constant is part of.
+   */
+  public function getClass() {
+    return new ReflectionClass($this->getClassname());
   }
 
   public function __toString() {
@@ -2298,4 +2313,112 @@ class ReflectionTypeConstant implements Reflector {
 
   <<__Native>>
   private function getDeclaringClassname(): string;
+
+  <<__Native>>
+  private function getClassname(): string;
+
+  /* returns the shape containing the full type information for this
+   * type constant. The structure of this shape is specified in
+   * reflection.hhi. */
+  public function getTypeStructure() {
+    return HH\type_structure(
+      $this->getDeclaringClassname(),
+      $this->getName()
+    );
+  }
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// type aliases
+
+/** The ReflectionTypeAlias class reports information about a type
+ * alias.
+ */
+<<__NativeData('ReflectionTypeAliasHandle')>>
+class ReflectionTypeAlias implements Reflector {
+
+  private string $name = '';
+
+  /**
+   * Constructs a new ReflectionTypeAlias.
+   *
+   * @name      string  Name of the type alias.
+   */
+  final public function __construct(string $name) {
+    if (!$this->__init($name)) {
+      throw new ReflectionException(
+        "type alias {$name} does not exist");
+    }
+    $this->name = $name;
+  }
+
+  // helper for ctor
+  <<__Native>>
+  private function __init(string $name): bool;
+
+  /**
+   * Get the TypeStructure that contains the full type information of
+   * the assigned type.
+   *
+   * @return    array  The type structure of the type alias.
+   */
+  <<__Native>>
+  public function getTypeStructure(): array;
+
+  /**
+   * Gets all attributes
+   *
+   * @return  array<arraykey, array<int, mixed>>
+   */
+  <<__Native>>
+  final public function getAttributes(): array;
+
+  /**
+   * Returns all attributes with given key.
+   *
+   * @return  ?array<int, mixed>
+   */
+  final public function getAttribute(string $name) {
+    return hphp_array_idx($this->getAttributes(), $name, null);
+  }
+
+  /**
+   * Get the TypeStructure with type information resolved. Call at
+   * your own peril as non-hoisted classes might cause fatal.
+   *
+   * @return    array  The resolved type structure of the type alias.
+   */
+  public function getResolvedTypeStructure() {
+    return HH\type_structure($this->name);
+  }
+
+  /**
+   * Get the assigned type as a string.
+   *
+   * @return    string The assigned type.
+   */
+  <<__Native>>
+  public function getAssignedTypeText(): string;
+
+  /**
+   * Get the name of the type alias.
+   *
+   * @return    string  The name of the type alias
+   */
+  public function getName() {
+    return $name;
+  }
+
+  // Prevent cloning
+  final public function __clone() {
+    throw new BadMethodCallException(
+      'Trying to clone an uncloneable object of class ReflectionTypeAlias'
+    );
+  }
+
+  public function __toString() {
+    return "TypeAlias [ {$this->name} : {$this->getAssignedTypeText()} ]\n";
+  }
+
 }

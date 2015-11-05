@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,29 +8,39 @@
  *
  *)
 
+open Core
+
 let log_oc = ref None
 
-let init root =
+let enabled = ref true
+
+let disable () = enabled := false
+
+let init pids_file =
   assert (!log_oc = None);
   Sys_utils.with_umask 0o111 begin fun () ->
-    log_oc := Some (open_out (Lock.lock_name root "pids"))
+    let oc = open_out pids_file in
+    log_oc := Some oc;
+    Unix.(set_close_on_exec (descr_of_out_channel oc))
   end
 
 let log ?reason pid =
-  let reason = match reason with 
-    | None -> "unknown"
-    | Some s -> s in
-  match !log_oc with
-    | None -> failwith "Can't write pid to uninitialized pids log"
-    | Some oc -> Printf.fprintf oc "%d\t%s\n%!" pid reason
+  if !enabled
+  then
+    let reason = match reason with
+      | None -> "unknown"
+      | Some s -> s in
+    match !log_oc with
+      | None -> failwith "Can't write pid to uninitialized pids log"
+      | Some oc -> Printf.fprintf oc "%d\t%s\n%!" pid reason
 
 exception FailedToGetPids
 
-let get_pids root =
-  try 
-    let ic = open_in (Lock.lock_name root "pids") in
+let get_pids pids_file =
+  try
+    let ic = open_in pids_file in
     let results = ref [] in
-    begin try 
+    begin try
       while true do
         let row = input_line ic in
         if Str.string_match (Str.regexp "^\\([0-9]+\\)\t\\(.+\\)") row 0
@@ -42,5 +52,9 @@ let get_pids root =
     with End_of_file -> () end;
     close_in ic;
     List.rev !results
-  with Sys_error _ -> 
+  with Sys_error _ ->
     raise FailedToGetPids
+
+let close () =
+  Option.iter !log_oc ~f:close_out;
+  log_oc := None

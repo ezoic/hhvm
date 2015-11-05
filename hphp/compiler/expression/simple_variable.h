@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -39,7 +39,6 @@ public:
     return checkError || !m_this;
   }
 
-  bool canonCompare(ExpressionPtr e) const override;
   void setContext(Context context) override;
 
   const std::string &getName() const { return m_name;}
@@ -48,19 +47,15 @@ public:
   }
   Symbol *getSymbol() const { return m_sym; }
 
-  bool couldBeAliased() const;
-  bool canKill(bool unset) const;
   bool isHidden() const;
   bool checkUnused() const;
   bool getAlwaysStash() const { return m_alwaysStash; }
   void setAlwaysStash() { m_alwaysStash = true; }
   void updateSymbol(SimpleVariablePtr src);
-  void coalesce(SimpleVariablePtr other);
 private:
   std::string m_name;
   std::string m_docComment;
 
-  TypePtr m_superGlobalType;
   Symbol *m_sym;
   Symbol *m_originalSym;
 

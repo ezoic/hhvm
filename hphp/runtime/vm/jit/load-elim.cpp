@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -256,6 +256,10 @@ TrackedLoc* find_tracked(Local& env,
 Flags load(Local& env,
            const IRInstruction& inst,
            AliasClass acls) {
+  // Bail out early when the instruction is in a catch block.  We don't want to
+  // increase lifetimes of values because of cold paths.
+  if (inst.block()->hint() == Block::Hint::Unused) return FNone{};
+
   acls = canonicalize(acls);
 
   auto const meta = env.global.ainfo.find(acls);
@@ -340,6 +344,23 @@ Flags handle_general_effects(Local& env,
 
       if (tloc->knownType <= TBottom) {
         // i.e., !maybe(inst.typeParam()); fail check.
+        return FJmpTaken{};
+      }
+      if (tloc->knownValue != nullptr) {
+        return FReducible { tloc->knownValue, tloc->knownType, meta->index };
+      }
+    }
+    break;
+
+  case CheckInitMem:
+    {
+      auto const meta = env.global.ainfo.find(canonicalize(m.loads));
+      auto const tloc = find_tracked(env, inst, meta);
+      if (!tloc) break;
+      if (!tloc->knownType.maybe(TUninit)) {
+        return FJmpNext{};
+      }
+      if (tloc->knownType <= TUninit) {
         return FJmpTaken{};
       }
       if (tloc->knownValue != nullptr) {
@@ -637,7 +658,7 @@ void reduce_inst(Local& env, IRInstruction& inst, const FReducible& flags) {
   DEBUG_ONLY Opcode oldOp = inst.op();
   DEBUG_ONLY Opcode newOp;
 
-  auto const reduce_to = [&] (Opcode op, Type typeParam) {
+  auto const reduce_to = [&] (Opcode op, folly::Optional<Type> typeParam) {
     auto const taken = hasEdges(op) ? inst.taken() : nullptr;
     auto const newInst = env.global.unit.gen(
       op,
@@ -661,6 +682,10 @@ void reduce_inst(Local& env, IRInstruction& inst, const FReducible& flags) {
   case CheckStk:
   case CheckRefInner:
     reduce_to(CheckType, inst.typeParam());
+    break;
+
+  case CheckInitMem:
+    reduce_to(CheckInit, folly::none);
     break;
 
   case AssertLoc:
@@ -693,12 +718,16 @@ void optimize_inst(Local& env, IRInstruction& inst, Flags flags) {
              flags.knownType.toString(),
              resolved->toString());
 
-      env.global.unit.replace(
-        &inst,
-        AssertType,
-        flags.knownType,
-        resolved
-      );
+      if (resolved->type().subtypeOfAny(TGen, TCls)) {
+        env.global.unit.replace(
+          &inst,
+          AssertType,
+          flags.knownType,
+          resolved
+        );
+      } else {
+        env.global.unit.replace(&inst, Mov, resolved);
+      }
     },
 
     [&] (FReducible flags) { reduce_inst(env, inst, flags); },

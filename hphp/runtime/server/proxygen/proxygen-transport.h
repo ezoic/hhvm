@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -25,7 +25,7 @@
 #include "hphp/util/synchronizable.h"
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 #include <thrift/lib/cpp/async/TAsyncTransport.h>
-#include <thrift/lib/cpp/async/TAsyncTimeout.h>
+#include <folly/io/async/AsyncTimeout.h>
 #include <folly/IPAddress.h>
 
 namespace HPHP {
@@ -97,7 +97,7 @@ class PushTxnHandler;
 class ProxygenTransport : public Transport,
   public proxygen::HTTPTransactionHandler,
   public std::enable_shared_from_this<ProxygenTransport>,
-  public apache::thrift::async::TAsyncTimeout,
+  public folly::AsyncTimeout,
   public Synchronizable {
 public:
   explicit ProxygenTransport(ProxygenServer *server,

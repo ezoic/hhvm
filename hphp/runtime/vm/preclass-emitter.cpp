@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -137,8 +137,8 @@ bool PreClassEmitter::addAbstractConstant(const StringData* n,
   if (it != m_constMap.end()) {
     return false;
   }
-  PreClassEmitter::Const const_(n, typeConstraint, nullptr, nullptr, typeconst);
-  m_constMap.add(const_.name(), const_);
+  PreClassEmitter::Const cns(n, typeConstraint, nullptr, nullptr, typeconst);
+  m_constMap.add(cns.name(), cns);
   return true;
 }
 
@@ -146,13 +146,20 @@ bool PreClassEmitter::addConstant(const StringData* n,
                                   const StringData* typeConstraint,
                                   const TypedValue* val,
                                   const StringData* phpCode,
-                                  const bool typeconst) {
+                                  const bool typeconst,
+                                  const Array typeStructure) {
   ConstMap::Builder::const_iterator it = m_constMap.find(n);
   if (it != m_constMap.end()) {
     return false;
   }
-  PreClassEmitter::Const const_(n, typeConstraint, val, phpCode, typeconst);
-  m_constMap.add(const_.name(), const_);
+  TypedValue tvVal;
+  if (typeconst && !typeStructure.empty())  {
+    tvVal = make_tv<KindOfArray>(typeStructure.get());
+  } else {
+    tvVal = *val;
+  }
+  PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode, typeconst);
+  m_constMap.add(cns.name(), cns);
   return true;
 }
 

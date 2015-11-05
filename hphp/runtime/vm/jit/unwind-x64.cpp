@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -18,7 +18,9 @@
 
 #include <vector>
 #include <memory>
+#ifndef _MSC_VER
 #include <cxxabi.h>
+#endif
 #include <boost/mpl/identity.hpp>
 
 #include "hphp/runtime/base/rds.h"
@@ -37,7 +39,7 @@
 // or use the rtlinstallfunctiontablecallback
 // register_frame and deregister_frame do not exist
 // this is a temp solution that provides empty placeholders for linking
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(_MSC_VER)
 void __register_frame(const void*) {}
 void __deregister_frame(const void*) {}
 #else
@@ -146,8 +148,10 @@ bool install_catch_trace(_Unwind_Context* ctx, _Unwind_Exception* exn,
   // endCatchHelper can pass it to _Unwind_Resume when it's done.
   if (do_side_exit) {
     unwindRdsInfo->exn = nullptr;
+#ifndef _MSC_VER
     __cxxabiv1::__cxa_begin_catch(exn);
     __cxxabiv1::__cxa_end_catch();
+#endif
   } else {
     unwindRdsInfo->exn = exn;
   }
@@ -179,7 +183,6 @@ tc_unwind_personality(int version,
                       uint64_t exceptionClass,
                       _Unwind_Exception* exceptionObj,
                       _Unwind_Context* context) {
-  using namespace abi;
   // Exceptions thrown by g++-generated code will have the class "GNUCC++"
   // packed into a 64-bit int. libc++ has the class "CLNGC++". For now we
   // shouldn't be seeing exceptions from any other runtimes but this may
@@ -207,10 +210,14 @@ tc_unwind_personality(int version,
   if (Trace::moduleEnabled(TRACEMOD, 1)) {
     DEBUG_ONLY auto const* unwindType =
       (actions & _UA_SEARCH_PHASE) ? "search" : "cleanup";
+#ifndef _MSC_VER
     int status;
-    auto* exnType = __cxa_demangle(ti.name(), nullptr, nullptr, &status);
+    auto* exnType = abi::__cxa_demangle(ti.name(), nullptr, nullptr, &status);
     SCOPE_EXIT { free(exnType); };
     assertx(status == 0);
+#else
+    auto* exnType = ti.name();
+#endif
     FTRACE(1, "unwind {} exn {}: regState: {} ip: {} type: {}\n",
            unwindType, exceptionObj,
            tl_regState == VMRegState::DIRTY ? "dirty" : "clean",
@@ -289,9 +296,9 @@ TCUnwindInfo tc_unwind_resume(ActRec* fp) {
 
     // When we're unwinding through a TC frame (as opposed to stopping at a
     // handler frame), we need to make sure that if we later return from this
-    // VM frame in translated code, we don't resume after the bindcall that may
+    // VM frame in translated code, we don't resume after the PHP call that may
     // be expecting things to still live in its spill space. If the return
-    // address is in functionEnterHelper or callToExit, rVmFp won't contain a
+    // address is in functionEnterHelper or callToExit, rvmfp() won't contain a
     // real VM frame, so we skip those.
     auto savedRip = reinterpret_cast<TCA>(fp->m_savedRip);
     if (savedRip == mcg->tx().uniqueStubs.callToExit) {
@@ -398,7 +405,7 @@ register_unwind_region(unsigned char* startAddr, size_t size) {
      * Leave rsp unchanged.
      *
      * Note that some things in the translator do actually change rsp,
-     * but we assume they cannot throw so this is ok.  If rVmSp ever
+     * but we assume they cannot throw so this is ok.  If rvmsp() ever
      * changes to use rsp this code must change.
      */
     append_vec<uint8_t>(buffer, DW_CFA_same_value);

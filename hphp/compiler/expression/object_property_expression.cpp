@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -60,20 +60,15 @@ ExpressionPtr ObjectPropertyExpression::clone() {
 ///////////////////////////////////////////////////////////////////////////////
 // static analysis functions
 
-bool ObjectPropertyExpression::isTemporary() const {
-  return !m_valid && !(m_context & (LValue | RefValue | UnsetContext));
-}
-
 bool ObjectPropertyExpression::isNonPrivate(AnalysisResultPtr ar) {
   // To tell whether a property is declared as private in the context
-  ClassScopePtr cls = getOriginalClass();
+  ClassScopePtr cls = getClassScope();
   if (!cls || !cls->getVariables()->hasNonStaticPrivate()) return true;
   if (m_property->getKindOf() != Expression::KindOfScalarExpression) {
     return false;
   }
-  ScalarExpressionPtr name =
-    dynamic_pointer_cast<ScalarExpression>(m_property);
-  string propName = name->getLiteralString();
+  auto name = dynamic_pointer_cast<ScalarExpression>(m_property);
+  auto const propName = name->getLiteralString();
   if (propName.empty()) {
     return false;
   }
@@ -146,9 +141,7 @@ void ObjectPropertyExpression::analyzeProgram(AnalysisResultPtr ar) {
   m_property->analyzeProgram(ar);
   if (ar->getPhase() == AnalysisResult::AnalyzeFinal) {
     if (m_valid && !hasLocalEffect(UnknownEffect) &&
-        !m_object->isThis() &&
-        (!m_object->is(KindOfSimpleVariable) ||
-         !static_pointer_cast<SimpleVariable>(m_object)->isGuarded())) {
+        !m_object->isThis()) {
       setLocalEffect(DiagnosticEffect);
     }
   }
@@ -183,23 +176,6 @@ void ObjectPropertyExpression::setNthKid(int n, ConstructPtr cp) {
       assert(false);
       break;
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void ObjectPropertyExpression::outputCodeModel(CodeGenerator &cg) {
-  cg.printObjectHeader("ObjectPropertyExpression", 3);
-  cg.printPropertyHeader("object");
-  m_object->outputCodeModel(cg);
-  if (m_property->is(Expression::KindOfScalarExpression)) {
-    cg.printPropertyHeader("propertyName");
-  } else {
-    cg.printPropertyHeader("propertyExpression");
-  }
-  m_property->outputCodeModel(cg);
-  cg.printPropertyHeader("sourceLocation");
-  cg.printLocation(this);
-  cg.printObjectFooter();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

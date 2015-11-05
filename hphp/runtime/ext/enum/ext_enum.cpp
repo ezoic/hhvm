@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -70,7 +70,7 @@ static Variant HHVM_STATIC_METHOD(BuiltinEnum, coerce, const Variant &value) {
   const EnumCache::EnumValues* values = EnumCache::getValuesBuiltin(self_);
   if (!values->names.exists(value)) {
     res = Variant(Variant::NullInit{});
-  } else if (base && IS_STRING_TYPE(*base) && value.isInteger()) {
+  } else if (base && isStringType(*base) && value.isInteger()) {
     res = Variant(value.toString());
   }
 

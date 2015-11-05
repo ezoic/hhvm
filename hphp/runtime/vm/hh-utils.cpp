@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/system/systemlib.h"
 
@@ -34,14 +35,15 @@ void checkHHConfig(const Unit* unit) {
   if (RuntimeOption::RepoAuthoritative ||
       !RuntimeOption::LookForTypechecker ||
       s_foundHHConfig ||
-      !unit->isHHFile()) {
+      !unit->isHHFile() ||
+      isDebuggerAttached()) {
     return;
   }
 
   const std::string &s = unit->filepath()->toCppString();
   boost::filesystem::path p(s);
 
-  while (p != "/") {
+  while (p != "/" && p != "") {
     p.remove_filename();
     p /= ".hhconfig";
 
@@ -52,7 +54,7 @@ void checkHHConfig(const Unit* unit) {
     p.remove_filename();
   }
 
-  if (p == "/") {
+  if (p == "/" || p == "") {
     raise_error(
       "%s appears to be a Hack file, but you do not appear to be running "
       "the Hack typechecker. See the documentation at %s for information on "
@@ -102,12 +104,14 @@ void autoTypecheck(const Unit* unit) {
   if (RuntimeOption::RepoAuthoritative ||
       !RuntimeOption::AutoTypecheck ||
       tl_doneAutoTypecheck ||
-      !unit->isHHFile()) {
+      !unit->isHHFile() ||
+      isDebuggerAttached()) {
     return;
   }
   tl_doneAutoTypecheck = true;
 
-  vm_call_user_func("\\HH\\Client\\typecheck_and_error", staticEmptyArray());
+  vm_call_user_func("\\HH\\Client\\typecheck_and_error",
+                    Variant{staticEmptyArray()});
 }
 
 }

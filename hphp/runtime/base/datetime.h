@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -17,12 +17,11 @@
 #ifndef incl_HPHP_DATETIME_H_
 #define incl_HPHP_DATETIME_H_
 
-#include "hphp/runtime/base/types.h"
 #include <memory>
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/base/smart-ptr.h"
+#include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/timezone.h"
 #include "hphp/runtime/base/dateinterval.h"
 #include "hphp/runtime/base/request-local.h"
@@ -216,7 +215,7 @@ public:
   /**
    * What time is it?
    */
-  static SmartPtr<DateTime> Current(bool utc = false);
+  static req::ptr<DateTime> Current(bool utc = false);
 
   /**
    * Returns are really in special PHP formats, and please read datetime.cpp
@@ -229,8 +228,9 @@ public:
 public:
   // constructor
   DateTime();
+  DateTime(const DateTime&);
   explicit DateTime(int64_t timestamp, bool utc = false); // from a timestamp
-  explicit DateTime(int64_t timestamp, SmartPtr<TimeZone> tz);
+  explicit DateTime(int64_t timestamp, req::ptr<TimeZone> tz);
 
   CLASSNAME_IS("DateTime");
   // overriding ResourceData
@@ -255,7 +255,7 @@ public:
   int isoYear() const;
   int isoDow() const;
   int offset() const;  // timezone offset from UTC
-  SmartPtr<TimeZone> timezone() const { return m_tz->cloneTimeZone();}
+  req::ptr<TimeZone> timezone() const { return m_tz->cloneTimeZone();}
 
   const char *weekdayName() const;
   const char *shortWeekdayName() const;
@@ -267,10 +267,10 @@ public:
   void setDate(int year, int month, int day);
   void setISODate(int year, int week, int day = 1);
   void setTime(int hour, int minute, int second = 0);
-  void setTimezone(SmartPtr<TimeZone> tz);
+  void setTimezone(req::ptr<TimeZone> tz);
   void modify(const String& diff); // PHP's date_modify() function, muy powerful
-  void add(const SmartPtr<DateInterval>& interval);
-  void sub(const SmartPtr<DateInterval>& interval);
+  void add(const req::ptr<DateInterval>& interval);
+  void sub(const req::ptr<DateInterval>& interval);
 
   // conversions
   void toTm(struct tm &ta) const;
@@ -280,15 +280,15 @@ public:
   String toString(DateFormat format) const;
   Array toArray(ArrayFormat format) const;
   void fromTimeStamp(int64_t timestamp, bool utc = false);
-  bool fromString(const String& input, SmartPtr<TimeZone> tz,
+  bool fromString(const String& input, req::ptr<TimeZone> tz,
                   const char* format=nullptr, bool throw_on_error = true);
 
   // comparison
-  SmartPtr<DateInterval> diff(SmartPtr<DateTime> datetime2,
+  req::ptr<DateInterval> diff(req::ptr<DateTime> datetime2,
                               bool absolute = false);
 
   // cloning
-  SmartPtr<DateTime> cloneDateTime() const;
+  req::ptr<DateTime> cloneDateTime() const;
 
   // sun info
   Array getSunInfo(double latitude, double longitude) const;
@@ -300,7 +300,7 @@ public:
 private:
   void internalModify(timelib_time *t);
   void internalModifyRelative(timelib_rel_time *rel, bool have_relative,
-                              char bias);
+                              int8_t bias);
   struct LastErrors final : RequestEventHandler {
     void requestInit() override {
       m_errors = nullptr;
@@ -332,6 +332,7 @@ private:
       }
       return ret.toArray();
     }
+    void vscan(IMarker&) const override {}
 
   private:
     timelib_error_container *m_errors;
@@ -355,7 +356,7 @@ private:
   typedef std::shared_ptr<timelib_time> TimePtr;
 
   TimePtr m_time;
-  SmartPtr<TimeZone> m_tz;
+  req::ptr<TimeZone> m_tz;
   mutable int64_t m_timestamp;
   mutable bool m_timestampSet;
 

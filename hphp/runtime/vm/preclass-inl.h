@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,12 +29,23 @@ inline bool PreClass::isBuiltin() const {
   return m_attrs & AttrBuiltin;
 }
 
+inline bool PreClass::hasConstant(const StringData* cnsName) const {
+  return m_constants.contains(cnsName);
+}
+
 inline bool PreClass::hasMethod(const StringData* methName) const {
   return m_methods.contains(methName);
 }
 
 inline bool PreClass::hasProp(const StringData* propName) const {
   return m_properties.contains(propName);
+}
+
+inline const PreClass::Const*
+PreClass::lookupConstant(const StringData* cnsName) const {
+  Slot s = m_constants.findIndex(cnsName);
+  assert(s != kInvalidSlot);
+  return &m_constants[s];
 }
 
 inline Func* PreClass::lookupMethod(const StringData* methName) const {
@@ -127,6 +138,11 @@ inline bool PreClass::ClassRequirement::is_extends() const {
 
 inline bool PreClass::ClassRequirement::is_implements() const {
   return !is_extends();
+}
+
+inline bool PreClass::ClassRequirement::is_same(
+    const ClassRequirement* other) const {
+  return m_word == other->m_word;
 }
 
 /*

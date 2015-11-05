@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    | Copyright (c) 1997-2010 The PHP Group                                |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
@@ -232,8 +232,8 @@ Variant HHVM_FUNCTION(hphp_get_hardware_counters) {
 }
 
 bool HHVM_FUNCTION(hphp_set_hardware_events,
-                    const Variant& events /* = null */) {
-  String ev = events.toString();
+                   const Variant& events /* = null */) {
+  auto ev = events.toString();
   ev = url_decode(ev.data(), ev.size());
   return HardwareCounter::SetPerfEvents(ev.slice());
 }

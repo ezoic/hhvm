@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,13 +20,13 @@
 #include <algorithm>
 
 #include "hphp/runtime/base/collections.h"
-#include "hphp/runtime/ext/ext_generator.h"
+#include "hphp/runtime/ext/generator/ext_generator.h"
 
-#include "hphp/runtime/vm/jit/ir-opcode.h"
-#include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/bytecode.h"
-#include "hphp/runtime/vm/srckey.h"
+#include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/stack-offsets.h"
+#include "hphp/runtime/vm/jit/types.h"
+#include "hphp/runtime/vm/srckey.h"
 #include "hphp/util/arena.h"
 #include "hphp/util/ringbuffer.h"
 
@@ -124,7 +124,7 @@ struct ClsMethodData : IRExtraData {
   {}
 
   std::string show() const {
-    return folly::format("{}::{}", *clsName, *methodName).str();
+    return folly::format("{}::{}", clsName, methodName).str();
   }
 
   bool equals(const ClsMethodData& o) const {
@@ -188,7 +188,7 @@ struct FuncArgData : IRExtraData {
   {}
 
   std::string show() const {
-    return folly::format("{},{}", func->name()->data(), argNum).str();
+    return folly::format("{},{}", func->name(), argNum).str();
   }
 
   const Func* func;
@@ -348,9 +348,6 @@ struct RelOffsetData : IRExtraData {
  * order.  Add new IRExtraData types here.
  */
 
-/*
- * IsAsyncData
- */
 struct IsAsyncData : IRExtraData {
   explicit IsAsyncData(bool isAsync) : isAsync(isAsync) {}
 
@@ -462,9 +459,30 @@ struct FPushCufData : IRExtraData {
   uint32_t iterId;
 };
 
-/*
- * Information for REQ_RETRANSLATE stubs.
- */
+struct ReqBindJmpData : IRExtraData {
+  explicit ReqBindJmpData(const SrcKey& target,
+                          FPInvOffset invSPOff,
+                          IRSPOffset irSPOff,
+                          TransFlags trflags)
+    : target(target)
+    , invSPOff(invSPOff)
+    , irSPOff(irSPOff)
+    , trflags(trflags)
+  {}
+
+  std::string show() const {
+    return folly::sformat(
+      "{}, FPInv {}, IRSP {}, Flags {}",
+      target.offset(), invSPOff.offset, irSPOff.offset, trflags.packed
+    );
+  }
+
+  SrcKey target;
+  FPInvOffset invSPOff;
+  IRSPOffset irSPOff;
+  TransFlags trflags;
+};
+
 struct ReqRetranslateData : IRExtraData {
   explicit ReqRetranslateData(IRSPOffset irSPOff,
                               TransFlags trflags)
@@ -480,29 +498,24 @@ struct ReqRetranslateData : IRExtraData {
   TransFlags trflags;
 };
 
-/*
- * Information for REQ_BIND_JMP stubs.
- */
-struct ReqBindJmpData : IRExtraData {
-  explicit ReqBindJmpData(const SrcKey& dest,
-                          FPInvOffset invSPOff,
-                          IRSPOffset irSPOff,
-                          TransFlags trflags)
-    : dest(dest)
-    , invSPOff(invSPOff)
+struct ReqRetranslateOptData : IRExtraData {
+  explicit ReqRetranslateOptData(TransID transID,
+                                 SrcKey target,
+                                 IRSPOffset irSPOff)
+    : transID(transID)
+    , target(target)
     , irSPOff(irSPOff)
-    , trflags(trflags)
   {}
 
   std::string show() const {
-    return folly::to<std::string>(dest.offset(), ',', invSPOff.offset, ',',
-      irSPOff.offset, ',', trflags.packed);
+    return folly::to<std::string>(transID, ',',
+                                  target.offset(), ',',
+                                  irSPOff.offset);
   }
 
-  SrcKey dest;
-  FPInvOffset invSPOff;
+  TransID transID;
+  SrcKey target;
   IRSPOffset irSPOff;
-  TransFlags trflags;
 };
 
 /*
@@ -530,28 +543,6 @@ struct PropOffset : IRExtraData {
   size_t hash() const { return std::hash<int32_t>()(offsetBytes); }
 
   int32_t offsetBytes;
-};
-
-/*
- * Information needed to generate a REQ_RETRANSLATE_OPT service request.
- */
-struct ReqRetranslateOptData : IRExtraData {
-  explicit ReqRetranslateOptData(TransID transId,
-                                 SrcKey sk,
-                                 IRSPOffset irSPOff)
-    : transId(transId)
-    , sk(sk)
-    , irSPOff(irSPOff)
-  {}
-
-  std::string show() const {
-    return folly::to<std::string>(transId, ',', sk.offset(), ',',
-      irSPOff.offset);
-  }
-
-  TransID transId;
-  SrcKey sk;
-  IRSPOffset irSPOff;
 };
 
 /*
@@ -586,6 +577,16 @@ struct DefInlineFPData : IRExtraData {
   Offset retBCOff;
   FPInvOffset retSPOff;
   IRSPOffset spOffset;  // offset from caller SP to bottom of callee's ActRec
+  uint32_t numNonDefault;
+};
+
+struct InlineReturnNoFrameData : IRExtraData {
+  explicit InlineReturnNoFrameData(FPRelOffset off) : frameOffset(off) {}
+  std::string show() const {
+    return folly::to<std::string>(frameOffset.offset);
+  }
+
+  FPRelOffset frameOffset;
 };
 
 struct CallArrayData : IRExtraData {
@@ -652,7 +653,7 @@ struct CallData : IRExtraData {
     return folly::to<std::string>(
       spOffset.offset, ',', numParams, ',', after,
       callee
-        ? folly::format(",{}", callee->fullName()->data()).str()
+        ? folly::format(",{}", callee->fullName()).str()
         : std::string{},
       destroyLocals ? ",destroyLocals" : ""
     );
@@ -682,8 +683,8 @@ struct RetCtrlData : IRExtraData {
   // purposes) before returning.
   IRSPOffset spOffset;
 
-  // Indicates that the current generator frame is being suspended without
-  // decrefing locals. Used by refcount optimizer.
+  // Indicates that the current resumable frame is being suspended without
+  // decrefing locals.  Used by refcount optimizer.
   bool suspendingResumed;
 };
 
@@ -882,9 +883,9 @@ struct CoerceStkData : IRExtraData {
 
   std::string show() const {
     return folly::sformat(
-      "{},{},{}",
+      "IRSP {},{},{}",
       offset.offset,
-      callee->name()->data(),
+      callee->name(),
       argNum
     );
   }
@@ -899,11 +900,7 @@ struct CoerceMemData : IRExtraData {
     : callee(f), argNum(arg_num) {}
 
   std::string show() const {
-    return folly::sformat(
-      "{},{}",
-      callee->name()->data(),
-      argNum
-    );
+    return folly::sformat("{},{}", callee->name(), argNum);
   }
 
   const Func* callee;
@@ -1004,10 +1001,9 @@ struct ClsNeqData : IRExtraData {
 
 struct MInstrAttrData : IRExtraData {
   explicit MInstrAttrData(MInstrAttr mia) : mia(mia) {}
-  std::string show() const {
-    using U = std::underlying_type<MInstrAttr>::type;
-    return folly::to<std::string>(static_cast<U>(mia));
-  }
+
+  std::string show() const { return HPHP::show(mia); }
+
   MInstrAttr mia;
 };
 
@@ -1086,7 +1082,7 @@ struct FuncEntryData : IRExtraData {
   std::string show() const {
     return folly::format(
       "{}({} args)",
-      func->fullName()->data(),
+      func->fullName(),
       argc
     ).str();
   }
@@ -1108,7 +1104,6 @@ X(ProfileSwitchDest,            ProfileSwitchData);
 X(JmpSwitchDest,                JmpSwitchData);
 X(LdSSwitchDestFast,            LdSSwitchData);
 X(LdSSwitchDestSlow,            LdSSwitchData);
-X(PredictLoc,                   LocalId);
 X(HintLocInner,                 LocalId);
 X(CheckLoc,                     LocalId);
 X(AssertLoc,                    LocalId);
@@ -1146,7 +1141,6 @@ X(CufIterSpillFrame,            FPushCufData);
 X(SpillFrame,                   ActRecInfo);
 X(CheckStk,                     RelOffsetData);
 X(HintStkInner,                 RelOffsetData);
-X(PredictStk,                   IRSPOffsetData);
 X(CastStk,                      IRSPOffsetData);
 X(StStk,                        IRSPOffsetData);
 X(CoerceStk,                    CoerceStkData);
@@ -1161,6 +1155,7 @@ X(DefSP,                        FPInvOffsetData);
 X(LdStk,                        IRSPOffsetData);
 X(LdStkAddr,                    IRSPOffsetData);
 X(DefInlineFP,                  DefInlineFPData);
+X(InlineReturnNoFrame,          InlineReturnNoFrameData);
 X(ReqRetranslate,               ReqRetranslateData);
 X(ReqBindJmp,                   ReqBindJmpData);
 X(ReqRetranslateOpt,            ReqRetranslateOptData);
@@ -1170,7 +1165,7 @@ X(Call,                         CallData);
 X(CallBuiltin,                  CallBuiltinData);
 X(CallArray,                    CallArrayData);
 X(RetCtrl,                      RetCtrlData);
-X(AsyncRetCtrl,                 IRSPOffsetData);
+X(AsyncRetCtrl,                 RetCtrlData);
 X(LdArrFuncCtx,                 IRSPOffsetData);
 X(LdArrFPushCuf,                IRSPOffsetData);
 X(LdStrFPushCuf,                IRSPOffsetData);
@@ -1210,6 +1205,8 @@ X(PropDX,                       MInstrAttrData);
 X(ElemX,                        MInstrAttrData);
 X(ElemDX,                       MInstrAttrData);
 X(ElemUX,                       MInstrAttrData);
+X(CGetProp,                     MInstrAttrData);
+X(CGetElem,                     MInstrAttrData);
 X(SetOpProp,                    SetOpData);
 X(IncDecProp,                   IncDecData);
 X(SetOpElem,                    SetOpData);
@@ -1236,7 +1233,7 @@ X(ContStartedCheck,             IsAsyncData);
 X(ContValid,                    IsAsyncData);
 X(LdContResumeAddr,             IsAsyncData);
 X(LdContActRec,                 IsAsyncData);
-
+X(GenericIdx,                   IRSPOffsetData);
 
 #undef X
 

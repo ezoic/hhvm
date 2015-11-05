@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -24,7 +24,6 @@
 
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/type.h"
-#include "hphp/runtime/base/types.h"
 
 namespace HPHP {
 //////////////////////////////////////////////////////////////////////
@@ -36,7 +35,6 @@ namespace jit {
 struct IRUnit;
 struct IRInstruction;
 struct SSATmp;
-struct LocalStateHook;
 struct FrameStateMgr;
 
 //////////////////////////////////////////////////////////////////////
@@ -141,53 +139,10 @@ bool isCallOp(Opcode opc);
 bool isGuardOp(Opcode opc);
 
 /*
- * A "query op" is any instruction returning TBool that is
- * negateable.
+ * Returns the negated version of the specified opcode, if its a comparison
+ * opcode and can be negated (not all comparisons can be negated).
  */
-bool isQueryOp(Opcode opc);
-
-/*
- * Return true if opc is an int comparison operator
- */
-bool isIntQueryOp(Opcode opc);
-
-/*
- * Return the int-query opcode for the given non-int-query opcode
- */
-Opcode queryToIntQueryOp(Opcode opc);
-
-/*
- * Return true if opc is a dbl comparison operator
- */
-bool isDblQueryOp(Opcode opc);
-
-/*
- * Return the dbl-query opcode for the given non-dbl-query opcode
- */
-Opcode queryToDblQueryOp(Opcode opc);
-
-/*
- * Return true if opc is a str comparison operator
- */
-bool isStrQueryOp(Opcode opc);
-
-/*
- * Return the str-query opcode for the given non-str-query opcode
- */
-Opcode queryToStrQueryOp(Opcode opc);
-
-/*
- * Return the opcode that corresponds to negation of opc.
- */
-Opcode negateQueryOp(Opcode opc);
-
-/*
- * Return the opcode that corresponds to commuting the arguments of
- * opc.
- *
- * Pre: opc is a 2-argument query op.
- */
-Opcode commuteQueryOp(Opcode opc);
+folly::Optional<Opcode> negateCmpOp(Opcode opc);
 
 const char* opcodeName(Opcode opcode);
 
@@ -225,9 +180,6 @@ using TcaRange = folly::Range<TCA>;
 namespace std {
   template<> struct hash<HPHP::jit::Opcode> {
     size_t operator()(HPHP::jit::Opcode op) const { return uint16_t(op); }
-  };
-  template<> struct hash<HPHP::jit::Type> {
-    size_t operator()(HPHP::jit::Type t) const { return t.hash(); }
   };
 }
 

@@ -1,5 +1,5 @@
 (**
- * Copyright (c) 2014, Facebook, Inc.
+ * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,6 +8,7 @@
  *
  *)
 
+open Core
 open Coverage_level
 open Utils
 open Sys_utils
@@ -17,15 +18,15 @@ open Sys_utils
 (*****************************************************************************)
 
 type mode =
-  | Ai
+  | Ai of Ai_options.prepared
   | Autocomplete
   | Color
   | Coverage
   | DumpSymbolInfo
   | Errors
   | Lint
-  | Prolog
   | Suggest
+  | NoBuiltins
 
 type options = {
   filename : string;
@@ -35,7 +36,9 @@ type options = {
 let builtins_filename =
   Relative_path.create Relative_path.Dummy "builtins.hhi"
 
-let builtins = "<?hh // decl\n"^
+let what_builtins mode = match mode with
+  NoBuiltins -> ""
+  | _ -> "<?hh // decl\n"^
   "interface Traversable<+Tv> {}\n"^
   "interface Container<+Tv> extends Traversable<Tv> {}\n"^
   "interface Iterator<+Tv> extends Traversable<Tv> {}\n"^
@@ -82,7 +85,10 @@ let builtins = "<?hh // decl\n"^
   "}\n"^
   "final class Set<Tv> implements ConstSet<Tv> {}\n"^
   "final class ImmSet<+Tv> implements ConstSet<Tv> {}\n"^
-  "class Exception { public function __construct(string $x) {} }\n"^
+  "class Exception {"^
+  "  public function __construct(string $x) {}"^
+  "  public function getMessage(): string;"^
+  "}\n"^
   "class Generator<+Tk, +Tv, -Ts> implements KeyedIterator<Tk, Tv> {\n"^
   "  public function next(): void;\n"^
   "  public function current(): Tv;\n"^
@@ -122,7 +128,62 @@ let builtins = "<?hh // decl\n"^
   "function rand($x, $y): int;\n" ^
   "function invariant($x, ...): void;\n" ^
   "function exit(int $exit_code_or_message = 0): noreturn;\n" ^
-  "function invariant_violation(...): noreturn;\n"
+  "function invariant_violation(...): noreturn;\n" ^
+  "function get_called_class(): string;\n" ^
+  "abstract final class Shapes {\n" ^
+  "  public static function idx(shape() $shape, arraykey $index, $default = null) {}\n" ^
+  "  public static function keyExists(shape() $shape, arraykey $index): bool {}\n" ^
+  "  public static function removeKey(shape() $shape, arraykey $index): void {}\n" ^
+  "}\n" ^
+  "newtype typename<+T> as string = string;\n"^
+  "newtype classname<+T> as typename<T> = typename<T>;\n" ^
+ "function var_dump($x): void;\n" ^
+  "function gena();\n" ^
+  "function genva();\n" ^
+  "function gen_array_rec();\n"^
+  "function is_int(mixed $x): bool {}\n"^
+  "function is_bool(mixed $x): bool {}\n"^
+  "function is_float(mixed $x): bool {}\n"^
+  "function is_string(mixed $x): bool {}\n"^
+  "function is_null(mixed $x): bool {}\n"^
+  "function is_array(mixed $x): bool {}\n"^
+  "function is_resource(mixed $x): bool {}\n"^
+  "interface IMemoizeParam {\n"^
+  "  public function getInstanceKey(): string;\n"^
+  "}\n"^
+  "newtype TypeStructure<T> as shape(\n"^
+  "  'kind'=> int,\n"^
+  "  'nullable'=>?bool,\n"^
+  "  'classname'=>?classname<T>,\n"^
+  "  'elem_types' => ?array,\n"^
+  "  'param_types' => ?array,\n"^
+  "  'return_type' => ?array,\n"^
+  "  'generic_types' => ?array,\n"^
+  "  'fields' => ?array,\n"^
+  "  'name' => ?string,\n"^
+  "  'alias' => ?string,\n"^
+  ") = shape(\n"^
+  "  'kind'=> int,\n"^
+  "  'nullable'=>?bool,\n"^
+  "  'classname'=>?classname<T>,\n"^
+  "  'elem_types' => ?array,\n"^
+  "  'param_types' => ?array,\n"^
+  "  'return_type' => ?array,\n"^
+  "  'generic_types' => ?array,\n"^
+  "  'fields' => ?array,\n"^
+  "  'name' => ?string,\n"^
+  "  'alias' => ?string,\n"^
+  ");\n"^
+  "function type_structure($x, $y);\n"^
+  "const int __LINE__ = 0;\n"^
+  "const string __CLASS__ = '';\n"^
+  "const string __TRAIT__ = '';\n"^
+  "const string __FILE__ = '';\n"^
+  "const string __DIR__ = '';\n"^
+  "const string __FUNCTION__ = '';\n"^
+  "const string __METHOD__ = '';\n"^
+  "const string __NAMESPACE__ = '';\n"^
+  "interface Indexish<+Tk, +Tv> extends KeyedContainer<Tk, Tv> {}\n"
 
 (*****************************************************************************)
 (* Helpers *)
@@ -143,15 +204,18 @@ let parse_options () =
   let set_mode x () =
     if !mode <> Errors
     then raise (Arg.Bad "only a single mode should be specified")
-    else mode := x
-  in
+    else mode := x in
+  let set_ai x = set_mode (Ai (Ai_options.prepare ~server:false x)) () in
   let options = [
     "--ai",
-      Arg.Unit (set_mode Ai),
+      Arg.String (set_ai),
       "Run the abstract interpreter";
     "--auto-complete",
       Arg.Unit (set_mode Autocomplete),
       "Produce autocomplete suggestions";
+    "--colour",
+      Arg.Unit (set_mode Color),
+      "Produce colour output";
     "--color",
       Arg.Unit (set_mode Color),
       "Produce color output";
@@ -164,12 +228,12 @@ let parse_options () =
     "--lint",
       Arg.Unit (set_mode Lint),
       "Produce lint errors";
-    "--prolog",
-      Arg.Unit (set_mode Prolog),
-      "Produce prolog facts";
     "--suggest",
       Arg.Unit (set_mode Suggest),
       "Suggest missing typehints";
+    "--no-builtins",
+      Arg.Unit (set_mode NoBuiltins),
+      "Don't use builtins (e.g. ConstSet)";
   ] in
   Arg.parse options (fun fn -> fn_ref := Some fn) usage;
   let fn = match !fn_ref with
@@ -179,23 +243,23 @@ let parse_options () =
     mode = !mode;
   }
 
-let suggest_and_print fn { FileInfo.funs; classes; typedefs; consts; _ } =
+let suggest_and_print nenv fn { FileInfo.funs; classes; typedefs; consts; _ } =
   let make_set =
-    List.fold_left (fun acc (_, x) -> SSet.add x acc) SSet.empty in
+    List.fold_left ~f: (fun acc (_, x) -> SSet.add x acc) ~init: SSet.empty in
   let n_funs = make_set funs in
   let n_classes = make_set classes in
   let n_types = make_set typedefs in
   let n_consts = make_set consts in
   let names = { FileInfo.n_funs; n_classes; n_types; n_consts } in
   let fast = Relative_path.Map.add fn names Relative_path.Map.empty in
-  let patch_map = Typing_suggest_service.go None fast in
+  let patch_map = Typing_suggest_service.go None nenv fast in
   match Relative_path.Map.get fn patch_map with
     | None -> ()
     | Some l -> begin
       (* Sort so that the unit tests come out in a consistent order, normally
        * doesn't matter. *)
-      let l = List.sort (fun (x, _, _) (y, _, _) -> x - y) l in
-      List.iter (ServerConvert.print_patch fn) l
+      let l = List.sort ~cmp: (fun (x, _, _) (y, _, _) -> x - y) l in
+      List.iter ~f: (ServerConvert.print_patch fn) l
     end
 
 (* This allows to fake having multiple files in one file. This
@@ -213,7 +277,14 @@ let rec make_files = function
       (filename, content) :: make_files rl
   | _ -> assert false
 
-let parse_file file =
+(* We have some hacky "syntax extensions" to have one file contain multiple
+ * files, which can be located at arbitrary paths. This is useful e.g. for
+ * testing lint rules, some of which activate only on certain paths. It's also
+ * useful for testing abstract types, since the abstraction is enforced at the
+ * file boundary.
+ * Takes the path to a single file, returns a map of filenames to file contents.
+ *)
+let file_to_files file =
   let abs_fn = Relative_path.to_absolute file in
   let content = cat abs_fn in
   let delim = Str.regexp "////.*" in
@@ -221,23 +292,23 @@ let parse_file file =
   then
     let contentl = Str.full_split delim content in
     let files = make_files contentl in
-    List.fold_left begin fun acc (sub_fn, content) ->
+    List.fold_left ~f: begin fun acc (sub_fn, content) ->
       let file =
         Relative_path.create Relative_path.Dummy (abs_fn^"--"^sub_fn) in
-      Relative_path.Map.add file (Parser_hack.program file content) acc
-    end Relative_path.Map.empty files
+      Relative_path.Map.add file content acc
+    end ~init: Relative_path.Map.empty files
   else if str_starts_with content "// @directory " then
     let contentl = Str.split (Str.regexp "\n") content in
-    let first_line = List.hd contentl in
+    let first_line = List.hd_exn contentl in
     let regexp = Str.regexp "^// @directory *\\([^ ]*\\)" in
     let has_match = Str.string_match regexp first_line 0 in
     assert has_match;
     let dir = Str.matched_group 1 first_line in
     let file = Relative_path.create Relative_path.Dummy (dir ^ abs_fn) in
-    let content = String.concat "\n" (List.tl contentl) in
-    Relative_path.Map.singleton file (Parser_hack.program file content)
+    let content = String.concat "\n" (List.tl_exn contentl) in
+    Relative_path.Map.singleton file content
   else
-    Relative_path.Map.singleton file (Parser_hack.program file content)
+    Relative_path.Map.singleton file content
 
 (* Make readable test output *)
 let replace_color input =
@@ -252,34 +323,29 @@ let print_colored fn type_acc =
   let results = ColorFile.go content type_acc in
   if Unix.isatty Unix.stdout
   then Tty.print (ClientColorFile.replace_colors results)
-  else print_string (List.map replace_color results |> String.concat "")
+  else print_string (List.map ~f: replace_color results |> String.concat "")
 
 let print_coverage fn type_acc =
   let counts = ServerCoverageMetric.count_exprs fn type_acc in
   ClientCoverageMetric.go ~json:false (Some (Leaf counts))
 
-let print_prolog nenv files_info =
-  let facts = Relative_path.Map.fold begin fun _ file_info acc ->
-    let { FileInfo.funs; classes; typedefs; consts; _ } = file_info in
-    Prolog.facts_of_defs acc nenv funs classes typedefs consts
-  end files_info [] in
-  PrologMain.output_facts stdout facts
-
-let handle_mode mode filename nenv files_info errors lint_errors ai_results =
+let handle_mode mode filename nenv files_contents files_info errors ai_results =
   match mode with
-  | Ai -> ()
+  | Ai _ -> ()
   | Autocomplete ->
       let file = cat (Relative_path.to_absolute filename) in
       let result = ServerAutoComplete.auto_complete nenv file in
-      List.iter begin fun r ->
+      List.iter ~f: begin fun r ->
         let open AutocompleteService in
         Printf.printf "%s %s\n" r.res_name r.res_ty
       end result
   | Color ->
       Relative_path.Map.iter begin fun fn fileinfo ->
         if fn = builtins_filename then () else begin
-          let result = ServerColorFile.get_level_list
-            (fun () -> ignore (ServerIdeUtils.check_defs nenv fileinfo); fn) in
+          let result = ServerColorFile.get_level_list begin fun () ->
+            ignore @@ Typing_check_utils.check_defs nenv fileinfo;
+            fn
+          end in
           print_colored fn result;
         end
       end files_info
@@ -302,32 +368,31 @@ let handle_mode mode filename nenv files_info errors lint_errors ai_results =
       end
   | Lint ->
       let lint_errors =
-        Relative_path.Map.fold begin fun fn fileinfo lint_errors ->
+        Relative_path.Map.fold begin fun fn content lint_errors ->
           lint_errors @ fst (Lint.do_ begin fun () ->
-            Linting_service.lint fn fileinfo
+            Linting_service.lint fn content
           end)
-        end files_info lint_errors in
+        end files_contents [] in
       if lint_errors <> []
       then begin
-        let lint_errors = List.sort begin fun x y ->
+        let lint_errors = List.sort ~cmp: begin fun x y ->
           Pos.compare (Lint.get_pos x) (Lint.get_pos y)
         end lint_errors in
-        let lint_errors = List.map Lint.to_absolute lint_errors in
+        let lint_errors = List.map ~f: Lint.to_absolute lint_errors in
         ServerLint.output_text stdout lint_errors;
         exit 2
       end
       else Printf.printf "No lint errors\n"
-  | Prolog ->
-      print_prolog nenv files_info
   | Suggest
+  | NoBuiltins
   | Errors ->
       let errors = Relative_path.Map.fold begin fun _ fileinfo errors ->
-        errors @ ServerIdeUtils.check_defs nenv fileinfo
+        errors @ Typing_check_utils.check_defs nenv fileinfo
       end files_info errors in
       if mode = Suggest
-      then Relative_path.Map.iter suggest_and_print files_info;
+      then Relative_path.Map.iter (suggest_and_print nenv) files_info;
       if errors <> []
-      then (error (List.hd errors); exit 2)
+      then (error (List.hd_exn errors); exit 2)
       else Printf.printf "No errors\n"
 
 (*****************************************************************************)
@@ -335,23 +400,30 @@ let handle_mode mode filename nenv files_info errors lint_errors ai_results =
 (*****************************************************************************)
 
 let main_hack { filename; mode; } =
-  ignore (Sys.signal Sys.sigusr1 (Sys.Signal_handle Typing.debug_print_last_pos));
+  if not Sys.win32 then
+    ignore (Sys.signal Sys.sigusr1
+              (Sys.Signal_handle Typing.debug_print_last_pos));
   EventLogger.init (Daemon.devnull ()) 0.0;
   SharedMem.(init default_config);
-  Hhi.set_hhi_root_for_unit_test (Path.make "/tmp/hhi");
+  let tmp_hhi = Path.concat Path.temp_dir_name "hhi" in
+  Hhi.set_hhi_root_for_unit_test tmp_hhi;
   let outer_do f = match mode with
-    | Ai ->
-       let ai_results, inner_results =
-         Ai.do_ ServerIdeUtils.check_defs filename in
-       ai_results, [], inner_results
+    | Ai ai_options ->
+        let ai_results, inner_results =
+          Ai.do_ Typing_check_utils.check_defs filename ai_options in
+        ai_results, inner_results
     | _ ->
-       let lint_results, inner_results = Lint.do_ f in
-       [], lint_results, inner_results in
+        let inner_results = f () in
+        [], inner_results
+  in
+  let builtins = what_builtins mode in
   let filename = Relative_path.create Relative_path.Dummy filename in
-  let ai_results, lint_errors, (errors, (nenv, files_info)) =
+  let files_contents = file_to_files filename in
+  let ai_results, (errors, (nenv, files_info)) =
     outer_do begin fun () ->
       Errors.do_ begin fun () ->
-        let parsed_files = parse_file filename in
+        let parsed_files =
+          Relative_path.Map.mapi Parser_hack.program files_contents in
         let parsed_builtins = Parser_hack.program builtins_filename builtins in
         let parsed_files =
           Relative_path.Map.add builtins_filename parsed_builtins parsed_files
@@ -375,9 +447,9 @@ let main_hack { filename; mode; } =
 
         let all_classes =
           Relative_path.Map.fold begin fun fn {FileInfo.classes; _} acc ->
-            List.fold_left begin fun acc (_, cname) ->
+            List.fold_left ~f: begin fun acc (_, cname) ->
               SMap.add cname (Relative_path.Set.singleton fn) acc
-            end acc classes
+            end ~init: acc classes
           end files_info SMap.empty in
 
         Relative_path.Map.iter begin fun fn _ ->
@@ -387,12 +459,17 @@ let main_hack { filename; mode; } =
         nenv, files_info
       end
     end in
-  handle_mode mode filename nenv files_info errors lint_errors ai_results
+  handle_mode mode filename nenv files_contents files_info errors ai_results
 
 (* command line driver *)
 let _ =
   if ! Sys.interactive
   then ()
   else
+    (* On windows, setting 'binary mode' avoids to output CRLF on
+       stdout.  The 'text mode' would not hurt the user in general, but
+       it breaks the testsuite where the output is compared to the
+       expected one (i.e. in given file without CRLF). *)
+    set_binary_mode_out stdout true;
     let options = parse_options () in
-    main_hack options
+    Unix.handle_unix_error main_hack options
